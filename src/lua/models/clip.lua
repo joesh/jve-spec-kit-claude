@@ -51,13 +51,21 @@ local CLIP_LOAD_SQL = [[
            mr.media_id, m.name, m.file_path, m.offline_note,
            -- 018: subframes appended at end to avoid shifting older column
            -- indices. NULL on video clips, 0 or more on audio clips (FR-013).
-           c.source_in_subframe, c.source_out_subframe
+           c.source_in_subframe, c.source_out_subframe,
+           -- 023: file channel an AUDIO ref reads (per-channel waveform
+           -- selector). NULL for video / no media_ref join.
+           mr.source_channel
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
     JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
     LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                             AND nested_seq.kind = 'master'
+                            AND EXISTS (
+                                SELECT 1 FROM tracks mt
+                                WHERE mt.id = mr.track_id
+                                  AND mt.track_type = t.track_type
+                            )
     LEFT JOIN media m ON m.id = mr.media_id
     WHERE c.id = ?
 ]]
@@ -133,6 +141,12 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
             name          = query:value(27),
             path          = query:value(28),
             offline_note  = query:value(29),
+            -- 023: file channel this AUDIO clip reads (per-channel waveform
+            -- selector). NULL for VIDEO clips. The per-channel invariant is
+            -- enforced at write time by MediaRef.create and asserted by the
+            -- waveform consumer (timeline_view_renderer); this read path stays
+            -- assertion-free so older raw-SQL fixtures still load.
+            source_channel = query:value(32),
         }
         clip.media_path = query:value(28)
     end

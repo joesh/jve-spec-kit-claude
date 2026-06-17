@@ -73,6 +73,8 @@
 "X" = "MarkClipExtent @timeline"
 
 [Timeline]
+# Rename the focused track (double-click a track name does the same)
+"F2" = "RenameTrack @timeline"
 # Selection
 "Cmd+A" = "SelectAll @timeline"
 "Cmd+Shift+A" = "DeselectAll @timeline"

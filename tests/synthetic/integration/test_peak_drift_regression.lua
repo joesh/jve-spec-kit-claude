@@ -125,7 +125,7 @@ end
 -- ============================================================================
 print("  step 3: generate peaks")
 os.remove(PEAK_FILE)
-EMP.PEAK_REQUEST("drift_test", MEDIA_PATH, PEAK_FILE)
+EMP.PEAK_REQUEST("drift_test", MEDIA_PATH, PEAK_FILE, -1)  -- composite
 
 local deadline = os.time() + 60
 while true do

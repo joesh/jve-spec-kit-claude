@@ -90,6 +90,10 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
         "l1": "StartRename enters inline rename mode; L3 needs Esc-recovery",
         "l2": "Enters modal inline rename; subsequent keys go to text edit",
     },
+    ("F2", ("timeline",)): {
+        "l1": "RenameTrack opens the inline track-name editor; L3 needs Esc-recovery",
+        "l2": "Enters inline rename; subsequent keys go to the line edit",
+    },
 
     # ── 023 Resolve Color Bridge ──────────────────────────────────────────
     ("Cmd+Option+R", ()): {
@@ -352,6 +356,7 @@ L2_EXEMPT_COMMANDS: dict[str, str] = {
     # Modal inline / TC-entry modes — subsequent keys land in a text widget,
     # not in JVE's QShortcut layer.
     "StartRename":              "Enters modal inline rename",
+    "RenameTrack":              "Enters inline track-name rename",
     "GoToTimecode":             "Enters modal TC-entry",
     "ToggleTimecodeFocus":      "Shifts focus into TC widget",
     # Quits the app — L2 batch can't recover.

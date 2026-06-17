@@ -42,9 +42,20 @@ public:
     // Request peak generation for a media file.
     // Returns immediately — work happens on background threads.
     // Idempotent: if already generating or complete, no-op.
+    //
+    // source_channel selects which source-file channel the envelope
+    // describes: -1 = composite (min/max folded across all channels, the
+    // historical behavior); >= 0 = extract that one channel (dual-mono via
+    // the resampler matrix in Reader::DecodeAudioRange) so the envelope
+    // reflects only that channel. job_id (the first arg) is an opaque key —
+    // callers wanting per-channel peaks must make it channel-unique (and
+    // point output_path at a channel-distinct file); two channels of the
+    // same media MUST NOT share a job_id or the idempotency check collapses
+    // them into one job.
     void RequestPeaks(const std::string& media_id,
                       const std::string& media_path,
-                      const std::string& output_path);
+                      const std::string& output_path,
+                      int source_channel);
 
     // Cancel a pending/running generation job.
     void CancelPeaks(const std::string& media_id);
@@ -100,6 +111,11 @@ private:
         MediaFileInfo info{};
         AudioFormat out_fmt{SampleFormat::F32, 0, 0};
         emp::Rate sample_rate{0, 1};
+
+        // Source-file channel this envelope describes. -1 = composite
+        // (fold all channels); >= 0 = extract that one channel. Passed to
+        // Reader::DecodeAudioRange in ProcessOneChunk.
+        int source_channel = -1;
 
         // Peak data (level 0 written by workers, read by main thread via fence)
         PeakBuffer peak_buf;

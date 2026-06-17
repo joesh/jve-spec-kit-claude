@@ -29,7 +29,7 @@ os.execute(string.format("rm -rf %q && mkdir -p %q", OUT_DIR, OUT_DIR))
 local NUM_JOBS = MAX_RUNNING * 4
 for i = 1, NUM_JOBS do
     EMP.PEAK_REQUEST(string.format("admission_%03d", i),
-        SOURCE, string.format("%s/admission_%03d.peaks", OUT_DIR, i))
+        SOURCE, string.format("%s/admission_%03d.peaks", OUT_DIR, i), -1)  -- composite
 end
 
 -- Poll while jobs are in flight; running count must never exceed the cap.

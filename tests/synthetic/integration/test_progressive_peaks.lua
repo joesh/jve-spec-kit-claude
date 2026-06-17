@@ -51,7 +51,7 @@ print("    OK")
 -- ============================================================================
 print("  step 2: query progressive data mid-generation")
 os.remove(PEAK_FILE)
-EMP.PEAK_REQUEST(MEDIA_ID, MEDIA_PATH, PEAK_FILE)
+EMP.PEAK_REQUEST(MEDIA_ID, MEDIA_PATH, PEAK_FILE, -1)  -- composite
 
 -- Poll until we have SOME progress but NOT complete
 local deadline = os.time() + 30

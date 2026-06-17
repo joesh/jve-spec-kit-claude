@@ -721,6 +721,69 @@ function M.get_audio_for_project(project_id)
     return result
 end
 
+--- Get the DISTINCT (media, source channel) pairs referenced by AUDIO
+--- media_refs in a project — the exact set the per-channel peak pipeline
+--- must generate envelopes for. One audio clip plays one file channel, so
+--- the channels actually displayed are precisely these. VIDEO refs (NULL
+--- source_channel) are excluded by the audio_sample_rate filter.
+--- @param project_id string
+--- @return table array of {media_id=string, file_path=string, channel=number}
+function M.get_audio_channels_for_project(project_id)
+    assert(project_id and project_id ~= "",
+        "Media.get_audio_channels_for_project: project_id required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.get_audio_channels_for_project: no database connection")
+    local stmt = assert(db:prepare([[
+        SELECT DISTINCT mr.media_id, m.file_path, mr.source_channel
+        FROM media_refs mr
+        JOIN media m ON m.id = mr.media_id
+        WHERE mr.project_id = ?
+          AND mr.audio_sample_rate IS NOT NULL
+          AND m.audio_sample_rate > 0
+          AND mr.source_channel IS NOT NULL
+    ]]), "Media.get_audio_channels_for_project: failed to prepare query")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(), string.format(
+        "Media.get_audio_channels_for_project: query failed for project_id=%s", project_id))
+    local result = {}
+    while stmt:next() do
+        result[#result + 1] = {
+            media_id = stmt:value(0),
+            file_path = stmt:value(1),
+            channel = stmt:value(2),
+        }
+    end
+    stmt:finalize()
+    return result
+end
+
+--- Get the DISTINCT source channels referenced by AUDIO media_refs for one
+--- media file — the channels whose per-channel waveforms must be refreshed
+--- when that file relinks/changes.
+--- @param media_id string
+--- @return table array of channel numbers (0-based)
+function M.get_audio_channels_for_media(media_id)
+    assert(media_id and media_id ~= "",
+        "Media.get_audio_channels_for_media: media_id required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.get_audio_channels_for_media: no database connection")
+    local stmt = assert(db:prepare([[
+        SELECT DISTINCT source_channel FROM media_refs
+        WHERE media_id = ? AND source_channel IS NOT NULL
+    ]]), "Media.get_audio_channels_for_media: failed to prepare query")
+    stmt:bind_value(1, media_id)
+    assert(stmt:exec(), string.format(
+        "Media.get_audio_channels_for_media: query failed for media_id=%s", media_id))
+    local result = {}
+    while stmt:next() do
+        result[#result + 1] = stmt:value(0)
+    end
+    stmt:finalize()
+    return result
+end
+
 -- Map a clip's master-frame source coordinate to file units THROUGH its master
 -- media_ref, mirroring what C++ decode does (file_pos = mr.source_in +
 -- (master_frame - mr.sequence_start) * rate_ratio). `scale` = target/clip_rate

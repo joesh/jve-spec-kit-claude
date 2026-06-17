@@ -70,6 +70,7 @@ if qt_constants then
     qt_constants.CONTROL = qt_constants.CONTROL or {}
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER = qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER or require_global_function("qt_set_button_click_handler")
     qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER = qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER or require_global_function("qt_set_widget_click_handler")
+    qt_constants.CONTROL.SET_WIDGET_DOUBLE_CLICK_HANDLER = qt_constants.CONTROL.SET_WIDGET_DOUBLE_CLICK_HANDLER or require_global_function("qt_set_widget_double_click_handler")
     qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER = qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER or require_global_function("qt_set_context_menu_handler")
     qt_constants.CONTROL.SET_TREE_ITEM_ICON = qt_constants.CONTROL.SET_TREE_ITEM_ICON or require_global_function("qt_set_tree_item_icon")
     qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER = qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER or require_global_function("qt_set_tree_item_double_click_handler")

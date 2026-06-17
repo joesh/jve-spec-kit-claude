@@ -156,7 +156,10 @@ fi
 # The audio-decode battery (test_audio_*) needs distinct per-channel tone WAVs.
 # Regenerate from the tracked source script if missing + ffmpeg present; otherwise
 # the per-file guards below skip those three tests and we log the loss of coverage.
-if [[ ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_tones_48k.wav" ]]; then
+# Check the NEWEST fixture too (the amp-ramp WAV, added for the per-channel
+# peak test) so a stale fixture set generated before it existed gets refreshed.
+if [[ ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_tones_48k.wav" \
+   || ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_amp_ramp_48k.wav" ]]; then
   if command -v ffmpeg >/dev/null 2>&1; then
     echo "[integration] generating synthetic audio fixtures (gen_synthetic_tone_wavs.sh)..."
     "$ROOT_DIR/tests/fixtures/gen_synthetic_tone_wavs.sh" >/dev/null 2>&1 \
@@ -193,6 +196,9 @@ for t in \
   test_inspector_set_value_undo.lua \
   test_inspector_focus_scroll.lua \
   test_peak_gen_admission.lua \
+  test_peak_per_channel.lua \
+  test_peak_composite_fold.lua \
+  test_channel_names_ixml.lua \
   test_peak_gen_cancel_all_re_request.lua \
   test_reader_audio_only.lua \
   test_peak_cache_mtime_fractional.lua \
@@ -212,6 +218,7 @@ for t in \
   test_timeline_edit_navigation.lua \
   test_go_to_edit_surfaces_playhead.lua \
   test_panel_maximize.lua \
+  test_splitter_handle_grab_width.lua \
   test_video_audio_split_projection.lua \
   test_track_header_lane_alignment.lua \
   test_focus_manager.lua \

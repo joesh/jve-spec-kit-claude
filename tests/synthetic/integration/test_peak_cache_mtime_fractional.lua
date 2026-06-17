@@ -41,7 +41,7 @@ local media_id = "test_peak_cache_mtime_fractional"
 local peak_path = "/tmp/jve/peak_mtime_fractional.peaks"
 os.remove(peak_path)
 EMP.PEAK_CANCEL(media_id)
-EMP.PEAK_REQUEST(media_id, SCRATCH, peak_path)
+EMP.PEAK_REQUEST(media_id, SCRATCH, peak_path, -1)  -- composite
 
 local deadline = os.time() + 30
 local final_status

@@ -8,7 +8,7 @@
 -- is the active source. Track.muted=true IS the "disabled" state per user
 -- preference feedback.
 --
--- This test exercises ensure_master's synced_audio_media_ids opts path.
+-- This test exercises ensure_master's synced_audio_streams opts path.
 
 require("test_env")
 
@@ -137,8 +137,11 @@ local video2 = Media.create({
 })
 assert(video2:save())
 
+-- One stream per synced file; one SampleOffset per channel (ext_audio = 5ch).
 local synced_seq_id = Sequence.ensure_master("vid2", "p", {
-    synced_audio_media_ids = { "ext_audio" },
+    synced_audio_streams = {
+        { media_id = "ext_audio", sample_offsets = { 0, 0, 0, 0, 0 } },
+    },
 })
 local synced_tracks = query_tracks(synced_seq_id)
 
@@ -247,7 +250,11 @@ assert(video3:save())
 
 -- If track_index formula is broken, Track.save crashes with UNIQUE constraint here.
 local het_seq_id = Sequence.ensure_master("vid3", "p", {
-    synced_audio_media_ids = { "ext3a", "ext4", "ext3b" },
+    synced_audio_streams = {
+        { media_id = "ext3a", sample_offsets = { 0, 0, 0 } },
+        { media_id = "ext4",  sample_offsets = { 0, 0, 0, 0 } },
+        { media_id = "ext3b", sample_offsets = { 0, 0, 0 } },
+    },
 })
 local het_tracks = query_tracks(het_seq_id)
 

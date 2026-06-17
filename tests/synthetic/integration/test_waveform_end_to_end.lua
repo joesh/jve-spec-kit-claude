@@ -30,7 +30,7 @@ local TOTAL_SAMPLES = 144000
 -- Step 1: Generate peaks
 -- ============================================================================
 print("  step 1: generate peaks for click WAV")
-EMP.PEAK_REQUEST("click_test", MEDIA_PATH, PEAK_FILE)
+EMP.PEAK_REQUEST("click_test", MEDIA_PATH, PEAK_FILE, -1)  -- composite
 local deadline = os.time() + 30
 while true do
     local status = EMP.PEAK_STATUS("click_test")

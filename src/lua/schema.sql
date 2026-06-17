@@ -201,7 +201,10 @@ CREATE TABLE IF NOT EXISTS sequences (
 CREATE TABLE IF NOT EXISTS tracks (
     id TEXT PRIMARY KEY,
     sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
+    -- name is the user-facing override and is OPTIONAL: NULL means "unset",
+    -- in which case the display layer derives a label (a synced master's
+    -- audio tracks derive the recorder's iXML channel name; else blank).
+    name TEXT,
     track_type TEXT NOT NULL CHECK(track_type IN ('VIDEO', 'AUDIO')),
     track_index INTEGER NOT NULL,
 

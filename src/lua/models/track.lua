@@ -40,7 +40,11 @@ local function determine_next_index(sequence_id, track_type, provided_index)
 end
 
 local function build_track(track_type, name, sequence_id, opts)
-    assert(name and name ~= "", "Track.create: name is required")
+    -- name is an optional user-facing override: nil means "unset" — the
+    -- display layer derives a label (e.g. a recorder's iXML channel name,
+    -- else blank). A provided name must be a non-empty string.
+    assert(name == nil or (type(name) == "string" and name ~= ""),
+        "Track.create: name must be nil or a non-empty string")
     assert(sequence_id and sequence_id ~= "", "Track.create: sequence_id is required")
 
     opts = opts or {}
@@ -75,9 +79,23 @@ function Track.create_video(name, sequence_id, opts)
     return build_track("VIDEO", name, sequence_id, opts)
 end
 
+-- Audio tracks may be nameless (name=nil) — a synced master's channel
+-- tracks carry no user name and derive their label from the recorder's
+-- iXML metadata at display time (see core/media/channel_names).
 function Track.create_audio(name, sequence_id, opts)
-    assert(name, "Track.create_audio: name is required")
     return build_track("AUDIO", name, sequence_id, opts)
+end
+
+-- Label for an embedded (in-file / camera) audio channel. Recorder
+-- channels stay nameless and derive their iXML name at display time;
+-- embedded channels carry no iXML track names, so they get this stored
+-- default. Single source of truth for the format (master_builder and
+-- duplicate_master_clip share it).
+Track.EMBEDDED_AUDIO_LABEL_FMT = "Embedded %d"
+function Track.embedded_audio_label(channel)
+    assert(type(channel) == "number" and channel >= 1,
+        "Track.embedded_audio_label: channel must be a positive integer")
+    return string.format(Track.EMBEDDED_AUDIO_LABEL_FMT, channel)
 end
 
 function Track.load(id)

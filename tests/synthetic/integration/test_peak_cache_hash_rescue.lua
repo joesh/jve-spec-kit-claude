@@ -52,7 +52,7 @@ end
 
 os.remove(peak_path)
 EMP.PEAK_CANCEL(media_id)
-EMP.PEAK_REQUEST(media_id, SCRATCH, peak_path)
+EMP.PEAK_REQUEST(media_id, SCRATCH, peak_path, -1)  -- composite
 assert(wait_for_complete(media_id, 30),
     "initial peak generation did not complete within 30s")
 

@@ -50,7 +50,7 @@ end
 
 os.remove(peak_path)
 EMP.PEAK_CANCEL(media_id)
-EMP.PEAK_REQUEST(media_id, SCRATCH, peak_path)
+EMP.PEAK_REQUEST(media_id, SCRATCH, peak_path, -1)  -- composite
 assert(wait_for_complete(media_id, 30),
     "initial peak generation did not complete within 30s")
 
@@ -145,7 +145,7 @@ local control_peak_path = database.get_peak_cache_dir(project_id)
     .. "/" .. control_media_id .. ".peaks"
 os.remove(control_peak_path)
 EMP.PEAK_CANCEL(control_media_id)
-EMP.PEAK_REQUEST(control_media_id, SCRATCH, control_peak_path)
+EMP.PEAK_REQUEST(control_media_id, SCRATCH, control_peak_path, -1)  -- composite
 assert(wait_for_complete(control_media_id, 30),
     "control peak generation did not complete within 30s")
 

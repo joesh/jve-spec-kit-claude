@@ -91,13 +91,14 @@ assert(db:exec([[
         ('mca_a', 'master_clip_audio_a1', 'A1', 'AUDIO', 1, 1);
     UPDATE sequences SET default_video_layer_track_id = 'mca_v' WHERE id = 'master_clip_a';
     UPDATE sequences SET default_video_layer_track_id = 'mcb_v' WHERE id = 'master_clip_b';
+    -- 023: AUDIO refs carry source_channel (0-based file channel); VIDEO refs leave it NULL.
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
         source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
-        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        audio_sample_rate, source_channel, enabled, volume, playhead_frame, created_at, modified_at)
       VALUES
-        ('mr_a',   'default_project', 'master_clip_a',        'mca_v', 'media_a',     0, 500,     0, 500,     48000, 1, 1.0, 0, 0, 0),
-        ('mr_b',   'default_project', 'master_clip_b',        'mcb_v', 'media_b',     0, 500,     0, 500,     48000, 1, 1.0, 0, 0, 0),
-        ('mr_aud', 'default_project', 'master_clip_audio_a1', 'mca_a', 'media_audio', 0, 8000000, 0, 8000000, 48000, 1, 1.0, 0, 0, 0);
+        ('mr_a',   'default_project', 'master_clip_a',        'mca_v', 'media_a',     0, 500,     0, 500,     48000, NULL, 1, 1.0, 0, 0, 0),
+        ('mr_b',   'default_project', 'master_clip_b',        'mcb_v', 'media_b',     0, 500,     0, 500,     48000, NULL, 1, 1.0, 0, 0, 0),
+        ('mr_aud', 'default_project', 'master_clip_audio_a1', 'mca_a', 'media_audio', 0, 8000000, 0, 8000000, 48000, 0, 1, 1.0, 0, 0, 0);
 
     -- Timeline clips. clip_v1 references master_clip_a (source_in=10 to pin
     -- the marks-write assertion); clip_v2 references master_clip_b;

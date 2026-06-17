@@ -217,6 +217,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_widget_size_policy); lua_setfield(L, -2, "SET_WIDGET_SIZE_POLICY");
     lua_pushcfunction(L, lua_set_button_click_handler); lua_setfield(L, -2, "SET_BUTTON_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_widget_click_handler); lua_setfield(L, -2, "SET_WIDGET_CLICK_HANDLER");
+    lua_pushcfunction(L, lua_set_widget_double_click_handler); lua_setfield(L, -2, "SET_WIDGET_DOUBLE_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_context_menu_handler); lua_setfield(L, -2, "SET_CONTEXT_MENU_HANDLER");
     lua_pushcfunction(L, lua_set_widget_drag_handler); lua_setfield(L, -2, "SET_WIDGET_DRAG_HANDLER");
     lua_pushcfunction(L, lua_install_drag_source); lua_setfield(L, -2, "INSTALL_DRAG_SOURCE");
@@ -260,6 +261,7 @@ void registerQtBindings(lua_State* L)
     // Register global signal functions for direct access in Lua (e.g., qt_set_button_click_handler)
     lua_pushcfunction(L, lua_set_button_click_handler); lua_setglobal(L, "qt_set_button_click_handler");
     lua_pushcfunction(L, lua_set_widget_click_handler); lua_setglobal(L, "qt_set_widget_click_handler");
+    lua_pushcfunction(L, lua_set_widget_double_click_handler); lua_setglobal(L, "qt_set_widget_double_click_handler");
     lua_pushcfunction(L, lua_set_context_menu_handler); lua_setglobal(L, "qt_set_context_menu_handler");
     lua_pushcfunction(L, lua_set_widget_drag_handler); lua_setglobal(L, "qt_set_widget_drag_handler");
     lua_pushcfunction(L, lua_install_drag_source); lua_setglobal(L, "qt_install_drag_source");

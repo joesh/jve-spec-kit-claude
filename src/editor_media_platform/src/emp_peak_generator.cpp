@@ -60,15 +60,20 @@ PeakGenerator::~PeakGenerator()
 
 void PeakGenerator::RequestPeaks(const std::string& media_id,
                                   const std::string& media_path,
-                                  const std::string& output_path)
+                                  const std::string& output_path,
+                                  int source_channel)
 {
     assert(!media_id.empty() && "PeakGenerator::RequestPeaks: media_id must not be empty");
     assert(!media_path.empty() && "PeakGenerator::RequestPeaks: media_path must not be empty");
     assert(!output_path.empty() && "PeakGenerator::RequestPeaks: output_path must not be empty");
+    assert(source_channel >= -1 &&
+        "PeakGenerator::RequestPeaks: source_channel must be -1 (composite) or >= 0");
 
     std::lock_guard<std::mutex> lock(m_mutex);
 
-    // Idempotent: skip if job exists in any non-None state
+    // Idempotent: skip if job exists in any non-None state. media_id is the
+    // job key — per-channel callers make it channel-unique so two channels
+    // of the same media don't collide here.
     auto it = m_jobs.find(media_id);
     if (it != m_jobs.end() && it->second->state != JobStatus::None) {
         return;
@@ -78,6 +83,7 @@ void PeakGenerator::RequestPeaks(const std::string& media_id,
     job->media_id = media_id;
     job->media_path = media_path;
     job->output_path = output_path;
+    job->source_channel = source_channel;
     job->state = JobStatus::Queued;
 
     m_jobs[media_id] = job;
@@ -497,9 +503,12 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
     FrameTime t0 = FrameTime::from_frame(job.decode_position, job.sample_rate);
     FrameTime t1 = FrameTime::from_frame(job.decode_position + this_chunk, job.sample_rate);
 
-    // Peaks are generated from the composite downmix; per-channel waveforms
-    // (one envelope per source channel) are a later phase. -1 = composite.
-    auto pcm_result = job.reader->DecodeAudioRange(t0, t1, job.out_fmt, /*source_channel=*/-1);
+    // job.source_channel selects the envelope's source: -1 = composite
+    // downmix, >= 0 = extract that one channel (dual-mono). When a single
+    // channel is extracted both stereo lanes carry it, so the cross-channel
+    // fold in AccumulateSamplesToLevel0 is a no-op and the envelope reflects
+    // exactly that channel.
+    auto pcm_result = job.reader->DecodeAudioRange(t0, t1, job.out_fmt, job.source_channel);
     if (pcm_result.is_error()) {
         JVE_LOG_WARN(Media, "PeakGenerator: decode failed at sample %lld for %s",
             (long long)job.decode_position, job.media_id.c_str());

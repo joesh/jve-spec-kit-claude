@@ -1,11 +1,22 @@
 --- Track header label derivation.
 ---
---- Source tab: abbreviated form (V1/A1) — matches the Rec tab visual
---- convention and ignores the master's stored "Video 1"/"Audio N"
---- names. The master can carry a longer name in DB; the source tab
---- view shows the user the same shorthand they read on records.
+--- A channel-backed audio track (a synced clip's per-channel audio) shows
+--- the recorder/user channel label on EITHER tab — the label follows the
+--- channel, not the tab. Priority:
+---   1. track.name         — the user's override (a rename), authoritative.
+---   2. track.channel_name — the recorder's iXML channel name, probed by
+---                           the view for nameless channel tracks.
+---   3. ""                 — blank, when neither is present.
 ---
---- Record tab: verbatim track.name — the user may have renamed it.
+--- A plain (non-channel) track keeps the historical convention:
+---   Source tab — abbreviated form (V1/A1), ignoring any stored default
+---     ("Video 1"/"Audio N"); the source view shows the same shorthand the
+---     user reads on records.
+---   Record tab — the stored name verbatim (the user may have renamed it),
+---     else blank.
+---
+--- track.name is OPTIONAL (nil = unset). track.channel_backed marks the
+--- track as a synced master channel (has a media_ref with a source_channel).
 ---
 --- @file ui/timeline/track_header_label.lua
 local M = {}
@@ -27,10 +38,24 @@ function M.for_display(track, displayed_kind)
         string.format(
             "track_header_label.for_display: displayed_kind must be "
             .. "'source'|'record'; got %s", tostring(displayed_kind)))
+    -- Channel-backed master audio track: label follows the channel on
+    -- either tab — user rename, else probed iXML channel name, else blank.
+    if track.channel_backed then
+        if type(track.name) == "string" and track.name ~= "" then
+            return track.name
+        end
+        if type(track.channel_name) == "string" and track.channel_name ~= "" then
+            return track.channel_name
+        end
+        return ""
+    end
+    -- Plain track: source abbreviates (ignoring stored defaults); record
+    -- shows the stored name, else blank.
     if displayed_kind == "source" then return abbreviate(track) end
-    assert(type(track.name) == "string" and track.name ~= "",
-        "track_header_label.for_display: track.name required for record kind")
-    return track.name
+    if type(track.name) == "string" and track.name ~= "" then
+        return track.name
+    end
+    return ""
 end
 
 return M

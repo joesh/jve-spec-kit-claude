@@ -42,7 +42,7 @@ end
 
 -- ── (1) Request + complete at OLD_PATH ────────────────────────────────
 print("(1) request at OLD_PATH, wait for completion")
-EMP.PEAK_REQUEST(MEDIA_ID, SOURCE, OLD_PATH)
+EMP.PEAK_REQUEST(MEDIA_ID, SOURCE, OLD_PATH, -1)  -- composite
 local state1 = wait_until_done(MEDIA_ID, 30)
 assert(state1 == "complete", string.format(
     "first peak gen must complete; got %s", tostring(state1)))
@@ -64,7 +64,7 @@ EMP.PEAK_CANCEL_ALL()
 print("(3) re-request SAME media_id with NEW_PATH")
 assert(not fs_utils.file_exists(NEW_PATH),
     "fixture: NEW_PATH must not exist before re-request")
-EMP.PEAK_REQUEST(MEDIA_ID, SOURCE, NEW_PATH)
+EMP.PEAK_REQUEST(MEDIA_ID, SOURCE, NEW_PATH, -1)  -- composite
 local state2 = wait_until_done(MEDIA_ID, 30)
 assert(state2 == "complete", string.format(
     "re-requested peak gen must complete (not skip); got %s",

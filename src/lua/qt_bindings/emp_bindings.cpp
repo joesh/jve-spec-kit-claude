@@ -2253,12 +2253,15 @@ static emp::PeakGenerator* get_peak_generator() {
     return s_peak_generator;
 }
 
-// EMP.PEAK_REQUEST(media_id, media_path, output_path) -> nil
+// EMP.PEAK_REQUEST(media_id, media_path, output_path, source_channel) -> nil
+//   source_channel: -1 = composite fold; >= 0 = extract that source channel.
+//   media_id is the job key — per-channel callers must make it channel-unique.
 static int lua_emp_peak_request(lua_State* L) {
     const char* media_id = luaL_checkstring(L, 1);
     const char* media_path = luaL_checkstring(L, 2);
     const char* output_path = luaL_checkstring(L, 3);
-    get_peak_generator()->RequestPeaks(media_id, media_path, output_path);
+    int source_channel = static_cast<int>(luaL_checkinteger(L, 4));
+    get_peak_generator()->RequestPeaks(media_id, media_path, output_path, source_channel);
     return 0;
 }
 
@@ -2412,6 +2415,83 @@ static int lua_emp_peak_query_progress(lua_State* L) {
     lua_pushinteger(L, static_cast<lua_Integer>(s_progress_result.actual_start));
     lua_pushinteger(L, static_cast<lua_Integer>(s_progress_result.actual_end));
     return 4;
+}
+
+// EMP.PEAK_QUERY_COMPOSITE(refs, pixel_width)
+//   refs = array of { handle=<emp_peak userdata>, start=<int>, end=<int> } in
+//          file-relative samples. Folds each ref's per-channel envelope per
+//          pixel (min-of-mins, max-of-maxes) into a C-owned scratch buffer, so
+//          a composite/Adaptive audio clip shows ONE downmix waveform across
+//          all its channels — cross-file (each ref already carries its own
+//          file-relative window from the caller's master->file mapping).
+//          023 Feature A: on-demand composite fold; the per-channel .peaks are
+//          the single source of truth (no persisted composite file).
+//   -> peaks_ptr, count   (or nil, 0 when no ref returned data)
+static std::vector<float> s_composite_scratch;
+static int lua_emp_peak_query_composite(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    int pixel_width = static_cast<int>(luaL_checkinteger(L, 2));
+    if (pixel_width <= 0) { lua_pushnil(L); lua_pushinteger(L, 0); return 2; }
+
+    int n = static_cast<int>(lua_objlen(L, 1));
+
+    // Collect each ref's query result first, then fold. Distinct (media,channel)
+    // pairs map to distinct PeakFileReader instances with distinct internal
+    // buffers, so every result stays valid simultaneously (no shared buffer to
+    // clobber between Query calls).
+    struct Got { const float* peaks; int count; };
+    std::vector<Got> got;
+    got.reserve(static_cast<size_t>(n));
+    int max_count = 0;
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        luaL_checktype(L, -1, LUA_TTABLE);
+
+        lua_getfield(L, -1, "handle");
+        void* key = luaL_checkudata(L, -1, EMP_PEAK_METATABLE);
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "start");
+        int64_t start = static_cast<int64_t>(luaL_checkinteger(L, -1));
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "end");
+        int64_t end = static_cast<int64_t>(luaL_checkinteger(L, -1));
+        lua_pop(L, 1);
+
+        lua_pop(L, 1);  // ref table
+
+        auto it = g_peak_readers.find(key);
+        if (it == g_peak_readers.end()) {
+            return luaL_error(L,
+                "EMP.PEAK_QUERY_COMPOSITE: invalid peak handle at ref %d", i);
+        }
+        auto result = it->second->Query(start, end, pixel_width);
+        if (result.peaks && result.count > 0) {
+            got.push_back({result.peaks, result.count});
+            if (result.count > max_count) max_count = result.count;
+        }
+    }
+
+    if (max_count <= 0) { lua_pushnil(L); lua_pushinteger(L, 0); return 2; }
+
+    // Fold. Pixel p is the same master-time instant across refs (the caller
+    // mapped each ref's window from the same [vis_start,vis_end] to the same
+    // pixel_width), so index-wise max/min is the correct composite envelope.
+    // Pixels no ref covers stay (0,0) = silence.
+    s_composite_scratch.assign(static_cast<size_t>(max_count) * 2, 0.0f);
+    for (const auto& g : got) {
+        for (int p = 0; p < g.count; ++p) {
+            float mn = g.peaks[2 * p];
+            float mx = g.peaks[2 * p + 1];
+            float& omn = s_composite_scratch[2 * p];
+            float& omx = s_composite_scratch[2 * p + 1];
+            if (mn < omn) omn = mn;
+            if (mx > omx) omx = mx;
+        }
+    }
+
+    lua_pushlightuserdata(L, s_composite_scratch.data());
+    lua_pushinteger(L, max_count);
+    return 2;
 }
 
 // EMP.PEAK_HEADER(peak_handle) -> table
@@ -2741,6 +2821,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "PEAK_LOAD");
     lua_pushcfunction(L, lua_emp_peak_query);
     lua_setfield(L, -2, "PEAK_QUERY");
+    lua_pushcfunction(L, lua_emp_peak_query_composite);
+    lua_setfield(L, -2, "PEAK_QUERY_COMPOSITE");
     lua_pushcfunction(L, lua_emp_peak_header);
     lua_setfield(L, -2, "PEAK_HEADER");
     lua_pushcfunction(L, lua_emp_peak_release);

@@ -67,7 +67,7 @@ assert(actual < predicted,
 --         After fix:  reaches "complete" state.
 -- ============================================================================
 print("  step 2: generate peaks (must not abort)")
-EMP.PEAK_REQUEST("aac_priming_test", MEDIA_PATH, PEAK_FILE)
+EMP.PEAK_REQUEST("aac_priming_test", MEDIA_PATH, PEAK_FILE, -1)  -- composite
 
 local deadline = os.time() + 30
 while true do

@@ -310,6 +310,9 @@ end
 --   26: m.name                   (NULL when no media join)
 --   27: m.file_path              (NULL when no media join)
 --   28: m.offline_note           (NULL when no media join)
+--   29: c.volume
+--   30: mr.source_channel        (023: which file channel an AUDIO ref reads;
+--                                 NULL for video refs / no media_ref join)
 local function build_clip_from_query_row(query, requested_sequence_id)
     if not query then
         return nil
@@ -458,6 +461,13 @@ local function build_clip_from_query_row(query, requested_sequence_id)
             name = media_name,
             path = media_path,
             offline_note = offline_note,
+            -- 023: file channel this AUDIO clip reads (peak/waveform pipeline
+            -- selects per-channel envelopes). NULL for VIDEO clips. The
+            -- per-channel invariant is enforced at write time by
+            -- MediaRef.create; the waveform consumer (timeline_view_renderer)
+            -- asserts presence where it actually matters. The read path stays
+            -- assertion-free so it can still load older raw-SQL fixtures.
+            source_channel = query:value(30),
         }
         -- Flat denormalised fields for the only two consumers that care:
         --   * timeline_core_state — keys clips by media_path on the
@@ -1135,6 +1145,87 @@ function M.load_tracks(sequence_id)
     return tracks
 end
 
+-- Gather a master sequence's audio refs for a composite (Adaptive) audio clip.
+-- A composite clip is ONE timeline audio clip (track_type AUDIO, NOT pinned to a
+-- specific master audio track — master_audio_track_id NULL) that stands for the
+-- WHOLE master's audio: N channels across possibly multiple media files (synced
+-- clip = camera scratch + N WAV channels). It has no single per-channel source
+-- window, so the renderer folds these refs into one downmix envelope on demand
+-- (peak_cache.get_composite_peaks). A mono master folds a single ref — same
+-- result as the per-channel path, so the rule is uniform.
+local function load_master_audio_refs(master_seq_id)
+    local q = db_connection:prepare([[
+        SELECT mr.media_id, mr.source_channel, mr.source_in_frame,
+               mr.sequence_start_frame, mr.audio_sample_rate
+        FROM media_refs mr
+        JOIN tracks t ON t.id = mr.track_id
+        WHERE mr.owner_sequence_id = ?
+          AND t.track_type = 'AUDIO'
+          AND mr.source_channel IS NOT NULL
+        ORDER BY mr.source_channel
+    ]])
+    assert(q, "load_master_audio_refs: failed to prepare query")
+    q:bind_value(1, master_seq_id)
+    local refs = {}
+    if q:exec() then
+        while q:next() do
+            refs[#refs + 1] = {
+                media_id             = q:value(0),
+                source_channel       = q:value(1),
+                source_in_frame      = q:value(2),
+                sequence_start_frame = q:value(3),
+                audio_sample_rate    = q:value(4),
+            }
+        end
+    end
+    q:finalize()
+    return refs
+end
+
+-- Attach composite_audio_refs to a clip that is an Adaptive (composite) audio
+-- clip. Detection: AUDIO clip whose nested sequence is a master and which is NOT
+-- pinned to one master audio track (master_audio_track_id NULL). Expanded
+-- per-channel clips DO pin a master track and keep the single-channel path.
+local function attach_composite_audio_refs(clip)
+    if clip.track_type == "AUDIO"
+            and clip.master_audio_track_id == nil
+            and clip.source_sequence_kind == "master" then
+        local refs = load_master_audio_refs(clip.sequence_id)
+        if #refs > 0 then
+            clip.composite_audio_refs = refs
+        end
+    end
+end
+
+--- The channel source backing a single master audio track: the media id,
+--- its file path, and the 0-based channel that track reads. Returns nil when
+--- the track has no media_ref or no source_channel (e.g. a sequence track,
+--- not a master channel track). Used by the view to derive a nameless
+--- track's label from the recorder's iXML channel name (lazy probe).
+function M.get_track_channel_source(track_id)
+    assert(track_id, "get_track_channel_source: track_id required")
+    local q = db_connection:prepare([[
+        SELECT mr.media_id, mr.source_channel, m.file_path
+        FROM media_refs mr
+        JOIN media m ON m.id = mr.media_id
+        WHERE mr.track_id = ?
+          AND mr.source_channel IS NOT NULL
+        LIMIT 1
+    ]])
+    assert(q, "get_track_channel_source: failed to prepare query")
+    q:bind_value(1, track_id)
+    local source = nil
+    if q:exec() and q:next() then
+        source = {
+            media_id       = q:value(0),
+            source_channel = q:value(1),
+            file_path      = q:value(2),
+        }
+    end
+    q:finalize()
+    return source
+end
+
 -- Load all clips for a sequence
 function M.load_clips(sequence_id)
     if not sequence_id then
@@ -1163,7 +1254,7 @@ function M.load_clips(sequence_id)
                owner_seq.fps_numerator, owner_seq.fps_denominator,
                nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
                mr.media_id, m.name, m.file_path, m.offline_note,
-               c.volume
+               c.volume, mr.source_channel
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
@@ -1202,6 +1293,13 @@ function M.load_clips(sequence_id)
         end
     end
 
+    -- Adaptive (composite) audio clips need every channel of their master to
+    -- fold one downmix waveform. Done after the main loop so we don't nest a
+    -- second statement inside the active clip cursor.
+    for _, clip in ipairs(clips) do
+        attach_composite_audio_refs(clip)
+    end
+
     return clips
 end
 
@@ -1233,7 +1331,8 @@ function M.load_master_virtual_clips(master_seq_id)
                mr.enabled,
                t.track_type, t.name AS track_name,
                s.fps_numerator, s.fps_denominator,
-               m.id, m.name, m.file_path, m.offline_note
+               m.id, m.name, m.file_path, m.offline_note,
+               mr.source_channel
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
         JOIN sequences s ON s.id = mr.owner_sequence_id
@@ -1262,6 +1361,7 @@ function M.load_master_virtual_clips(master_seq_id)
             local media_name = query:value(13)
             local media_path = query:value(14)
             local offline_note = query:value(15)
+            local source_channel = query:value(16)
 
             assert(seq_start, "load_master_virtual_clips: media_ref missing sequence_start_frame")
             assert(duration, "load_master_virtual_clips: media_ref missing duration_frames")
@@ -1300,6 +1400,9 @@ function M.load_master_virtual_clips(master_seq_id)
                     name = media_name,
                     path = media_path,
                     offline_note = offline_note,
+                    -- 023: file channel this AUDIO ref reads (per-channel
+                    -- waveform selector). NULL for VIDEO refs.
+                    source_channel = source_channel,
                 }
                 clip.media_path = media_path
                 clip.offline = (offline_note ~= nil)
@@ -1338,13 +1441,18 @@ function M.load_clip_entry(clip_id)
                owner_seq.fps_numerator, owner_seq.fps_denominator,
                nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
                mr.media_id, m.name, m.file_path, m.offline_note,
-               c.volume
+               c.volume, mr.source_channel
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
         JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
         LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
+                                AND EXISTS (
+                                    SELECT 1 FROM tracks mt
+                                    WHERE mt.id = mr.track_id
+                                      AND mt.track_type = t.track_type
+                                )
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.id = ?
         LIMIT 1
@@ -1362,6 +1470,10 @@ function M.load_clip_entry(clip_id)
     end
 
     query:finalize()
+    -- After finalize so the composite-ref query isn't nested in this cursor.
+    if clip then
+        attach_composite_audio_refs(clip)
+    end
     return clip
 end
 

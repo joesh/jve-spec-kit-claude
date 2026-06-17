@@ -34,6 +34,9 @@ print("--- test_relink_invalidates_peaks ---")
 local CLICK_WAV = env.test_media_path("test_click_48k_stereo.wav")
 local TONE_WAV  = env.test_media_path("test_tone_48k_stereo.wav")
 local CLICK_SAMPLES = 144000
+-- One audio channel → one per-channel peak envelope, so each fresh decode
+-- is exactly one PEAK_REQUEST (the count signal this test asserts on).
+local CHANNEL = 0
 
 -- Step 5 below relies on TONE_WAV.mtime ≠ CLICK_WAV.mtime so the peak
 -- cache's mtime invalidation fires when content swaps. Both fixtures
@@ -82,10 +85,11 @@ local request_count = 0
 local request_log = {}  -- {[i] = {media_id, media_path}} — surfaces *which*
                         -- gen requests fired when the count is wrong.
 local original_peak_request = EMP.PEAK_REQUEST
-EMP.PEAK_REQUEST = function(media_id, media_path, output_path)
+EMP.PEAK_REQUEST = function(media_id, media_path, output_path, source_channel)
     request_count = request_count + 1
-    request_log[request_count] = { media_id = media_id, media_path = media_path }
-    return original_peak_request(media_id, media_path, output_path)
+    request_log[request_count] = { media_id = media_id, media_path = media_path,
+                                    source_channel = source_channel }
+    return original_peak_request(media_id, media_path, output_path, source_channel)
 end
 
 local function take_request_count_delta(label)
@@ -154,7 +158,7 @@ local media = Media.create({
     file_path = OFFLINE_PATH, name = "drp-imported",
     duration_frames = CLICK_SAMPLES,
     fps_numerator = 48000, fps_denominator = 1,
-    audio_sample_rate = 48000, audio_channels = 2,
+    audio_sample_rate = 48000, audio_channels = 1,
     width = 0, height = 0, codec = "pcm_s16le",
     -- Sequence.ensure_master asserts audio_tc origin is present. Real
     -- DRP imports populate this from the file's BWF time_reference; the
@@ -173,11 +177,11 @@ local function wait_for_status(mid, target, deadline_s)
         "wait_for_status: CLICK_WAV fixture must be present on disk")
     local deadline = os.time() + deadline_s
     while os.time() <= deadline do
-        local s = peak_cache.get_status(mid)
+        local s = peak_cache.get_status(mid, CHANNEL)
         if s == target then return true end
         if s == "failed" then return false end
         os.execute("sleep 0.1")
-        peak_cache.ensure_peaks(mid, CLICK_WAV, mtime, nil)
+        peak_cache.ensure_peaks(mid, CLICK_WAV, mtime, nil, CHANNEL)
     end
     return false
 end
@@ -191,7 +195,7 @@ peak_cache.init_for_project(project_id)
 local n1 = take_request_count_delta("step1")
 assert(n1 == 0, string.format(
     "init with offline media should NOT request gen, got %d request(s)", n1))
-assert(peak_cache.get_status(media_id) == "none",
+assert(peak_cache.get_status(media_id, CHANNEL) == "none",
     "offline media should report status='none' after init")
 
 -- ---------------------------------------------------------------------------
@@ -214,7 +218,9 @@ assert(n2 == 1, string.format(
     "relink to CLICK_WAV should request exactly 1 gen, got %d", n2))
 
 local cache_dir = database.get_peak_cache_dir(project_id)
-local peak_path = cache_dir .. "/" .. media_id .. ".peaks"
+-- Per-channel peak file stem is "<media_id>__ch<N>" (composite would be the
+-- bare media_id). This media is mono → channel 0.
+local peak_path = cache_dir .. "/" .. media_id .. "__ch" .. CHANNEL .. ".peaks"
 local bins_click = peak_bins_at(peak_path)
 assert(bins_click > 100, string.format(
     "click peaks should report a meaningful bin count, got %d", bins_click))
@@ -241,12 +247,12 @@ assert(n3 == 0, string.format(
         end
         return table.concat(parts, ", ")
     end)()))
-assert(peak_cache.get_status(media_id) == "complete",
+assert(peak_cache.get_status(media_id, CHANNEL) == "complete",
     "after re-init, status must be 'complete' (peaks loaded from disk)")
 
 -- And the visible-peaks path — what the renderer actually calls — must
 -- return data immediately, with no gen pending.
-local peaks, count = peak_cache.get_visible_peaks(media_id, 0, CLICK_SAMPLES, 100)
+local peaks, count = peak_cache.get_visible_peaks(media_id, 0, CLICK_SAMPLES, 100, CHANNEL)
 assert(peaks ~= nil and count == 100, string.format(
     "after re-init, get_visible_peaks must return peaks (got peaks=%s count=%s)",
     tostring(peaks), tostring(count)))
@@ -289,9 +295,9 @@ assert(n4 == 0, string.format(
     .. "peaks unnecessarily — got %d request(s). The bytes haven't changed; "
     .. "the header-mtime cross-check should have reused the existing peaks.",
     n4))
-assert(peak_cache.get_status(media_id) == "complete",
+assert(peak_cache.get_status(media_id, CHANNEL) == "complete",
     "after same-content relink, status must remain 'complete'")
-local peaks4, count4 = peak_cache.get_visible_peaks(media_id, 0, CLICK_SAMPLES, 100)
+local peaks4, count4 = peak_cache.get_visible_peaks(media_id, 0, CLICK_SAMPLES, 100, CHANNEL)
 assert(peaks4 ~= nil and count4 == 100,
     "after same-content relink, get_visible_peaks must keep returning peaks")
 
@@ -330,7 +336,7 @@ local n6 = take_request_count_delta("step6")
 assert(n6 == 0, string.format(
     "re-init after content change should reuse new on-disk peaks, "
     .. "got %d request(s)", n6))
-assert(peak_cache.get_status(media_id) == "complete",
+assert(peak_cache.get_status(media_id, CHANNEL) == "complete",
     "after second re-init, status must be 'complete'")
 
 -- ---------------------------------------------------------------------------

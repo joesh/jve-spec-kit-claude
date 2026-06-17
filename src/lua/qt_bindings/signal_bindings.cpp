@@ -624,6 +624,45 @@ int lua_set_widget_click_handler(lua_State* L) {
     return 0;
 }
 
+// Event filter for left-button double-clicks on an arbitrary QWidget. Plain
+// QWidgets have no double-click signal (unlike QTreeWidget), so we filter the
+// QEvent::MouseButtonDblClick event. Fires the Lua handler with no arguments.
+class DoubleClickEventFilter : public QObject {
+public:
+    DoubleClickEventFilter(const std::string& handler, lua_State* L_ptr, QObject* parent = nullptr)
+        : QObject(parent), handler_name(handler), lua_state(L_ptr) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.widget_double_click");
+                if (cb.ready()) {
+                    cb.invoke(0, 0);
+                }
+                return true; // consume — a double-click that renames shouldn't also click-through
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    std::string handler_name;
+    lua_State* lua_state;
+};
+
+int lua_set_widget_double_click_handler(lua_State* L) {
+    QWidget* widget = get_widget<QWidget>(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+    if (!widget || !handler_name) return 0;
+
+    std::string handler_str(handler_name);
+    DoubleClickEventFilter* filter = new DoubleClickEventFilter(handler_str, L, widget);
+    widget->installEventFilter(filter);
+    return 0;
+}
+
 // Install a drag event filter on a widget.
 // Lua: qt_set_widget_drag_handler(widget, handler_name)
 // handler fires as: handler(event_type, global_x, global_y, modifiers)

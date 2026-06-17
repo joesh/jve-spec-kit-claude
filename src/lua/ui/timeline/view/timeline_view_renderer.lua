@@ -890,8 +890,27 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
             -- float (exact time→pixel map), so round the column count at
             -- this boundary only.
             local wave_px = math.floor(draw_width + 0.5)
-            local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
-                (clip.resolved_media and clip.resolved_media.id), peak_start, peak_end, wave_px)
+            -- 023: two audio-clip shapes.
+            --  * Adaptive/composite clip (composite_audio_refs present): ONE
+            --    timeline clip standing for a whole master's audio (N channels,
+            --    possibly across files). Its source_in/out are MASTER-DOMAIN
+            --    FRAMES; fold the per-channel envelopes on demand.
+            --  * Expanded per-channel clip: plays ONE file channel; show THAT
+            --    channel's envelope (resolved_media.source_channel; source_in/out
+            --    are samples).
+            local peaks, count, actual_start, actual_end
+            if clip.composite_audio_refs then
+                local fr = clip.frame_rate
+                peaks, count, actual_start, actual_end = peak_cache.get_composite_peaks(
+                    clip.composite_audio_refs, peak_start, peak_end, wave_px,
+                    fr.fps_numerator, fr.fps_denominator)
+            else
+                local src_channel = assert(clip.resolved_media.source_channel, string.format(
+                    "timeline_view_renderer: audio clip %s has nil source_channel",
+                    tostring(clip.id)))
+                peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
+                    clip.resolved_media.id, peak_start, peak_end, wave_px, src_channel)
+            end
             if peaks and count > 0 then
                 local samples_per_pixel = (peak_end - peak_start) / wave_px
                 local mip_level = peak_constants.select_level(samples_per_pixel)

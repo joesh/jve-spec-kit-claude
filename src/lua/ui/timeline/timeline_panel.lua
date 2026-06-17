@@ -30,6 +30,13 @@ local routing_state = require("ui.source_routing_view_state")
 local View = require("ui.view")
 local M = View.new("timeline")
 
+-- Inline track-rename edit state (view-local, not persisted). When
+-- renaming_track_id is set, that track's header renders a line editor
+-- instead of its name label; pending_rename_edit holds the editor widget so
+-- start_track_rename can focus it after the rebuild that creates it.
+local renaming_track_id = nil
+local pending_rename_edit = nil
+
 -- Row metrics (sizing constants + pure helpers) live in their own module
 -- so tests can exercise them without pulling Qt into the require graph.
 -- Re-exposed below as M.metrics for the panel's public surface.
@@ -1910,6 +1917,33 @@ local function build_track_header_row(track, track_type, header_color)
     local src_btn, rec_btn, lock_btn, sync_btn = nil, nil, nil, nil
     local seq_id = state.get_tab_strip():active_sequence_id()
 
+    -- A synced master's per-channel audio tracks carry no stored name;
+    -- derive the recorder's iXML channel label (BOOM/LAV-A/...) for this
+    -- track's channel. Tab-agnostic: the synced master opens IN the source
+    -- tab, so the label must resolve there too — the discriminator is
+    -- whether the track is channel-backed (has a media_ref with a
+    -- source_channel), not which tab is showing. Lazy + session-cached —
+    -- this is the "probe on master-tab open" trigger. A user rename
+    -- (track.name) takes precedence and skips the probe entirely.
+    local channel_src = require("core.database").get_track_channel_source(track.id)
+    local channel_backed = channel_src ~= nil
+    local channel_name = nil
+    if channel_backed and (not track.name or track.name == "") then
+        channel_name = require("core.media.channel_names").get(
+            channel_src.media_id, channel_src.file_path, channel_src.source_channel)
+    end
+    local display_label = require("ui.timeline.track_header_label").for_display(
+        { name = track.name, channel_name = channel_name,
+          channel_backed = channel_backed,
+          track_index = track.track_index, track_type = track_type },
+        displayed_kind)
+
+    -- Renaming is meaningful wherever the label actually reflects track.name:
+    -- every record-tab track, and channel-backed tracks on either tab. A
+    -- plain source-tab track abbreviates (V1/A1) and ignores its name, so a
+    -- rename there would be invisible — disabled.
+    local rename_enabled = channel_backed or not is_source_tab
+
     if not is_source_tab then
         src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
         qt_constants.PROPERTIES.SET_MIN_WIDTH(src_btn, HDR.SRC)
@@ -1918,7 +1952,7 @@ local function build_track_header_row(track, track_type, header_color)
             build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
-        rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        rec_btn = qt_constants.WIDGET.CREATE_BUTTON(display_label)
         qt_constants.PROPERTIES.SET_MIN_WIDTH(rec_btn, HDR.REC)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(rec_btn, HDR.REC)
         qt_constants.PROPERTIES.SET_STYLE(rec_btn,
@@ -1930,14 +1964,51 @@ local function build_track_header_row(track, track_type, header_color)
         install_header_drop_target(header, seq_id, track.track_index, track_type)
     end
 
-    local label_text = require("ui.timeline.track_header_label").for_display(
-        { name = track.name, track_index = track.track_index, track_type = track_type },
-        displayed_kind)
-    local name_label = qt_constants.WIDGET.CREATE_LABEL(label_text)
-    qt_constants.PROPERTIES.SET_STYLE(name_label,
-        build_track_header_label_stylesheet())
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
-    qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
+    local name_label
+    if rename_enabled and track.id == renaming_track_id then
+        -- Inline rename editor: pre-fill with the user override only (empty
+        -- when the name is derived), so committing blank clears the override
+        -- and the derived label returns.
+        name_label = qt_constants.WIDGET.CREATE_LINE_EDIT(track.name or "")  -- lint-allow: R010 tracks.name is nullable (NULL=unset → edit starts empty)
+        qt_set_focus_policy(name_label, "ClickFocus")
+        qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
+        qt_constants.PROPERTIES.SET_STYLE(name_label,
+            build_track_header_label_stylesheet())
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
+        local committed = false
+        local edit_widget = name_label
+        local finish_handler = register_track_btn_handler(function()
+            -- editingFinished fires on both Enter and focus-out; guard against
+            -- the second firing (and the firing during the rebuild teardown).
+            if committed then return end
+            committed = true
+            M.finish_track_rename(captured_track_id,
+                qt_constants.PROPERTIES.GET_TEXT(edit_widget))
+        end)
+        qt_set_line_edit_editing_finished_handler(name_label, finish_handler)
+        pending_rename_edit = name_label
+    else
+        name_label = qt_constants.WIDGET.CREATE_LABEL(display_label)
+        qt_constants.PROPERTIES.SET_STYLE(name_label,
+            build_track_header_label_stylesheet())
+        qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
+        if rename_enabled then
+            -- Double-click the name to rename; single click focuses the track
+            -- (the anchor F2 / RenameTrack uses when there is no clicked id).
+            local dbl_handler = register_track_btn_handler(function()
+                command_manager.execute_interactive("RenameTrack",
+                    { track_id = captured_track_id })
+            end)
+            qt_constants.CONTROL.SET_WIDGET_DOUBLE_CLICK_HANDLER(name_label, dbl_handler)
+            local focus_handler = register_track_btn_handler(function(phase)
+                if phase == "press" then
+                    timeline_state.set_focused_track_id(captured_track_id)
+                end
+            end)
+            qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER(name_label, focus_handler)
+        end
+    end
 
     if not is_source_tab then
         lock_btn = qt_constants.WIDGET.CREATE_BUTTON("🔒")
@@ -3502,6 +3573,41 @@ local function rebuild_for_displayed_tab()
     -- which tab is displayed (see get_view_engine), so this function
     -- does not load any monitor.
 end
+
+-- Open the inline rename editor on a track header. Sets the view-local edit
+-- state and rebuilds so the row renders a line editor (build_track_header_row),
+-- then focuses + selects it. Entry point for RenameTrack (double-click / F2).
+function M.start_track_rename(track_id)
+    assert(track_id and track_id ~= "", "start_track_rename: track_id required")
+    renaming_track_id = track_id
+    pending_rename_edit = nil
+    rebuild_for_displayed_tab()
+    if pending_rename_edit then
+        qt_set_focus(pending_rename_edit)
+        if qt_line_edit_select_all then qt_line_edit_select_all(pending_rename_edit) end
+    end
+end
+
+-- Commit an inline rename: clear the edit state, dispatch the undoable
+-- SetTrackName (empty name clears the override → derived label returns). The
+-- track_name_changed listener below rebuilds the row back to a label.
+function M.finish_track_rename(track_id, name)
+    assert(track_id and track_id ~= "", "finish_track_rename: track_id required")
+    renaming_track_id = nil
+    pending_rename_edit = nil
+    command_manager.execute_interactive("SetTrackName", {
+        track_id   = track_id,
+        name       = name or "",
+        project_id = timeline_state.get_project_id(),
+    })
+end
+
+-- A rename (commit, undo, or redo) re-derives the header label. Rebuild the
+-- displayed tab so the affected row picks up the new name / reverts to the
+-- derived label. Rare event — a full rebuild is acceptable.
+Signals.connect("track_name_changed", function()
+    rebuild_for_displayed_tab()
+end)
 
 -- Timeline-view-rebuild listener: any pointer transition (record→record,
 -- record→source, source→record) flows through here. NOTE: outgoing

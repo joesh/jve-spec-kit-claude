@@ -315,12 +315,14 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 if apply_offset then file_offset = sample_offset end
                 local source_in = audio_tc + file_offset
                 local track_index = base_index + synced_track_offset + ch
-                local atrack = Track.create_audio(
-                    string.format("Sync %d", track_index), seq.id, {
-                        index       = track_index,
-                        muted       = false,
-                        source_kind = "sync",
-                    })
+                -- No stored name: the display layer derives the recorder's
+                -- iXML channel label (BOOM/LAV-A/...) for source_channel ch-1,
+                -- unless the user renames the track (tracks.name override).
+                local atrack = Track.create_audio(nil, seq.id, {
+                    index       = track_index,
+                    muted       = false,
+                    source_kind = "sync",
+                })
                 assert(atrack:save(), string.format(
                     "Sequence.ensure_master: failed to save synced audio track %d",
                     track_index))
@@ -385,8 +387,13 @@ function Sequence.ensure_master(media_id, project_id, opts)
             "Sequence.ensure_master: duration_frames must be positive integer, "
             .. "got %s (media_id=%s)", tostring(seq_dur), tostring(media_id)))
         for ch = 1, dims.media.audio_channels do
+            -- Embedded (camera-file) audio: labeled "Embedded N". Distinct
+            -- from the recorder's synced channels, which are nameless and
+            -- derive their iXML channel name (BOOM/LAV-A/...). A camera file
+            -- carries no iXML track names, so a stored label is the right
+            -- default here; the user can still rename it (tracks.name).
             local atrack = Track.create_audio(
-                string.format("Audio %d", ch), seq.id, {
+                Track.embedded_audio_label(ch), seq.id, {
                     id          = replay_audio_track_ids[ch],
                     index       = ch,
                     muted       = camera_muted,

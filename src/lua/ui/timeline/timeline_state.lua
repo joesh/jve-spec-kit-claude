@@ -572,6 +572,12 @@ M.get_state_version = clips.get_version
 
 -- Selection
 M.get_selected_clips = selection.get_selected_clips
+
+-- Focused track: the track header the user last clicked. Process-resident
+-- (not persisted) — drives keyboard actions with no clip selection anchor,
+-- e.g. F2 → RenameTrack. nil until a header is clicked.
+M.set_focused_track_id = function(track_id) data.state.focused_track_id = track_id end
+M.get_focused_track_id = function() return data.state.focused_track_id end
 local function persist_selection_state()
     if core and core.persist_state_to_db then
         core.persist_state_to_db()

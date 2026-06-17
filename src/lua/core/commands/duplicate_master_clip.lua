@@ -155,8 +155,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if has_audio then
             for ch = 1, media.audio_channels do
+                -- Embedded (in-file) audio channels: "Embedded N", matching
+                -- master_builder.add_audio_streams. Synced recorder channels
+                -- are nameless + derive their iXML name elsewhere.
                 local atrack = Track.create_audio(
-                    string.format("Audio %d", ch), seq.id, { index = ch })
+                    Track.embedded_audio_label(ch), seq.id, { index = ch })
                 assert(atrack:save(), "DuplicateMasterClip: failed to save audio track")
                 MediaRef.create({
                     project_id           = project_id,

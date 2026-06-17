@@ -263,7 +263,8 @@ local function deserialize_snapshot_payload(json_str)
         for _, track in ipairs(payload.tracks) do
             require_field("deserialize_snapshot_payload", "track", "id", track.id)
             require_field("deserialize_snapshot_payload", "track", "sequence_id", track.sequence_id)
-            require_field("deserialize_snapshot_payload", "track", "name", track.name)
+            -- name is optional (nil = unset; display derives the label) — a
+            -- synced master's channel tracks carry no stored name.
             require_field("deserialize_snapshot_payload", "track", "track_type", track.track_type)
             require_field("deserialize_snapshot_payload", "track", "track_index", track.track_index)
             tracks[#tracks + 1] = {
