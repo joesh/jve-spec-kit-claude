@@ -309,21 +309,20 @@ assert(r4[1] == 50, "expected 50 media (full media pool), got " .. tostring(r4[1
 print(string.format("  PASS: %d clips, %d media", r3[1], r4[1]))
 
 -- ═══════════════════════════════════════════════════════════════
--- 7. UUID dedup — no duplicate file_uuid values
+-- 7. File dedup — one media entry per physical file
 -- ═══════════════════════════════════════════════════════════════
-print("\n--- 7: UUID dedup ---")
+print("\n--- 7: file dedup ---")
 local r5 = query_one([[
     SELECT COUNT(*) FROM (
-        SELECT file_uuid, COUNT(*) as cnt FROM media
-        WHERE file_uuid IS NOT NULL
-        GROUP BY file_uuid HAVING cnt > 1
+        SELECT file_path, COUNT(*) as cnt FROM media
+        GROUP BY file_path HAVING cnt > 1
     )
 ]])
-assert(r5[1] == 0, r5[1] .. " duplicate UUIDs")
--- All media should have a UUID
-local r6 = query_one("SELECT COUNT(*) FROM media WHERE file_uuid IS NULL OR file_uuid = ''")
-assert(r6[1] == 0, r6[1] .. " media without UUID")
-print("  PASS: 0 duplicate UUIDs, all media have UUID")
+assert(r5[1] == 0, r5[1] .. " file_path values mapping to >1 media")
+-- Every media carries a stable identity (media.id = DRP MediaRef DbId).
+local r6 = query_one("SELECT COUNT(*) FROM media WHERE id IS NULL OR id = ''")
+assert(r6[1] == 0, r6[1] .. " media without id")
+print("  PASS: 0 duplicate files, all media have a stable id")
 
 -- Cleanup
 os.remove(JVP); os.remove(JVP .. "-wal"); os.remove(JVP .. "-shm")

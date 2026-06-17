@@ -57,19 +57,21 @@ local function scalar(sql)
     return val
 end
 
--- Step 3: No duplicate UUIDs in DB
+-- Step 3: One media entry per physical file (the same file pooled under
+-- several volume paths must collapse to ONE media). Identity is media.id
+-- (= DRP MediaRef DbId); the dedup invariant the user observes is that no
+-- two media rows point at the same physical file.
 print("\n--- Step 3: Verify DB ---")
 local media_count = scalar("SELECT COUNT(*) FROM media")
 print(string.format("  %d media records", media_count))
 
-local dup_uuid = scalar([[
+local dup_path = scalar([[
     SELECT COUNT(*) FROM (
-        SELECT file_uuid, COUNT(*) as cnt FROM media
-        WHERE file_uuid IS NOT NULL
-        GROUP BY file_uuid HAVING cnt > 1
+        SELECT file_path, COUNT(*) as cnt FROM media
+        GROUP BY file_path HAVING cnt > 1
     )
 ]])
-assert(dup_uuid == 0, string.format("%d duplicate file_uuid values", dup_uuid))
+assert(dup_path == 0, string.format("%d file_path value(s) map to >1 media", dup_path))
 
 -- All media have valid frame_rate
 local no_fps = scalar("SELECT COUNT(*) FROM media WHERE fps_numerator IS NULL OR fps_numerator <= 0")

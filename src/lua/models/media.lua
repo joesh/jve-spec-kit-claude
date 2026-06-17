@@ -515,7 +515,6 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         id = params.id or uuid.generate(),
         project_id = params.project_id,
         _file_path = file_path,
-        file_uuid = params.file_uuid,  -- DRP master clip UUID for cross-volume dedup
         name = name,
         duration = dur_frames,  -- integer frames
         frame_rate = { fps_numerator = num, fps_denominator = den },
@@ -541,7 +540,7 @@ end
 local MEDIA_SELECT_COLUMNS = [[
         id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
         width, height, rotation, audio_sample_rate, audio_channels, codec,
-        created_at, modified_at, metadata, file_uuid, is_still, offline_note
+        created_at, modified_at, metadata, is_still, offline_note
 ]]
 
 -- Hydrate a single Media instance from the current row of a prepared statement
@@ -571,14 +570,13 @@ local function _hydrate_row(query)
         created_at = query:value(13),
         modified_at = query:value(14),
         metadata = query:value(15),
-        file_uuid = query:value(16),
     }
-    local is_still_raw = query:value(17)
+    local is_still_raw = query:value(16)
     assert(is_still_raw ~= nil, string.format(
         "Media._hydrate_row: is_still is NULL for media_id=%s (schema corruption)", tostring(id)))
     media.is_still = tonumber(is_still_raw) == 1
     -- NULL when relink succeeded (or was never run) — see schema.sql for shape.
-    media.offline_note = query:value(18)
+    media.offline_note = query:value(17)
 
     setmetatable(media, media_mt)
     return media
@@ -1743,14 +1741,13 @@ function M:save()
     end
 
     local query = db:prepare([[
-        INSERT INTO media (id, project_id, name, file_path, file_uuid, duration_frames, fps_numerator, fps_denominator,
+        INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
             width, height, rotation, audio_sample_rate, audio_channels, codec, is_still, created_at, modified_at, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
             file_path = excluded.file_path,
-            file_uuid = excluded.file_uuid,
             duration_frames = excluded.duration_frames,
             fps_numerator = excluded.fps_numerator,
             fps_denominator = excluded.fps_denominator,
@@ -1771,23 +1768,22 @@ function M:save()
     query:bind_value(2, self.project_id)
     query:bind_value(3, self.name)
     query:bind_value(4, self._file_path)
-    query:bind_value(5, self.file_uuid)  -- nullable (non-DRP media won't have one)
-    query:bind_value(6, dur_frames)
-    query:bind_value(7, num)
-    query:bind_value(8, den)
-    query:bind_value(9, self.width)
-    query:bind_value(10, self.height)
-    query:bind_value(11, self.rotation or 0)
-    query:bind_value(12, self.audio_sample_rate or 0)
-    query:bind_value(13, self.audio_channels)
-    query:bind_value(14, self.codec)
+    query:bind_value(5, dur_frames)
+    query:bind_value(6, num)
+    query:bind_value(7, den)
+    query:bind_value(8, self.width)
+    query:bind_value(9, self.height)
+    query:bind_value(10, self.rotation or 0)
+    query:bind_value(11, self.audio_sample_rate or 0)
+    query:bind_value(12, self.audio_channels)
+    query:bind_value(13, self.codec)
     assert(type(self.is_still) == "boolean", string.format(
         "Media:save: is_still must be boolean, got %s (media_id=%s)",
         type(self.is_still), tostring(self.id)))
-    query:bind_value(15, self.is_still and 1 or 0)
-    query:bind_value(16, self.created_at)
-    query:bind_value(17, self.modified_at)
-    query:bind_value(18, self.metadata)
+    query:bind_value(14, self.is_still and 1 or 0)
+    query:bind_value(15, self.created_at)
+    query:bind_value(16, self.modified_at)
+    query:bind_value(17, self.metadata)
 
     if not query:exec() then
         log.warn("Media:save: Query execution failed: %s", query:last_error())

@@ -70,7 +70,9 @@ CREATE TABLE IF NOT EXISTS media (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     file_path TEXT NOT NULL UNIQUE,
-    file_uuid TEXT,  -- DRP master clip UUID (MediaRef DbId) for cross-volume dedup
+    -- NOTE: source-format stable identity (DRP MediaRef DbId, FCP7 file id) IS
+    -- media.id (see importer_core: stable_id = media_item.file_uuid). No separate
+    -- identity column — file_path UNIQUE enforces one media per physical file.
 
     -- Duration in its native timebase
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),

@@ -311,25 +311,26 @@ mix_stmt:finalize()
 assert(all_ok, "Stereo Mix TC sync drift exceeds tolerance")
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- Phase 5: media UUID dedup (folded from the retired test_drp_uuid_dedup_full)
+-- Phase 5: media file dedup (folded from the retired test_drp_uuid_dedup_full)
 -- The same physical file pooled under several volume paths must collapse to
--- ONE media entry, keyed by its file_uuid (MediaRef DbId).
+-- ONE media entry. Identity is media.id (= DRP MediaRef DbId); the observable
+-- dedup invariant is that no two media point at the same physical file.
 -- ═══════════════════════════════════════════════════════════════════════════
-print("\n--- Phase 5: media UUID dedup ---")
+print("\n--- Phase 5: media file dedup ---")
 
 local dup_stmt = assert(db:prepare([[
     SELECT COUNT(*) FROM (
-        SELECT file_uuid FROM media WHERE file_uuid IS NOT NULL
-        GROUP BY file_uuid HAVING COUNT(*) > 1
+        SELECT file_path FROM media
+        GROUP BY file_path HAVING COUNT(*) > 1
     )
 ]]))
 assert(dup_stmt:exec() and dup_stmt:next())
-local dup_uuids = dup_stmt:value(0)
+local dup_paths = dup_stmt:value(0)
 dup_stmt:finalize()
-assert(dup_uuids == 0, string.format(
-    "%d file_uuid value(s) map to >1 media entry — cross-volume dedup failed",
-    dup_uuids))
-print("  PASS: every file_uuid maps to exactly one media entry")
+assert(dup_paths == 0, string.format(
+    "%d file_path value(s) map to >1 media entry — cross-volume dedup failed",
+    dup_paths))
+print("  PASS: every physical file maps to exactly one media entry")
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Phase 6: media-pool bin structure (folded from the retired anamnesis case
