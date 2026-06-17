@@ -1087,6 +1087,12 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     int64_t total_output_samples = 0;
     int ret;
 
+    // Scratch buffer for pre-roll priming output (discarded). Declared outside
+    // the decode loop so it allocates only when it must grow — never per frame
+    // (NEVER MALLOC IN HOT LOOPS). Pre-roll frames are bounded and similarly
+    // sized, so this converges to zero allocations after the first prime.
+    std::vector<float> prime_discard;
+
     while (true) {
         ret = av_read_frame(fmt_ctx, m_impl->m_audio_pkt);
         if (ret == AVERROR_EOF) {
@@ -1132,10 +1138,13 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
                 if (need_seek) {
                     int64_t prime_out = m_impl->resample_ctx.get_out_samples(frame_samples);
                     if (prime_out > 0) {
-                        std::vector<float> discard(prime_out * RESAMPLER_OUTPUT_CHANNELS);
+                        size_t needed = static_cast<size_t>(prime_out * RESAMPLER_OUTPUT_CHANNELS);
+                        if (prime_discard.size() < needed) {
+                            prime_discard.resize(needed);
+                        }
                         m_impl->resample_ctx.convert(
                             m_impl->m_audio_frame->data, frame_samples,
-                            discard.data(), prime_out);
+                            prime_discard.data(), prime_out);
                     }
                 }
                 av_frame_unref(m_impl->m_audio_frame);

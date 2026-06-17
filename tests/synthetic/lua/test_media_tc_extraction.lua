@@ -32,20 +32,6 @@ local function check(label, condition, detail)
     end
 end
 
-local function expect_error(label, fn, pattern)
-    local ok, err = pcall(fn)
-    if not ok then
-        if pattern and not tostring(err):match(pattern) then
-            fail_count = fail_count + 1
-            print("FAIL (wrong error): " .. label .. " got: " .. tostring(err))
-        else
-            pass_count = pass_count + 1
-        end
-    else
-        fail_count = fail_count + 1
-        print("FAIL (expected error): " .. label)
-    end
-end
 
 print("\n=== Media TC Extraction — NSF Regression Tests ===")
 
@@ -156,22 +142,42 @@ if mc_nodims_ok then
     stmt2:finalize()
 end
 
-print("\n--- ensure_masterclip asserts on unknown TC for media WITH video/audio ---")
+print("\n--- ensure_masterclip defaults TC origin to 00:00:00:00 for media WITH video/audio but no TC ---")
 
--- A media record with video dims (width > 0) but no TC metadata must assert —
--- the source viewer and decoder need an authoritative TC origin.
+-- A media record with video dims (width > 0) but no TC metadata anchors at
+-- 00:00:00:00 (frame 0). No-TC media is common (offline/relinked clips, files
+-- whose container carries no start timecode); the master must still build so
+-- the clip places, with the file's first frame as origin. (Joe-approved
+-- 2026-06-14 no-TC origin-0 fix; this replaced the earlier hard assert.)
 local m_video_no_tc = Media.create({
     id = "m_video_no_tc", project_id = "proj1", name = "video_notc.mov",
     file_path = "/nonexistent/video_notc.mov",
     duration_frames = 100, fps_numerator = 25, fps_denominator = 1,
     width = 1920, height = 1080,
-    -- no metadata → get_start_tc returns nil
+    -- no metadata → get_start_tc returns nil → origin defaults to frame 0
 })
 m_video_no_tc:save(db)
 
-expect_error("video media without TC → ensure_master asserts", function()
-    Sequence.ensure_master("m_video_no_tc", "proj1")
-end, "no video TC origin")
+local mc_no_tc = Sequence.ensure_master("m_video_no_tc", "proj1")
+check("no-TC video media → master created", mc_no_tc ~= nil)
+
+local notc_stmt = assert(db:prepare([[
+    SELECT c.source_in_frame, c.sequence_start_frame
+    FROM media_refs c
+    JOIN tracks t ON c.track_id = t.id
+    WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO'
+    LIMIT 1
+]]))
+notc_stmt:bind_value(1, mc_no_tc)
+assert(notc_stmt:exec() and notc_stmt:next())
+local notc_source_in = notc_stmt:value(0)
+local notc_sequence_start = notc_stmt:value(1)
+notc_stmt:finalize()
+
+check("no-TC video source_in = frame 0 (00:00:00:00)", notc_source_in == 0,
+    string.format("expected 0, got %s", tostring(notc_source_in)))
+check("no-TC video sequence_start = frame 0", notc_sequence_start == 0,
+    string.format("expected 0, got %s", tostring(notc_sequence_start)))
 
 --------------------------------------------------------------------------------
 -- Half 2: Output invariants — masterclip source_in uses real TC

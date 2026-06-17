@@ -41,7 +41,7 @@ local clip_id_2 = uuid.generate()
 -- master-anchor SQL.
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('%s', 'Relink Project', 'resample', %d, %d, '{}');
+    VALUES ('%s', 'Relink Project', 'resample', %d, %d, '{"master_clock_hz":705600000,"default_fps":{"num":25,"den":1}}');
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
