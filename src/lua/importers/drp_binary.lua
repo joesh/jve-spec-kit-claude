@@ -59,6 +59,20 @@ function M.read_be64(bytes, pos)
     return hi * 4294967296 + lo  -- hi * 2^32 + lo
 end
 
+--- Read a big-endian SIGNED int64 from a raw byte string at 1-indexed position.
+-- Used for fields Resolve encodes as signed two's-complement (SampleOffset:
+-- negative when the field recorder started after the camera's frame 0). The
+-- high word is sign-extended BEFORE combining, so the result is exact for any
+-- |value| < 2^53 — unlike subtracting 2^64 from an already-rounded ~2^64 read.
+function M.read_be64_signed(bytes, pos)
+    if pos + 7 > #bytes then return nil end
+    local hi = M.read_be32(bytes, pos)
+    local lo = M.read_be32(bytes, pos + 4)
+    if not hi or not lo then return nil end
+    if hi >= 2147483648 then hi = hi - 4294967296 end  -- sign-extend the high word
+    return hi * 4294967296 + lo
+end
+
 --- Decode a LE IEEE 754 double from hex string at given character offset.
 -- DRP stores doubles in little-endian byte order (x86 native).
 -- @param hex_str string: Hex string containing doubles
@@ -864,7 +878,9 @@ end
 local function read_sample_offset_value(bytes, name_pos)
     local value_pos = name_pos + #SAMPLEOFFSET_NAME_UTF16LE
         + SAMPLEOFFSET_NAME_TO_VALUE_GAP
-    return M.read_be64(bytes, value_pos)
+    -- SampleOffset is a signed int64 — negative when the recorder started after
+    -- the camera's frame 0 (sync point precedes the WAV's first sample).
+    return M.read_be64_signed(bytes, value_pos)
 end
 
 -- The SampleOffset (samples) that aligns the channel whose MediaRef name starts
