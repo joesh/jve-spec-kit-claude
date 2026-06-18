@@ -1,6 +1,20 @@
 # Design: wiring content_match into live discovery (FR-011c)
 
-**Status:** DESIGN — awaiting Joe's decision on the fork (§4). No code written.
+**Status:** IMPLEMENTED + VERIFIED 2026-06-17 (Option I) — gate CLOSED.
+Joe chose **Option I** AND that **content beats position on disagreement** (so the
+content channel runs BEFORE position, not after — this reverses §6's earlier lean).
+Landed: `discovery.match_by_content` channel (direct-id → marker → **content** →
+position), `load_clips_on_track` exposes `master.import_uuid`, content matches are
+ledger-persisted (`source="content_match"`) and marker-stamped like position matches,
+the dead `identity_ledger.reconcile` + `blade_inherit` + `test_identity_reconcile.lua`
+deleted, helper `read_timeline` emits `import_uuid`. Pure-data matcher fully covered
+by `test_bridge_discovery_match.lua` (scenarios 13–18). **Gate CLOSED (2026-06-17):**
+the probe (`probe_mp_item_identity.py` vs `anamnesis-gold-timeline.drp`) confirmed
+`MediaPoolItem.GetUniqueId()` == `Sm2MpVideoClip@DbId` == `import_uuid`
+(GetUniqueId ∩ DbId = 15, ∩ UniqueMediaPoolItemId = 0; GetMediaId is the other
+family — see phase0-findings §K1a). The helper line is correct as written; the
+content channel is LIVE-correct, not dormant.
+
 **Context:** source-clip identity now lives on `sequences.import_uuid` (the master);
 `media.file_uuid` dropped. The outbound payload already carries this identity. The
 *inbound* match path (pull grades/edits back from Resolve) does NOT yet use it.
@@ -93,6 +107,19 @@ content_match logic from `reconcile` (the overlap+empty-guid gate) into a new
   no live Resolve poke)?
 - Keep or delete `reconcile`/`blade_inherit`? Delete = simpler; keep = blade_inherit
   reference for the eventual split-clip case.
-- content_match precedence vs position: should identity match BEAT position when both
-  fire but disagree, or stay strictly after position? (I propose after — position is
-  the higher-confidence conform key when present.)
+- ~~content_match precedence vs position~~ **RESOLVED (Joe, 2026-06-17): content
+  BEATS position.** The content channel runs BEFORE position — identity (a source clip
+  that round-trips through Resolve's DbId) is higher-confidence than geometry, so a
+  clip the colorist moved follows its source clip, not its old slot. Same-source
+  duplicates (one identity, several overlapping items) are reported
+  `duplicate_identity_content` and fall through to position, which disambiguates by
+  record_start. Position remains the fallback for clips with no source identity
+  (native/compound) and for rate-mismatch runs where the content channel still works
+  (it is source-TC based, not record_start based).
+- ~~**VERIFICATION GATE (open):** which live `MediaPoolItem` accessor returns the
+  `Sm2MpVideoClip@DbId` JVE adopts as `import_uuid`.~~ **CLOSED (2026-06-17):**
+  `probe_mp_item_identity.py` vs `anamnesis-gold-timeline.drp` confirmed
+  `GetUniqueId()` is the accessor (∩ `Sm2MpVideoClip@DbId` = 15, ∩
+  `UniqueMediaPoolItemId` = 0; `GetMediaId()` is the `UniqueMediaPoolItemId`
+  family). Helper emits `GetUniqueId()` correctly — no code change. Verdict in
+  phase0-findings §K1a.

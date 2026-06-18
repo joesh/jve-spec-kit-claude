@@ -642,9 +642,24 @@ def _read_video_item(item):
         name            = item.GetName()
         mp_item         = item.GetMediaPoolItem()
         media_file_path = mp_item.GetClipProperty("File Path") if mp_item else None
+        # Source-clip identity for JVE's content-match channel: the pool
+        # item's persistent id. JVE's master.import_uuid adopts the DRP
+        # Sm2MpVideoClip@DbId on import and re-emits it outbound, so this
+        # must be the SAME id Resolve persists for that pool item.
+        # VERIFIED 2026-06-17: GetUniqueId() IS that id — confirmed by
+        # tools/resolve-helper/spikes/probe_mp_item_identity.py vs
+        # anamnesis-gold-timeline.drp (GetUniqueId ∩ Sm2MpVideoClip@DbId,
+        # 0 overlap with the fresh-minted UniqueMediaPoolItemId; GetMediaId
+        # is that other family). See specs phase0-findings §K1a.
+        import_uuid     = mp_item.GetUniqueId() if mp_item else None
     except Exception as exc:
         raise RuntimeError(
             f"timeline-item TC/enabled extraction raised: {exc}") from exc
+    if import_uuid is not None and (
+            not isinstance(import_uuid, str) or import_uuid == ""):
+        raise RuntimeError(
+            f"MediaPoolItem.GetUniqueId() must be a non-empty string or "
+            f"None; got {type(import_uuid).__name__} = {import_uuid!r}")
     for field_name, value in (
         ("record_start",    record_start),
         ("record_duration", record_duration),
@@ -671,6 +686,7 @@ def _read_video_item(item):
             "enabled":         enabled,
             "name":            name,
             "media_file_path": media_file_path,
+            "import_uuid":     import_uuid,
         }
     if src_in_is_int or src_out_is_int:
         # Partial-int source TC is a Resolve API surprise, not a kind

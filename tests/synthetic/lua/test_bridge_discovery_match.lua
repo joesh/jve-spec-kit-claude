@@ -81,6 +81,23 @@ local function id_item(rid, jve_guid)
     return { resolve_item_id = rid, jve_guid = jve_guid }
 end
 
+-- Content-channel shapes: a JVE clip carrying its source-clip identity
+-- (master.import_uuid) and a Resolve media item carrying the same pool
+-- MediaRef identity. content_match keys on identity + source-TC overlap,
+-- independent of record position (a moved clip keeps its identity).
+local function clip_u(id, ti, rec_start, src_in, src_out, import_uuid)
+    local c = clip(id, ti, rec_start, src_in, src_out)
+    c.import_uuid = import_uuid
+    return c
+end
+
+local function tl_item_u(rid, ti, rec_start, dur, src_in, src_out,
+                          clip_id, import_uuid)
+    local t = tl_item(rid, ti, rec_start, dur, src_in, src_out, clip_id)
+    t.import_uuid = import_uuid
+    return t
+end
+
 -- ── Scenario 1: pure marker matches ─────────────────────────────────
 do
     local jve_clips = {
@@ -425,6 +442,144 @@ do
         #m.ambiguous == 0)
     check("scenario 12: clip not left unmatched",
         #m.unmatched == 0)
+end
+
+-- ── Scenario 13: content channel — a moved clip keeps its identity ───
+-- The colorist moved a clip to a new record position; the position key no
+-- longer hits. But the clip's source-clip identity (import_uuid) plus an
+-- overlapping source-TC range identify it unambiguously. content_match
+-- links it where position cannot.
+do
+    local jve_clips = {
+        clip_u("c_moved", 1, 0, 10, 110, "U-src"),
+    }
+    local identities = {}
+    local timeline = {
+        -- Same identity, moved to record_start 900 (position key (video,1,0)
+        -- misses), source range overlaps the clip's [10,110).
+        tl_item_u("R_moved", 1, 900, 100, 5, 120, "c_moved", "U-src"),
+    }
+    local m = discovery.match(jve_clips, identities, timeline)
+    check("scenario 13: c_moved content-matches R_moved",
+        m.content_matched and m.content_matched["c_moved"] == "R_moved")
+    check("scenario 13: not position-matched (it moved)",
+        m.pos_matched["c_moved"] == nil)
+    check("scenario 13: zero unmatched", #m.unmatched == 0)
+    check("scenario 13: zero ambiguous", #m.ambiguous == 0)
+end
+
+-- ── Scenario 14: content BEATS position on disagreement ──────────────
+-- The clip moved (its true item is elsewhere, identity U). A DECOY item
+-- with identical content keys (name/source_in/path) but a DIFFERENT
+-- identity sits at the clip's old position — position alone would link the
+-- clip to the decoy. Because content runs first, the clip follows its
+-- source identity to the moved item, and the decoy is left for no one.
+do
+    local jve_clips = {
+        clip_u("c", 1, 0, 10, 110, "U-true"),
+    }
+    local identities = {}
+    local timeline = {
+        tl_item_u("R_true",  1, 900, 200, 0, 200, "c", "U-true"),  -- moved, real
+        tl_item_u("R_decoy", 1, 0,   100, 10, 110, "c", "V-other"), -- old slot, wrong source
+    }
+    local m = discovery.match(jve_clips, identities, timeline)
+    check("scenario 14: clip follows identity to the moved item",
+        m.content_matched and m.content_matched["c"] == "R_true")
+    check("scenario 14: clip is NOT position-matched to the decoy",
+        m.pos_matched["c"] == nil)
+    check("scenario 14: zero unmatched (clip settled by content)",
+        #m.unmatched == 0)
+end
+
+-- ── Scenario 15: same identity, two overlapping items → ambiguous ────
+-- A source clip used twice on the Resolve timeline yields two items with
+-- the same identity, both overlapping the clip's source TC. content_match
+-- cannot pick one — it reports ambiguous (duplicate_identity_content),
+-- never silently chooses (rule 2.32). With no position hit either, the
+-- clip is reported unmatched.
+do
+    local jve_clips = {
+        clip_u("c", 1, 777, 10, 110, "U-dup"),  -- record_start 777: no position hit
+    }
+    local identities = {}
+    local timeline = {
+        tl_item_u("R_a", 1, 100, 200, 0,  200, "c", "U-dup"),
+        tl_item_u("R_b", 1, 300, 100, 50, 150, "c", "U-dup"),
+    }
+    local m = discovery.match(jve_clips, identities, timeline)
+    check("scenario 15: not content-matched (ambiguous identity)",
+        m.content_matched["c"] == nil)
+    local dup = 0
+    for _, a in ipairs(m.ambiguous) do
+        if a.clip_id == "c" and a.reason == "duplicate_identity_content" then
+            dup = dup + 1
+        end
+    end
+    check("scenario 15: both items reported duplicate_identity_content",
+        dup == 2)
+    check("scenario 15: clip reported unmatched", #m.unmatched == 1
+        and m.unmatched[1].clip_id == "c")
+end
+
+-- ── Scenario 16: content channel is rate-independent ─────────────────
+-- On a TC-rate mismatch the position channel is skipped (record_start is
+-- rate-relative). content_match keys on source TC + identity, not
+-- record_start, so it STILL recovers a moved clip's link even when
+-- position cannot run.
+do
+    local jve_clips = {
+        clip_u("c_moved", 1, 0, 10, 110, "U-src"),
+    }
+    local identities = {}
+    local timeline = {
+        tl_item_u("R_moved", 1, 900, 100, 5, 120, "c_moved", "U-src"),
+    }
+    local m = discovery.match(jve_clips, identities, timeline, nil, true)
+    check("scenario 16: content-matches even with position skipped",
+        m.content_matched and m.content_matched["c_moved"] == "R_moved")
+    check("scenario 16: position channel produced nothing",
+        next(m.pos_matched) == nil)
+end
+
+-- ── Scenario 17: no source identity → falls through to position ───────
+-- A native/compound clip carries no import_uuid. The content channel must
+-- ignore it (not crash on nil) and let the position channel match it.
+do
+    local jve_clips = {
+        clip_u("c_native", 1, 0, 0, 100, nil),
+    }
+    local identities = {}
+    local timeline = {
+        tl_item("R1", 1, 0, 100, 0, 100, "c_native"),  -- no import_uuid
+    }
+    local m = discovery.match(jve_clips, identities, timeline)
+    check("scenario 17: nil-identity clip not content-matched",
+        m.content_matched["c_native"] == nil)
+    check("scenario 17: position channel matches it",
+        m.pos_matched["c_native"] == "R1")
+    check("scenario 17: zero unmatched", #m.unmatched == 0)
+end
+
+-- ── Scenario 18: id channel still beats content ──────────────────────
+-- A clip whose id == a live item id AND whose identity matches another
+-- item must link via the direct-id channel; content must not double-claim.
+do
+    local jve_clips = {
+        clip_u("DID", 1, 0, 10, 110, "U-src"),
+    }
+    local identities = {}
+    local timeline = {
+        tl_item_u("DID",     1, 0,   100, 10, 110, "DID", "U-src"),  -- id match
+        tl_item_u("R_other", 1, 500, 100, 0,  200, "DID", "U-src"),  -- same identity
+    }
+    local m = discovery.match(jve_clips, identities, timeline)
+    check("scenario 18: links via direct-id channel",
+        m.id_matched and m.id_matched["DID"] == "DID")
+    check("scenario 18: content channel does not also claim it",
+        m.content_matched["DID"] == nil)
+    check("scenario 18: zero ambiguous", #m.ambiguous == 0)
+    check("scenario 18: zero unmatched", #m.unmatched == 0)
 end
 
 -- ── Failure paths: validate args (rule 2.32) ────────────────────────

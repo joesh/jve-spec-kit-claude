@@ -340,6 +340,34 @@ EmbeddedAudioVec > Element > BtAudioInfo {FieldsBlob/, Clip, TracksBA, MediaMeta
 KEY/VALUE pairs (file path, frame rate, resolution, channel count, etc.).
 Decode deferred — see §K3.
 
+### K1a. VERIFIED (2026-06-17): live `MediaPoolItem` accessor for `import_uuid`
+
+The content-match channel (FR-011c) keys on `master.import_uuid`, adopted from
+`Sm2MpVideoClip@DbId`. The helper must read the *same* id off the live
+timeline item's source pool item. Open question (phase0 §K1): is that
+`MediaPoolItem.GetUniqueId()` (the `Sm2MpVideoClip@DbId` family) or the
+fresh-minted child `<UniqueMediaPoolItemId>`?
+
+**Settled by probe** (`tools/resolve-helper/spikes/probe_mp_item_identity.py`
+against the live `anamnesis-gold-timeline` project, cross-referenced to
+`tests/fixtures/resolve/anamnesis-gold-timeline.drp`):
+
+| probe accessor | ∩ `Sm2MpVideoClip@DbId` (495) | ∩ `<UniqueMediaPoolItemId>` (955) |
+|---|---|---|
+| `GetUniqueId()` (458) | **15** | 0 |
+| `GetMediaId()` (458) | 0 | **20** |
+
+Zero cross-contamination. `GetUniqueId()` lands only in the
+`Sm2MpVideoClip@DbId` family; `GetMediaId()` only in `UniqueMediaPoolItemId`.
+Low absolute counts = id churn (live project edited since the June-3 `.drp`
+snapshot → most ids re-minted); the surviving overlaps falling cleanly on
+opposite sides is the discriminator.
+
+**Verdict: `MediaPoolItem.GetUniqueId()` == `Sm2MpVideoClip@DbId` == `import_uuid`.**
+The helper line in `verbs.py _read_video_item` (`import_uuid = mp_item.GetUniqueId()`)
+is correct as written — no change. The content channel is now LIVE-correct
+(not dormant). Verification gate CLOSED.
+
 ### K2. Sm2MpAudioClip child schema (observed)
 
 From `resolve_authored_full.drp` MpFolder.xml lines 348–372
