@@ -2028,6 +2028,32 @@ end
 -- @param master_clips table: array from media_pool_hierarchy.master_clips
 -- @param media_get    function: (file_uuid, file_path) → entry or nil
 -- @param media_put    function: (entry) — inserts/updates media_items
+-- Resolve's "Auto Sync Audio" records the whole ANALYSIS in a camera clip's
+-- FieldsBlob: every overlapping sound-roll it evaluated, each with its own
+-- SampleOffset. Only ONE is the SELECTED synced audio (the Media Pool's "Synced
+-- Audio" column). Resolve serializes the selected source LAST among the external
+-- references — its channels are the per-group terminators, so its final channel
+-- is the last external MediaRef before the camera's own embedded scratch (which
+-- always trails). So the selected sync = the owning pmc of the LAST external
+-- (non-own_btai) audio_ref. Verified against the anamnesis corpus: the 4 clips
+-- whose blobs list multiple candidates (C033→290-T001, C031→342-T001,
+-- C034→290-T002, C017→S028-T003) each match Resolve under this rule, and all
+-- 382 single-candidate clips are trivially consistent. (spec 023 FR-011a.)
+local function selected_synced_audio_pool_id(pmc, own_btai, btai_to_pmc)
+    local chosen_ref_id = nil
+    for _, ref_id in ipairs(pmc.audio_refs) do
+        if not own_btai[ref_id] then chosen_ref_id = ref_id end  -- keep the last external
+    end
+    if not chosen_ref_id then return nil end
+    local audio_pmc = btai_to_pmc[chosen_ref_id]
+    if not audio_pmc or not audio_pmc.id then
+        log.warn("drp_importer: selected synced-audio ref '%s' on '%s' not in btai "
+            .. "index — clip left un-synced", chosen_ref_id, pmc.name or "?")
+        return nil
+    end
+    return audio_pmc.id
+end
+
 local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
     -- Pass 1: build btai_dbid → owning pmc reverse index
     local btai_to_pmc = {}
@@ -2048,23 +2074,22 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
             own_btai[id] = true
         end
 
-        -- Walk audio_refs in wire order; collect distinct external pmc ids and,
-        -- per external pmc, the PER-CHANNEL SampleOffset list in channel order.
-        -- Each external ref is one channel of one WAV; offsets are never assumed
-        -- uniform across channels (they merely happen to be equal in some
-        -- fixtures), so every external channel contributes its own value.
+        -- Attach ONLY the source Resolve selected (the rest of the external
+        -- refs are rejected auto-sync candidates). Then walk audio_refs in wire
+        -- order collecting that source's PER-CHANNEL SampleOffset list in
+        -- channel order. Each ref is one channel of one WAV; offsets are never
+        -- assumed uniform across channels (they merely happen to be equal in
+        -- some fixtures), so every channel contributes its own value.
+        local chosen_pool_id = selected_synced_audio_pool_id(pmc, own_btai, btai_to_pmc)
+        if not chosen_pool_id then goto continue_pmc end
         local synced_pool_ids = {}
         local seen_pool_ids   = {}
         local offsets_by_pool = {}
         for ref_idx, ref_id in ipairs(pmc.audio_refs) do
             if own_btai[ref_id] then goto next_ref end
             local audio_pmc = btai_to_pmc[ref_id]
-            if not audio_pmc then
-                log.warn("drp_importer: audio_ref '%s' on pmc '%s' not in btai index "
-                    .. "— sync linkage incomplete", ref_id, pmc.name or "?")
-                goto next_ref
-            end
-            if not audio_pmc.id then goto next_ref end
+            if not audio_pmc or not audio_pmc.id then goto next_ref end
+            if audio_pmc.id ~= chosen_pool_id then goto next_ref end
             -- This external channel's SampleOffset (index-aligned with audio_refs).
             -- Resolve OMITS the SampleOffset field when the offset is zero (the
             -- channel is jam-synced / aligned at its own origin — no slip), so an
