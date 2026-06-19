@@ -1391,10 +1391,11 @@ local function parse_resolve_tracks(seq_elem, opts)
                 -- <In> is 'NN' or 'NN|<hex>'. NN is the whole-frame offset;
                 -- the hex is a little-endian IEEE-754 double in [0, 1)
                 -- representing the sub-frame fractional position within that
-                -- frame. The fraction is applied only on unretimed clips —
-                -- retimed clips get sub-frame precision from the MTBA curve's
-                -- own keyframes, and adding the <In> fraction on top would
-                -- double-count and produce rounding errors at frame boundaries.
+                -- frame. Both the unretimed and retimed paths use it: the
+                -- unretimed path adds it to the source frame directly; the
+                -- retimed path samples the MTBA curve at the sub-frame-accurate
+                -- timeline X (the fraction is the curve's input position, not a
+                -- source offset added on top — so there is no double-count).
                 local num_part, hex_part = in_text:match("^(%d+)|?(%x*)")
                 in_value = assert(num_part and tonumber(num_part), string.format(
                     "parse_resolve_tracks: clip '%s' <In> has no numeric prefix: '%s'",
@@ -1522,7 +1523,23 @@ local function parse_resolve_tracks(seq_elem, opts)
                 -- native_rate units (media frames or samples). Snap at FRAME
                 -- granularity via rcm (Resolve cuts source on whole-frame
                 -- boundaries; see core.retime_curve_math for the why).
-                local in_sec   = in_value / frame_rate
+                --
+                -- Include the <In> sub-frame fraction in the IN-point's curve X
+                -- position: the curve must be sampled at the sub-frame-accurate
+                -- timeline point, not the floored whole frame. At speed > 1 the
+                -- fraction maps to ≥1 source frame, so dropping it loses a frame
+                -- at the in-point — e.g. A030_C012 (<In> 330.769, speed 1.30):
+                -- 330/25 samples Y=429.00, but 330.769/25 samples Y=430.00 =
+                -- where Resolve cut the source. (Whole-frame-equivalent fixtures
+                -- land identically — test_drp_retime_curve_walk's A035 clip:
+                -- 393.36 and 394.00 both ceil to 394.)
+                --
+                -- out_sec deliberately uses the whole-frame <In>+<Duration>: the
+                -- played span is <Duration> whole timeline frames, and the source
+                -- OUT-point's sub-frame handling is a separate, un-fixtured
+                -- question (see memory todo_023_retime_subframe_out_point). The
+                -- relink coverage that motivated this fix keys on source_IN.
+                local in_sec   = (in_value + in_sub_frame) / frame_rate
                 local out_sec  = (in_value + duration_raw) / frame_rate
                 local y_in_sec  = eval_curve(retime_keyframes, in_sec)
                 local y_out_sec = eval_curve(retime_keyframes, out_sec)
