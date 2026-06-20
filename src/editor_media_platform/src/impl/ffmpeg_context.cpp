@@ -301,7 +301,14 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
 
         // 4. Configure hw acceleration if available
         if (m_hw_device_ctx) {
+            // av_buffer_ref returns null only on allocation failure (OOM), not a
+            // normal condition. Assigning null would silently drop HW accel —
+            // VideoToolbox vanishes and decode falls back to software with no
+            // signal. Surface it.
             m_codec_ctx->hw_device_ctx = av_buffer_ref(m_hw_device_ctx);
+            if (!m_codec_ctx->hw_device_ctx) {
+                return Error::internal("av_buffer_ref failed (OOM) for hw_device_ctx");
+            }
             m_codec_ctx->opaque = &m_negotiation;
             m_codec_ctx->get_format = get_hw_format;
         }

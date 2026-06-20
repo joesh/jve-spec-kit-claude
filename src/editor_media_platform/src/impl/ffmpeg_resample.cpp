@@ -135,7 +135,13 @@ void FFmpegResampleContext::reset() {
     // Close and re-init to clear internal FIFO buffers
     // This is the recommended way to reset SwrContext state
     swr_close(m_swr_ctx);
-    swr_init(m_swr_ctx);
+    // swr_init re-applies options already validated in init(); a negative
+    // return is an internal libswresample fault, not a normal case. Discarding
+    // it left m_swr_ctx non-null but un-initialized — the next convert() would
+    // pass its non-null guard and run swr_convert on a dead context. Fail loud.
+    int ret = swr_init(m_swr_ctx);
+    JVE_ASSERT(ret >= 0,
+        ("FFmpegResampleContext::reset: swr_init after close failed (AVERROR " + std::to_string(ret) + ")").c_str());
 }
 
 int64_t FFmpegResampleContext::get_out_samples(int in_samples) const {

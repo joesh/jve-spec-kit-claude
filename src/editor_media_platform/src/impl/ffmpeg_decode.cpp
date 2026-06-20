@@ -39,8 +39,14 @@ Result<AVFrame*> decode_next_frame(AVCodecContext* codec_ctx, AVFormatContext* f
             ret = av_read_frame(fmt_ctx, pkt);
             if (ret < 0) {
                 if (ret == AVERROR_EOF) {
-                    // Flush decoder
-                    avcodec_send_packet(codec_ctx, nullptr);
+                    // Flush decoder. AVERROR_EOF from the flush send means the
+                    // decoder was already drained (normal); any other negative
+                    // is a real codec fault — surface it instead of falling
+                    // through to Error::eof() and masking it.
+                    int flush_ret = avcodec_send_packet(codec_ctx, nullptr);
+                    if (flush_ret < 0 && flush_ret != AVERROR_EOF) {
+                        return ffmpeg_error(flush_ret, "avcodec_send_packet (flush)");
+                    }
                     ret = avcodec_receive_frame(codec_ctx, frame);
                     if (ret == 0) {
                         return frame;
@@ -166,8 +172,16 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
         while (true) {
             int ret = av_read_frame(fmt_ctx, pkt);
             if (ret == AVERROR_EOF) {
-                // Flush decoder
-                avcodec_send_packet(codec_ctx, nullptr);
+                // Flush decoder. AVERROR_EOF here = already drained (normal);
+                // any other negative is a real codec fault — surface it, freeing
+                // the frames gathered so far (same cleanup the drain loop does).
+                int flush_ret = avcodec_send_packet(codec_ctx, nullptr);
+                if (flush_ret < 0 && flush_ret != AVERROR_EOF) {
+                    for (auto& df : frames) {
+                        av_frame_free(&df.frame);
+                    }
+                    return ffmpeg_error(flush_ret, "avcodec_send_packet (flush)");
+                }
                 // Drain remaining frames
                 while (true) {
                     ret = avcodec_receive_frame(codec_ctx, temp_frame);
