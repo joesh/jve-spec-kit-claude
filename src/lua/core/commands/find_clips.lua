@@ -13,7 +13,19 @@ local log = require("core.logger").for_area("ui.find")
 
 local M = {}
 
-local SPEC_FIND = { undoable = false, args = {} }
+-- The find dialog is a pure view: it dispatches every action with the user's
+-- query packet. These keys are optional at the schema layer (Find/FindNext open
+-- the dialog when absent); each executor asserts the subset it actually needs
+-- (e.g. SelectAllMatches / FindReplace* require column+operator+value).
+local SPEC_FIND = {
+    undoable = false,
+    args = {
+        column        = { kind = "string" },
+        operator      = { kind = "string" },
+        value         = { kind = "string" },
+        replace_value = { kind = "string" },
+    },
+}
 
 -- ============================================================================
 -- Helpers
