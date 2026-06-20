@@ -64,9 +64,6 @@ public:
     // by testClipWidthRigidWhilePanning.
     void setPanOffsetPx(qreal px) { pan_offset_px_ = px; }
 
-    // Test method to demonstrate command system
-    void renderTestTimeline();
-    
     // Playhead position management (called from Lua)
     void setPlayheadPosition(qint64 timeMs);
     qint64 getPlayheadPosition() const;

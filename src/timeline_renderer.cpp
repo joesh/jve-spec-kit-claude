@@ -110,45 +110,6 @@ void TimelineRenderer::addWaveform(qreal x, qreal y, qreal width, qreal height,
     drawing_commands_.push_back(std::move(cmd));
 }
 
-void TimelineRenderer::renderTestTimeline()
-{
-    clearCommands();
-    
-    // Draw ruler
-    addRect(0, 0, 800, 30, "#444444");
-    
-    // Draw time markers
-    for (int i = 0; i <= 8; ++i) {
-        int x = 150 + i * 100;
-        addLine(x, 20, x, 30, "#cccccc", 1);
-        addText(x + 2, 15, QString("%1s").arg(i), "#cccccc");
-    }
-    
-    // Draw track headers
-    addRect(0, 30, 150, 50, "#333333");
-    addText(10, 55, "Video 1", "#cccccc");
-    
-    addRect(0, 80, 150, 50, "#333333");
-    addText(10, 105, "Audio 1", "#cccccc");
-    
-    // Draw track areas
-    addRect(150, 30, 650, 50, "#252525");
-    addRect(150, 80, 650, 50, "#2a2a2a");
-    
-    // Draw sample clips
-    addRect(250, 35, 200, 40, "#4a90e2");
-    addText(255, 55, "Beach Scene", "#cccccc");
-    
-    addRect(350, 85, 300, 40, "#4a90e2");
-    addText(355, 105, "Music Track", "#cccccc");
-    
-    // Draw playhead
-    addLine(400, 0, 400, 130, "#ff6b6b", 2);
-    addRect(395, 0, 10, 10, "#ff6b6b");
-    
-    update(); // Trigger repaint
-}
-
 void TimelineRenderer::paintEvent(QPaintEvent* /* event */)
 {
     QPainter painter(this);
