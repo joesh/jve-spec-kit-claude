@@ -3901,6 +3901,12 @@ function M:get_clips()
             }
         end
     end
+    -- Grade reproduction (spec 023 FR-015) for the Find filter — one batch
+    -- query, absent on ungraded clips (Find treats absence as "no value").
+    local ids = {}
+    for _, c in ipairs(clips) do ids[#ids + 1] = c.id end
+    local repro = require("models.clip_grade").load_reproduction_batch(ids)
+    for _, c in ipairs(clips) do c.reproduction = repro[c.id] end
     table.sort(clips, function(a, b)
         return a.sequence_start_frame < b.sequence_start_frame
     end)

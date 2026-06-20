@@ -12,6 +12,8 @@ local offline_note = require("core.media.offline_note")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")
 local track_dim   = require("ui.timeline.track_dim_logic")
+local grade_badge = require("ui.grade_badge")
+local ClipGrade   = require("models.clip_grade")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local log = require("core.logger").for_area("timeline")
@@ -90,6 +92,10 @@ local DIM_CLIP_BODY_SOLO             = 0.35
 local DIM_CLIP_TEXT_SOLO             = 0.5
 local DIM_CLIP_BODY_OFFLINE_DISABLED = 0.5
 local DIM_CLIP_TEXT_OFFLINE_DISABLED = 0.7
+-- Grade reproduction badge (spec 023 FR-015): a thin colour stripe along the
+-- clip's bottom edge — a recognised NLE clip-status convention. Words ride on
+-- the hover tooltip (timeline_view_input); the stripe is the at-a-glance flag.
+local GRADE_STRIPE_H = 3
 
 local function coerce_clip_entries(entries)
     if not entries then
@@ -870,6 +876,17 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
     if not outline_only then
         timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
 
+        -- Grade reproduction stripe (spec 023 FR-015): a thin colour stripe
+        -- on the clip's bottom edge for 'not_shown' clips only (a spatial
+        -- grade — power window/sizing; identity bake). 'approximate', 'full',
+        -- and ungraded clips carry no stripe; the hover tooltip carries the
+        -- plain-language explanation for every graded state.
+        local badge = grade_badge.for_reproduction(ctx.grade_map and ctx.grade_map[clip.id])
+        if badge.visible and clip_height > GRADE_STRIPE_H then
+            timeline.add_rect(view.widget, visible_x, y + clip_height - GRADE_STRIPE_H,
+                draw_width, GRADE_STRIPE_H, badge.color_hex)
+        end
+
         local has_waveform = false
         local label_visible = true
 
@@ -1002,6 +1019,10 @@ local function draw_visible_clips(ctx, viewport_start, viewport_end)
     local view, state_module = ctx.view, ctx.state_module
     local layout_by_id = ctx.layout_by_id
 
+    -- Pass 1: gather the clips overlapping the viewport (clip + its track +
+    -- start). Collecting first lets a SINGLE grade-reproduction query feed
+    -- every clip's FR-015 badge instead of one query per clip.
+    local visible = {}
     for _, track in ipairs(view.filtered_tracks) do
         local track_id = track and track.id
         local track_layout = track_id and layout_by_id and layout_by_id[track_id] or nil
@@ -1019,12 +1040,24 @@ local function draw_visible_clips(ctx, viewport_start, viewport_end)
                         if clip_start >= viewport_end then break end
                         local clip_end = clip_start + clip.duration
                         if clip_end > viewport_start then
-                            draw_clip_instance(ctx, clip, track_id, clip_start, clip.duration, false)
+                            visible[#visible + 1] =
+                                { clip = clip, track_id = track_id, clip_start = clip_start }
                         end
                     end
                 end
             end
         end
+    end
+
+    -- Batch-load grade reproduction for the badge (spec 023 FR-015), then
+    -- stash on ctx so draw_clip_instance reads it per clip.
+    local ids = {}
+    for _, v in ipairs(visible) do ids[#ids + 1] = v.clip.id end
+    ctx.grade_map = ClipGrade.load_reproduction_batch(ids)
+
+    -- Pass 2: draw.
+    for _, v in ipairs(visible) do
+        draw_clip_instance(ctx, v.clip, v.track_id, v.clip_start, v.clip.duration, false)
     end
 end
 

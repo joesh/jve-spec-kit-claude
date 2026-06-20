@@ -2756,6 +2756,13 @@ function M:get_clips()
         end
     end
 
+    -- Grade reproduction (spec 023 FR-015) for the Find filter — one batch
+    -- query; absent on ungraded clips (Find treats absence as "no value").
+    local repro_ids = {}
+    for cid in pairs(clip_by_id) do repro_ids[#repro_ids + 1] = cid end
+    local repro = require("models.clip_grade").load_reproduction_batch(repro_ids)
+    for cid, cd in pairs(clip_by_id) do cd.reproduction = repro[cid] end
+
     -- Get tree visual order and build clip_data in that order
     local clip_data = {}
     if M.tree and qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER then
