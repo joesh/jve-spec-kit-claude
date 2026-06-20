@@ -149,9 +149,12 @@ local clip_sections = {
         name = "Color",
         schema = { fields = {
             -- fidelity: spec 023 §5.5 — badge for non-primary clips.
+            -- reproduction: spec 023 FR-015 — what JVE can display
+            --   (full | approximate | not_shown). Find-able badge axis.
             -- source: provenance (e.g. 'resolve_readback').
             -- synced_at: timestamp of last sync.
             field { key = "fidelity",  label = "Grade Fidelity", type = T.STRING,   read_only = true },
+            field { key = "reproduction", label = "Grade Shown", type = T.STRING,   read_only = true },
             field { key = "source",    label = "Source",         type = T.STRING,   read_only = true },
             field { key = "synced_at",  label = "Last Synced",    type = T.TIMESTAMP, read_only = true },
         }},

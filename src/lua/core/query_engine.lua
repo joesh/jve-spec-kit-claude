@@ -26,6 +26,10 @@ local SEARCHABLE_FIELDS = {
     { name = "audio_channels",    type = "numeric", editable = false, source = "media" },
     { name = "audio_sample_rate", type = "numeric", editable = false, source = "media" },
     { name = "date_modified",     type = "numeric", editable = false, source = "clip" },
+    -- Grade reproduction (spec 023 FR-015): 'full'|'approximate'|'not_shown'.
+    -- Find clips whose Resolve grade JVE can't fully show (e.g. the spatial
+    -- 'not_shown' shots). Absent on ungraded clips → never matches a value.
+    { name = "reproduction",      type = "text",    editable = false, source = "clip_grade" },
 }
 
 local FIELD_LOOKUP = {}

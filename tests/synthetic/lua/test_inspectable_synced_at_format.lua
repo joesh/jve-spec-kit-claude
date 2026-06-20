@@ -56,6 +56,7 @@ ClipGrade.upsert("c1", {
     },
     lut_ref = nil,
     fidelity = "primary",
+    reproduction = "full",
     source = "resolve_readback",
     stale = 0,
     synced_at = now,

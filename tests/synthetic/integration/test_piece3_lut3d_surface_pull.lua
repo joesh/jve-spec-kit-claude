@@ -125,18 +125,20 @@ local CDL = {
 
 ClipGrade.upsert("c_partial",
     { cdl = nil, lut_ref = CUBE_PATH, fidelity = "partial",
+      reproduction = "approximate",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 ClipGrade.upsert("c_primary",
-    { cdl = CDL, lut_ref = nil, fidelity = "primary",
+    { cdl = CDL, lut_ref = nil, fidelity = "primary", reproduction = "full",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 ClipGrade.upsert("c_prim_lut",
-    { cdl = CDL, lut_ref = CUBE_PATH, fidelity = "primary",
+    { cdl = CDL, lut_ref = CUBE_PATH, fidelity = "primary", reproduction = "full",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 ClipGrade.upsert("c_unrepr",
     { cdl = nil, lut_ref = CUBE_PATH, fidelity = "unrepresentable",
+      reproduction = "approximate",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 ClipGrade.upsert("c_part_no",
-    { cdl = nil, lut_ref = nil, fidelity = "partial",
+    { cdl = nil, lut_ref = nil, fidelity = "partial", reproduction = "not_shown",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 -- c_none: no row (model treats absence as ungraded — FR-014).
 -- c_nograde: no row either; the two are equivalent at the pull layer

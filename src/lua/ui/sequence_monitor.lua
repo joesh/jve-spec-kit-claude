@@ -23,9 +23,17 @@ local monitor_mark_bar = require("ui.monitor_mark_bar")
 local database = require("core.database")
 local project_gen = require("core.project_generation")
 local view_grade_pull = require("core.view_grade_pull")
+local ClipGrade = require("models.clip_grade")
+local grade_badge = require("ui.grade_badge")
 
 local Signals = require("core.signals")
 local timecode = require("core.timecode")
+local ui_constants = require("core.ui_constants")
+
+-- Resolve's blue-tinted panel grey (#28282d, 40,40,45) — NOT a neutral grey.
+-- All monitor chrome (title bar, timecode bar, grade status) uses this so it
+-- matches Resolve side-by-side; neutral #2b2b2b reads visibly warmer.
+local CHROME_BG = ui_constants.COLORS.PANEL_BACKGROUND_COLOR
 
 local SequenceMonitor = {}
 SequenceMonitor.__index = SequenceMonitor
@@ -252,6 +260,19 @@ function SequenceMonitor:_wire_signals()
         self:on_model_changed()
     end)
 
+    -- Sync progress (FR-016): show "Syncing…" in the title strip while a grade
+    -- sync runs against THIS monitor's sequence; clear on completion (the
+    -- completion signal carries no sequence_id — only one sync runs at a time).
+    self._grade_sync_started_id =
+        Signals.connect("grade_sync_started", function(sequence_id)
+            if self.sequence_id ~= sequence_id then return end
+            self:set_sync_pending(true)
+        end)
+    self._grade_sync_done_id =
+        Signals.connect("sync_grades_from_resolve_completed", function()
+            self:set_sync_pending(false)
+        end)
+
     -- Media file bytes changed (in-place rewrite) OR status flipped
     -- Priority 110: PlaybackEngine's subscribers run at default 100 —
     -- we MUST fire after them.
@@ -346,9 +367,8 @@ end
 function SequenceMonitor:_create_widgets()
     self._container = qt_constants.WIDGET.CREATE()
     -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
-    qt_constants.PROPERTIES.SET_STYLE(self._container, [[
-        QWidget { background: #2b2b2b; }
-    ]])
+    qt_constants.PROPERTIES.SET_STYLE(self._container, string.format(
+        "QWidget { background: %s; }", CHROME_BG))
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
     if qt_constants.LAYOUT.SET_SPACING then
         qt_constants.LAYOUT.SET_SPACING(layout, 0)
@@ -357,16 +377,27 @@ function SequenceMonitor:_create_widgets()
         qt_constants.LAYOUT.SET_MARGINS(layout, 0, 0, 0, 0)
     end
 
-    -- Title label
+    -- Title strip: a styled bar holding the view title on the left and a
+    -- right-aligned status label. The status label carries grade-reproduction
+    -- and sync-progress notices (spec 023 FR-015/FR-016) — it lives in chrome
+    -- that already exists, so it costs no monitor real estate and never
+    -- letterboxes the image (an earlier caption-bar-under-the-image design
+    -- ate a full row even when empty).
+    -- The title label IS the panel header: focus_manager.update_header owns
+    -- its background (focus colour when active, the panel chrome when not) to signal
+    -- which panel has focus. Add it DIRECTLY to the vertical layout so it
+    -- fills the bar width — do NOT wrap it in an HBOX + stretch, which would
+    -- shrink the focus-styled label to text width and expose a mismatched
+    -- container colour behind the stretch.
     self._title_label = qt_constants.WIDGET.CREATE_LABEL(self.view_id)
-    qt_constants.PROPERTIES.SET_STYLE(self._title_label, [[
-        QLabel {
-            background: #3a3a3a;
-            color: white;
-            padding: 4px;
-            font-size: 12px;
-        }
-    ]])
+    qt_constants.PROPERTIES.SET_STYLE(self._title_label, string.format(
+        "QLabel { background: %s; color: white; font-size: 12px; padding: 4px; }",
+        CHROME_BG))
+    -- "Ignored" horizontal policy: the label fills the bar but its text width
+    -- never feeds the panel's minimum width — so a long title clips at the
+    -- panel edge instead of forcing the panel (and window) wider. Vertical
+    -- stays Fixed (title-bar height).
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(self._title_label, "Ignored", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(layout, self._title_label)
 
     -- Content container (black background for video)
@@ -417,6 +448,10 @@ function SequenceMonitor:_create_widgets()
             content_layout, self._video_surface, 1)
     end
 
+    -- Grade-reproduction + sync-progress notice live in the title strip
+    -- (built above) — NOT a row under the image, which letterboxed the frame
+    -- and ate space even when empty. See self._grade_status.
+
     -- Wire video surface to PlaybackEngine for C++ CVDisplayLink playback.
     -- 017: self.engine is nil during the pre-transport window (layout.lua
     -- constructs monitors at app launch, before transport.init runs).
@@ -450,6 +485,7 @@ function SequenceMonitor:_create_widgets()
     -- Timecode display row: playhead TC (left) + duration (right)
     -- Positioned between video surface and mark bar (above the scrub bar)
     self:_create_tc_row(content_layout)
+    self:_update_grade_status()
 
     -- Mark bar (ScriptableTimeline widget)
     assert(qt_constants.WIDGET.CREATE_TIMELINE,
@@ -1009,6 +1045,12 @@ function SequenceMonitor:_apply_clip_grade(clip_id)
         qt_constants.EMP.SURFACE_SET_GRADE(self._frame_mirror, cdl)
         qt_constants.EMP.SURFACE_SET_LUT3D(self._frame_mirror, lut_ref)
     end
+    -- FR-015 badge: the pull returns nil for a 'not_shown' grade (no
+    -- displayable carrier), so the reproduction state — what the user must
+    -- be warned about — comes straight from the grade row, not the stages.
+    local grade = ClipGrade.load(clip_id)
+    self._grade_reproduction = grade and grade.reproduction or nil
+    self:_update_grade_status()
 end
 
 -- Render-side gap policy (T032 / FR-016): clear CDL + LUT stages so the
@@ -1021,6 +1063,55 @@ function SequenceMonitor:_clear_clip_grade()
         qt_constants.EMP.SURFACE_SET_GRADE(self._frame_mirror, nil)
         qt_constants.EMP.SURFACE_SET_LUT3D(self._frame_mirror, nil)
     end
+    self._grade_reproduction = nil
+    self:_update_grade_status()
+end
+
+-- Right-aligned status text in the title strip (spec 023 FR-015/FR-016).
+-- Two states, pull-rendered from monitor fields so any caller just mutates a
+-- field and re-renders (MVC):
+--   sync in progress  → "⟳ Syncing grades from Resolve…" (precedence: the
+--                        editor must know the look may be about to change).
+--   not_shown grade   → the plain-language notice (JVE shows passthrough — a
+--                        spatial grade like a power window). Coloured TEXT, no
+--                        billboard. 'approximate'/'full'/ungraded → nothing
+--                        (see ui.grade_badge: approximate is no longer flagged).
+--
+-- Metrics shared by BOTH states (and the empty state): the grade status must
+-- keep the timecodes' line height whether or not it carries text, else an
+-- empty label at the default font (~13px) inflates the whole TC row. Only the
+-- background and text colour change between states.
+local GRADE_STATUS_METRICS = "padding: 2px 6px; font-size: 11px;"
+function SequenceMonitor:_update_grade_status()
+    if not self._grade_status then return end
+    local text, color = nil, nil
+    if self._sync_pending then
+        text, color = "⟳ Syncing grades from Resolve…", "#cfcfcf"
+    else
+        local badge = grade_badge.for_reproduction(self._grade_reproduction)
+        if badge.visible then text, color = badge.text, badge.color_hex end
+    end
+    if text == nil then
+        -- No message: clear the text and go transparent, but keep the metrics
+        -- so the empty label stays the timecodes' height (no taller black box).
+        qt_constants.PROPERTIES.SET_TEXT(self._grade_status, "")
+        qt_constants.PROPERTIES.SET_STYLE(self._grade_status, string.format(
+            "QLabel { background: transparent; %s }", GRADE_STATUS_METRICS))
+        return
+    end
+    qt_constants.PROPERTIES.SET_TEXT(self._grade_status, text)
+    -- Match TC_STYLE metrics/background so the status sits flush with the two
+    -- timecodes — same height, same bar colour, only the text colour differs.
+    qt_constants.PROPERTIES.SET_STYLE(self._grade_status, string.format(
+        "QLabel { background: %s; color: %s; %s }", CHROME_BG, color, GRADE_STATUS_METRICS))
+end
+
+--- Sync-in-progress flag (FR-016): the bridge broadcasts start/finish; the
+--- monitor shows "Syncing…" while a sync is running so the editor knows the
+--- on-screen look is provisional. Pull-rendered via _update_grade_status.
+function SequenceMonitor:set_sync_pending(pending)
+    self._sync_pending = pending and true or false
+    self:_update_grade_status()
 end
 
 function SequenceMonitor:_on_show_gap()
@@ -1060,15 +1151,15 @@ end
 -- Internal
 --------------------------------------------------------------------------------
 
-local TC_STYLE = [[
+local TC_STYLE = string.format([[
     QLabel {
-        background: #2b2b2b;
+        background: %s;
         color: #cccccc;
         padding: 2px 6px;
         font-family: "Menlo", "Monaco", monospace;
         font-size: 11px;
     }
-]]
+]], CHROME_BG)
 
 function SequenceMonitor:_create_tc_row(parent_layout)
     local row_layout = qt_constants.LAYOUT.CREATE_HBOX()
@@ -1088,6 +1179,12 @@ function SequenceMonitor:_create_tc_row(parent_layout)
     end
     qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._tc_playhead_label)
 
+    -- Grade status / sync-pending, centered between the two timestamps.
+    qt_constants.LAYOUT.ADD_STRETCH(row_layout)
+    self._grade_status = qt_constants.WIDGET.CREATE_LABEL("")
+    qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._grade_status)
+    qt_constants.LAYOUT.ADD_STRETCH(row_layout)
+
     -- Duration (right-aligned)
     self._tc_duration_label = qt_constants.WIDGET.CREATE_LABEL("--")
     qt_constants.PROPERTIES.SET_STYLE(self._tc_duration_label, TC_STYLE)
@@ -1097,8 +1194,15 @@ function SequenceMonitor:_create_tc_row(parent_layout)
     end
     qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._tc_duration_label)
 
-    -- Wrap in a container widget
+    -- Wrap in a container widget. Give the row the same panel chrome as the
+    -- timecode labels so the WHOLE strip is one uniform bar: without it the
+    -- container is transparent and the black video area shows through the gaps
+    -- between labels (and the empty grade-status label's padding edges read as
+    -- two faint vertical lines against that black). The labels keep their own
+    -- QLabel style; this only fills the container behind them.
     local tc_row_widget = qt_constants.WIDGET.CREATE()
+    qt_constants.PROPERTIES.SET_STYLE(tc_row_widget, string.format(
+        "QWidget { background: %s; }", CHROME_BG))
     qt_constants.LAYOUT.SET_ON_WIDGET(tc_row_widget, row_layout)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tc_row_widget, "Expanding", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(parent_layout, tc_row_widget)
@@ -1187,6 +1291,14 @@ function SequenceMonitor:destroy()
     if self._grades_changed_id then
         Signals.disconnect(self._grades_changed_id)
         self._grades_changed_id = nil
+    end
+    if self._grade_sync_started_id then
+        Signals.disconnect(self._grade_sync_started_id)
+        self._grade_sync_started_id = nil
+    end
+    if self._grade_sync_done_id then
+        Signals.disconnect(self._grade_sync_done_id)
+        self._grade_sync_done_id = nil
     end
 end
 

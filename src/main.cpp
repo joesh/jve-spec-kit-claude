@@ -265,7 +265,12 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::WindowText, Qt::white);
     darkPalette.setColor(QPalette::Base, QColor(25, 25, 25));
     darkPalette.setColor(QPalette::AlternateBase, QColor(35, 35, 35));
-    darkPalette.setColor(QPalette::ToolTipBase, Qt::white);
+    // Tooltip tracks the active theme — it's a colour in darkPalette, so it
+    // follows the dark-mode setting like every other role here. Dark box +
+    // white text (both were white before — invisible white-on-white, every
+    // tooltip rendered blank). When a light theme lands, give it its own
+    // palette with a light ToolTipBase / dark ToolTipText.
+    darkPalette.setColor(QPalette::ToolTipBase, QColor(20, 20, 20));
     darkPalette.setColor(QPalette::ToolTipText, Qt::white);
     darkPalette.setColor(QPalette::Text, Qt::white);
     darkPalette.setColor(QPalette::Button, QColor(35, 35, 35));
@@ -286,6 +291,11 @@ int main(int argc, char *argv[])
     // Target both standalone buttons and buttons inside QDialogButtonBox.
     app.setStyleSheet(
         "QPushButton:disabled { color: #666666; background-color: #1e1e1e; }"
+        // Tooltip: no border, larger font. Colours come from the dark palette
+        // (ToolTipBase/Text); a stylesheet is the only way to drop QToolTip's
+        // default 1px border and bump the font.
+        "QToolTip { border: none; color: #ffffff; background-color: #141414;"
+        " font-size: 13px; padding: 1px 4px; }"
     );
 
     // Set up application data directory

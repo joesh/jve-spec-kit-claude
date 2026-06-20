@@ -1894,6 +1894,32 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
                     f"source_in={source_in!r} source_out={source_out!r}"
                     f" — expected both int or both None")
             if not src_in_is_int:
+                # No indexable source range. Resolve returns None here for
+                # non-media item types: adjustment clips, Fusion comps/clips,
+                # Text+, generators, transitions. ExportLUT refuses for all of
+                # them, so JVE cannot reproduce this item's contribution to the
+                # final look. Split on media-pool backing:
+                #  • HAS a media-pool item → a Fusion-WRAPPED shot (the
+                #    composite / power-window layers on upper video tracks). A
+                #    JVE clip is linked to it via the ledger, so emit an
+                #    'unrepresentable' row (NOT a silent skip — rule 2.32) so
+                #    that clip is flagged 'not shown' instead of silently
+                #    appearing ungraded. No bake is attempted (ExportLUT
+                #    refuses) — the row carries no lut, so apply classifies it
+                #    not_shown.
+                #  • NO media-pool item → a pure generator/Text+/adjustment/
+                #    transition. No JVE media clip exists to flag; stay skipped.
+                try:
+                    has_media = item.GetMediaPoolItem() is not None
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"item.GetMediaPoolItem() raised for non-media item "
+                        f"{resolve_item_id}: {exc}") from exc
+                if has_media:
+                    grades.append({
+                        "resolve_item_id": resolve_item_id,
+                        "fidelity": "unrepresentable",
+                    })
                 continue
             # FR-021: helper holds no JVE state. We emit our native
             # `resolve_item_id` (= TimelineItem:GetUniqueId()); the

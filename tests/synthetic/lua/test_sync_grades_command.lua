@@ -76,7 +76,7 @@ local PRE_CDL = {
 }
 ClipGrade.upsert("c_pre", {
     cdl = PRE_CDL, lut_ref = nil, fidelity = "primary",
-    source = "user", stale = 0, synced_at = now,
+    reproduction = "full", source = "user", stale = 0, synced_at = now,
 }, db)
 
 -- Ledger seeding: sync-time auto-discovery would have populated these
@@ -217,7 +217,7 @@ local orig_ensure_client = supervisor.ensure_client
 -- Reset c_pre + ensure c_none ungraded (prior section left both graded).
 ClipGrade.upsert("c_pre", {
     cdl = PRE_CDL, lut_ref = nil, fidelity = "primary",
-    source = "user", stale = 0, synced_at = now,
+    reproduction = "full", source = "user", stale = 0, synced_at = now,
 }, db)
 db:exec("DELETE FROM clip_grade WHERE clip_id = 'c_none'")
 

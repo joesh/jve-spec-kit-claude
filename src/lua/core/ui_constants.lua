@@ -6,7 +6,7 @@ local ui_constants = {}
 -- THEME LAYER: DaVinci Resolve Color Palette (RGB sampled values)
 -- =============================================================================
 -- Core DaVinci Resolve colors - these are the source theme values
-local RESOLVE_PANEL_BACKGROUND_COLOR = "#28282d"    -- 40,40,45 (panel background)
+local RESOLVE_PANEL_BACKGROUND_COLOR = "#28282e"    -- 40,40,46 (panel background; blue-tinted, measured from Resolve)
 local RESOLVE_FIELD_BACKGROUND_COLOR = "#1f1f1f"    -- 31,31,31 (field background)
 local RESOLVE_FIELD_BORDER_COLOR = "#090909"        -- 9,9,9 (field border)
 local RESOLVE_FIELD_TEXT_COLOR = "#e6e6e6"          -- 230,230,230 (editable text)

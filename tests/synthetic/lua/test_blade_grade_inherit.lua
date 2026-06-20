@@ -100,10 +100,10 @@ local OTHER_CDL = {
 seed_clip("parent", 100, 200, 0)
 seed_clip("other",  400, 100, 500)
 ClipGrade.upsert("parent", { cdl = PARENT_CDL, lut_ref = nil,
-    fidelity = "primary", source = "resolve", stale = 0,
+    fidelity = "primary", reproduction = "full", source = "resolve", stale = 0,
     synced_at = 1770000000 }, db)
 ClipGrade.upsert("other", { cdl = OTHER_CDL, lut_ref = nil,
-    fidelity = "primary", source = "resolve", stale = 0,
+    fidelity = "primary", reproduction = "full", source = "resolve", stale = 0,
     synced_at = 1770000000 }, db)
 
 local function cdl_equal(a, b)

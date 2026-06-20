@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (16);
+INSERT OR IGNORE INTO schema_version (version) VALUES (17);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -888,6 +888,14 @@ CREATE TABLE IF NOT EXISTS clip_grade (
     saturation REAL,
     lut_ref     TEXT,
     fidelity    TEXT NOT NULL CHECK(fidelity IN ('primary', 'partial', 'unrepresentable')),
+    -- What JVE can actually DISPLAY of the grade (distinct from `fidelity`,
+    -- which is the Resolve grade's complexity). FR-015 badge axis:
+    --   'full'        — primary CDL, reproduced;
+    --   'approximate' — non-primary with a non-identity baked LUT;
+    --   'not_shown'   — grade exists but JVE renders passthrough (identity
+    --                   LUT = spatial grade, or no carrier).
+    -- NO SQL default — the writer (sync apply) always computes & sets it (2.13).
+    reproduction TEXT NOT NULL CHECK(reproduction IN ('full', 'approximate', 'not_shown')),
     source      TEXT NOT NULL,
     stale       INTEGER NOT NULL CHECK(stale IN (0, 1)),
     synced_at   INTEGER NOT NULL

@@ -141,16 +141,21 @@ do
     check("lut-empty-ref item is dropped (no grade created)",
         ClipGrade.load("c", db) == nil)
 
-    -- valid lut → accepted, grade created with lut_ref
+    -- valid lut → accepted, grade created with lut_ref. apply() classifies
+    -- the baked cube (FR-015 reproduction), so the ref must be a real file.
+    local lut_path = "/tmp/jve/test_sync_grades_wire_shape_grade.cube"
+    local lf = assert(io.open(lut_path, "w"))
+    lf:write("LUT_3D_SIZE 2\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n")
+    lf:close()
     local ok4, _ = pcall(sync_grades.apply,
         { grades = {{ resolve_item_id = "live_c",
                       fidelity = "partial",
-                      lut = { ref = "/path/to/grade.cube" } }} },
+                      lut = { ref = lut_path } }} },
         "s", db, now + 129)
     check("valid lut {ref} does not crash apply", ok4 == true)
     local g2 = ClipGrade.load("c", db)
     check("valid lut creates grade with lut_ref",
-        g2 ~= nil and g2.lut_ref == "/path/to/grade.cube")
+        g2 ~= nil and g2.lut_ref == lut_path)
 end
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))

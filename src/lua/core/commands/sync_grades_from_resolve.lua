@@ -24,6 +24,7 @@
 local M = {}
 
 local ClipGrade         = require("models.clip_grade")
+local lut_identity      = require("core.lut_identity")
 local Sequence          = require("models.sequence")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local discovery         = require("core.resolve_bridge.discovery")
@@ -200,15 +201,31 @@ local function cdl_wire_to_model(wire, row_index)
     }
 end
 
+-- Build a clip_grade model row from a wire grade row. The `reproduction`
+-- axis (FR-015 — what JVE can DISPLAY) is computed here because it is the
+-- only stage that has both the fidelity and the BAKED cube on disk: a
+-- spatial Resolve grade is `unrepresentable` yet bakes to an identity LUT,
+-- so the cube content — not the fidelity alone — decides whether the clip
+-- shows the grade ('approximate') or passthrough ('not_shown'). The cube
+-- read is one-time-per-clip-per-sync and early-outs on the first graded
+-- grid point. A missing cube asserts (lut_identity) — a bake-pipeline
+-- inconsistency, not a "maybe".
 local function new_grade_from_response_row(row, row_index, synced_at)
+    local lut_ref = row.lut and row.lut.ref
+    local lut_is_identity = nil
+    if lut_ref ~= nil then
+        lut_is_identity = lut_identity.is_identity(lut_ref)
+    end
     return {
-        cdl       = row.cdl and cdl_wire_to_model(row.cdl, row_index)
-                            or nil,
-        lut_ref   = row.lut and row.lut.ref,
-        fidelity  = row.fidelity,
-        source    = "resolve",
-        stale     = 0,
-        synced_at = synced_at,
+        cdl          = row.cdl and cdl_wire_to_model(row.cdl, row_index)
+                                or nil,
+        lut_ref      = lut_ref,
+        fidelity     = row.fidelity,
+        reproduction = ClipGrade.classify_reproduction(
+            row.fidelity, lut_ref, lut_is_identity),
+        source       = "resolve",
+        stale        = 0,
+        synced_at    = synced_at,
     }
 end
 
@@ -230,12 +247,13 @@ local function walk_ledger_for_stale(sequence_id, seen_clip_ids, db,
                     before  = before,
                 }
                 local staled = {
-                    cdl       = before.cdl,
-                    lut_ref   = before.lut_ref,
-                    fidelity  = before.fidelity,
-                    source    = before.source,
-                    stale     = 1,
-                    synced_at = before.synced_at,
+                    cdl          = before.cdl,
+                    lut_ref      = before.lut_ref,
+                    fidelity     = before.fidelity,
+                    reproduction = before.reproduction,
+                    source       = before.source,
+                    stale        = 1,
+                    synced_at    = before.synced_at,
                 }
                 ClipGrade.upsert(clip_id, staled, db)
             end
@@ -452,6 +470,13 @@ function M.execute(args, db, command)
         .. "sync_grades_from_resolve_completed signal (FR-023).")
     assert(args.item_ids == nil or type(args.item_ids) == "table",
         "SyncGradesFromResolve: item_ids must be array if present")
+
+    -- Progress broadcast (FR-016): the bake+pull runs minutes on a large
+    -- timeline. Tell the view a sync started so the monitor can show
+    -- "Syncing…" — the on-screen look is provisional until completion. The
+    -- matching clear is the `sync_grades_from_resolve_completed` signal
+    -- (fires on success AND error via bridge_completion.notify).
+    Signals.emit("grade_sync_started", args.sequence_id)
 
     -- Look up project_id from the sequence so the LUT bake cache is
     -- per-project (~/.jve/resolve_bake/<project_id>/). Resolves sync's

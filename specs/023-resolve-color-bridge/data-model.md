@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS clip_grade (
     saturation REAL,
     lut_ref     TEXT,                       -- local LUT path (same-machine), or NULL
     fidelity    TEXT NOT NULL,              -- 'primary' | 'partial' | 'unrepresentable'
+    reproduction TEXT NOT NULL,             -- 'full' | 'approximate' | 'not_shown' (FR-015 badge axis)
     source      TEXT NOT NULL,              -- provenance, e.g. 'resolve_readback'
     stale       INTEGER NOT NULL,           -- 0/1; writer always sets it (no SQL default — 2.13). 1 = source Resolve item absent at last read-back
     synced_at   INTEGER NOT NULL            -- unix seconds of last successful sync
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS clip_grade (
 - CDL primaries — REAL. Either all nine + `saturation` are present (a representable CDL) or all NULL. Assert this invariant at the model write boundary; never store a partial CDL (constitution VII).
 - `lut_ref` — local filesystem path; NULL if the grade has no baked LUT. Cross-machine LUT transport is out of scope (clarification: same-machine).
 - `fidelity` — enum, NOT NULL. `'primary'` ⇒ CDL fully represents the grade; `'partial'`/`'unrepresentable'` ⇒ Resolve grade exceeds CDL/LUT (FR-015). The model rejects any other value (assert).
+- `reproduction` — enum, NOT NULL. What JVE can actually DISPLAY of the grade — a separate axis from `fidelity` (Resolve grade complexity). `'full'` ⇒ reproduced (primary CDL); `'approximate'` ⇒ non-primary shown via a non-identity baked LUT; `'not_shown'` ⇒ grade exists but the viewer renders passthrough (the baked LUT is identity — a SPATIAL grade like a power window/sizing that a 3D LUT cannot carry — or there is no carrier). Computed at sync time by `ClipGrade.classify_reproduction` from `fidelity` + whether the baked cube is identity (`core/lut_identity.lua`, an early-out `.cube` reader). NO SQL default — the writer always sets it (2.13). This is the FR-015 badge source: distinguishing `not_shown` from `approximate` is what tells the editor a spatial grade silently didn't transfer rather than looking like a missing grade (rule 2.32). The model rejects any other value (assert).
 - `stale` — set to 1 when read-back finds the clip's Resolve item gone (FR-013a). Never silently cleared; the grade values are retained. A subsequent successful sync clears it back to 0.
 - `source` — provenance string; `'resolve_readback'` for v1 (no JVE-authored grades — read-only).
 

@@ -68,7 +68,7 @@ local PRE_CDL = {
 }
 ClipGrade.upsert("c1", {
     cdl = PRE_CDL, lut_ref = nil, fidelity = "primary",
-    source = "resolve", stale = 0, synced_at = now,
+    reproduction = "full", source = "resolve", stale = 0, synced_at = now,
 }, db)
 local pre_grade_fp = ClipGrade.fingerprint(ClipGrade.load("c1", db))
 

@@ -77,16 +77,18 @@ local CDL = {
 -- Seed: a primary grade, a partial-with-LUT grade, an unrepresentable
 -- grade, no grade, and a stale-primary grade.
 ClipGrade.upsert("c_primary",
-    { cdl = CDL, lut_ref = nil, fidelity = "primary",
+    { cdl = CDL, lut_ref = nil, fidelity = "primary", reproduction = "full",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 ClipGrade.upsert("c_partial",
     { cdl = nil, lut_ref = "/tmp/jve/grade.cube", fidelity = "partial",
+      reproduction = "approximate",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 ClipGrade.upsert("c_unrepr",
     { cdl = nil, lut_ref = nil, fidelity = "unrepresentable",
+      reproduction = "not_shown",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 ClipGrade.upsert("c_stale_p",
-    { cdl = CDL, lut_ref = nil, fidelity = "primary",
+    { cdl = CDL, lut_ref = nil, fidelity = "primary", reproduction = "full",
       source = "resolve_readback", stale = 1, synced_at = now }, db)
 
 -- ─── primary grade returns {cdl=...} stage table ─────────────────────
@@ -141,7 +143,7 @@ end
 -- the lossiness).
 ClipGrade.upsert("c_unrepr_with_lut",
     { cdl = nil, lut_ref = "/tmp/jve/unrepr.cube",
-      fidelity = "unrepresentable",
+      fidelity = "unrepresentable", reproduction = "approximate",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 do
     local stages = view_grade_pull.pull_for_clip("c_unrepr_with_lut", db)
@@ -157,6 +159,7 @@ end
 -- Rare case: user had an item-level LUT bound to a primary-only graph.
 ClipGrade.upsert("c_primary_with_lut",
     { cdl = CDL, lut_ref = "/tmp/jve/itemlut.cube", fidelity = "primary",
+      reproduction = "full",
       source = "resolve_readback", stale = 0, synced_at = now }, db)
 do
     local stages = view_grade_pull.pull_for_clip("c_primary_with_lut", db)

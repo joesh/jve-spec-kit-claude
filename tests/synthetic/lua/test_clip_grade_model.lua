@@ -87,6 +87,7 @@ ClipGrade.upsert("c1", {
     cdl = CDL,
     lut_ref = nil,
     fidelity = "primary",
+    reproduction = "full",
     source = "resolve_readback",
     stale = 0,
     synced_at = now,
@@ -94,6 +95,7 @@ ClipGrade.upsert("c1", {
 
 local g = ClipGrade.load("c1", db)
 check("loaded grade exists",            g ~= nil)
+check("reproduction round-trips",       g and g.reproduction == "full")
 check("slope_r round-trips",            g and g.cdl and g.cdl.slope_r == 1.05)
 check("offset_b (-0.02) round-trips",   g and g.cdl and g.cdl.offset_b == -0.02)
 check("power_g (unity) round-trips",    g and g.cdl and g.cdl.power_g == 1.0)
@@ -107,6 +109,7 @@ ClipGrade.upsert("c1", {
     cdl = nil,
     lut_ref = "/tmp/jve/grade.cube",
     fidelity = "partial",
+    reproduction = "approximate",
     source = "resolve_readback",
     stale = 0,
     synced_at = now,
@@ -148,6 +151,7 @@ ClipGrade.upsert("c1", {
     cdl = CDL,
     lut_ref = nil,
     fidelity = "primary",
+    reproduction = "full",
     source = "resolve_readback",
     stale = 1,
     synced_at = now,

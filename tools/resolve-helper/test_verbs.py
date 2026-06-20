@@ -331,12 +331,19 @@ class _FakeItem:
 
 
 class _FakeNonMediaItem:
-    """Generator, Text+, or transition — no source range.
-    verb_read_grades must skip these silently."""
-    def __init__(self, uid, start, duration=48):
+    """A timeline item with NO source range (GetSourceStartFrame None).
+    Covers two real shapes, split on media-pool backing (file_path):
+      • file_path=None → a pure generator/Text+/transition/adjustment clip.
+        No JVE clip is linked; verb_read_grades skips it.
+      • file_path set → a Fusion-WRAPPED shot (composite / power-window layer
+        on an upper track). A JVE clip IS linked; verb_read_grades must emit
+        an 'unrepresentable' row so that clip is flagged 'not shown' — but
+        ExportLUT is still never attempted (no indexable source)."""
+    def __init__(self, uid, start, duration=48, file_path=None):
         self._uid = uid
         self._start = start
         self._duration = duration
+        self._file_path = file_path
         self.export_lut_calls = 0
 
     def GetUniqueId(self):
@@ -355,7 +362,9 @@ class _FakeNonMediaItem:
         return None
 
     def GetMediaPoolItem(self):
-        return None
+        if self._file_path is None:
+            return None
+        return _FakeMediaPoolItem(self._file_path)
 
     def GetNodeGraph(self):
         # beyond-primary tools so the old code would classify
@@ -981,6 +990,35 @@ class ReadGradesNonMediaSkipTests(unittest.TestCase):
         self.assertIn("uid-clip", ids,
             "media clip must still appear in grades[] when a non-media "
             "item precedes it on the same track")
+
+    def test_media_backed_non_media_item_emitted_unrepresentable(self):
+        # A Fusion-WRAPPED shot (no source range, but a real media-pool
+        # item behind it — the composite/power-window layers on upper
+        # tracks) MUST appear in grades[] as 'unrepresentable' so the JVE
+        # clip linked to it is flagged 'not shown' — NOT silently dropped
+        # (rule 2.32). It carries no lut (apply → not_shown) and no cdl.
+        fusion = _FakeNonMediaItem("uid-fusion", 86400, file_path=_ONLINE_PATH)
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run([fusion], d)
+        rows = {row["resolve_item_id"]: row for row in result["grades"]}
+        self.assertIn("uid-fusion", rows,
+            "media-backed non-media item must appear in grades[]")
+        row = rows["uid-fusion"]
+        self.assertEqual(row["fidelity"], "unrepresentable")
+        self.assertNotIn("lut", row,
+            "non-media item cannot bake — no lut carrier (→ not_shown)")
+        self.assertNotIn("cdl", row,
+            "unrepresentable row must not carry cdl")
+
+    def test_media_backed_non_media_item_bake_never_attempted(self):
+        # Even though it's emitted, ExportLUT must NOT run — there is no
+        # indexable source for Resolve to bake.
+        fusion = _FakeNonMediaItem("uid-fusion", 86400, file_path=_ONLINE_PATH)
+        with tempfile.TemporaryDirectory() as d:
+            self._run([fusion], d,
+                timeline_graph_tools=[["Primary Offset"]])
+        self.assertEqual(fusion.export_lut_calls, 0,
+            "ExportLUT must not be attempted on a media-backed non-media item")
 
 
 if __name__ == "__main__":

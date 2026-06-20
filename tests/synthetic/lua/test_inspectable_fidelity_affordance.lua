@@ -53,12 +53,16 @@ local CDL = {
 -- Distinct record ranges — clips must not stack on a video track
 -- (schema trg_prevent_video_overlap_insert).
 local CLIPS = {
+    -- reproduction: what JVE can DISPLAY (FR-015 badge axis).
     { id = "c_primary", start = 0, fidelity = "primary",
-      grade = { cdl = CDL, lut_ref = nil } },
+      reproduction = "full", grade = { cdl = CDL, lut_ref = nil } },
+    -- non-primary with a non-identity bake → APPROXIMATE.
     { id = "c_partial", start = 96, fidelity = "partial",
+      reproduction = "approximate",
       grade = { cdl = nil, lut_ref = "/luts/k2383.cube" } },
+    -- spatial grade (identity bake / no carrier) → NOT SHOWN.
     { id = "c_unrep", start = 192, fidelity = "unrepresentable",
-      grade = { cdl = nil, lut_ref = nil } },
+      reproduction = "not_shown", grade = { cdl = nil, lut_ref = nil } },
 }
 
 for _, spec in ipairs(CLIPS) do
@@ -76,18 +80,24 @@ for _, spec in ipairs(CLIPS) do
         cdl = spec.grade.cdl,
         lut_ref = spec.grade.lut_ref,
         fidelity = spec.fidelity,
+        reproduction = spec.reproduction,
         source = "resolve_readback",
         stale = 0,
         synced_at = now,
     }, db)
 end
 
-local NOTICE = "full grade requires Resolve render"
+local NOTICE = "requires Resolve render"
 
 local function fidelity_display(clip_id)
     return ClipInspectable.new({
         clip_id = clip_id, project_id = "p",
     }):get("fidelity")
+end
+local function reproduction_field(clip_id)
+    return ClipInspectable.new({
+        clip_id = clip_id, project_id = "p",
+    }):get("reproduction")
 end
 
 -- primary: faithfully displayed in JVE — no notice.
@@ -95,19 +105,30 @@ local d = fidelity_display("c_primary")
 check("primary names its fidelity", tostring(d):find("primary", 1, true) ~= nil)
 check("primary carries NO render notice",
     tostring(d):find(NOTICE, 1, true) == nil)
+check("primary reproduction is 'full'", reproduction_field("c_primary") == "full")
 
--- partial: JVE shows the clip ungraded — the badge must say why.
+-- partial with a real bake → APPROXIMATE: JVE shows part of the grade. The
+-- look is mostly right and this state covers nearly every clip, so the
+-- fidelity field carries NO notice (Joe 2026-06-19) — only the raw
+-- reproduction field still exposes the value, for Find.
 d = fidelity_display("c_partial")
 check("partial names its fidelity", tostring(d):find("partial", 1, true) ~= nil)
-check("partial carries the render notice",
-    tostring(d):find(NOTICE, 1, true) ~= nil)
+check("partial carries NO render notice",
+    tostring(d):find(NOTICE, 1, true) == nil)
+check("partial reproduction is still 'approximate'",
+    reproduction_field("c_partial") == "approximate")
 
--- unrepresentable: same notice.
+-- unrepresentable spatial grade → NOT SHOWN: JVE renders passthrough, the
+-- badge must say the grade is not shown (distinct from a missing grade).
 d = fidelity_display("c_unrep")
 check("unrepresentable names its fidelity",
     tostring(d):find("unrepresentable", 1, true) ~= nil)
+check("unrepresentable says 'not shown'",
+    tostring(d):find("not shown", 1, true) ~= nil)
 check("unrepresentable carries the render notice",
     tostring(d):find(NOTICE, 1, true) ~= nil)
+check("unrepresentable reproduction is 'not_shown'",
+    reproduction_field("c_unrep") == "not_shown")
 
 -- ungraded clip (no ClipGrade row): nil — the field stays blank.
 db:exec(string.format([[

@@ -122,19 +122,25 @@ function ClipInspectable:get(field)
     -- ClipGrade fields (spec 023). Per-instance cached (M#1); refresh()
     -- clears on grade-changed events. synced_at returns the raw unix epoch
     -- — the inspector's TIMESTAMP field type (metadata_schemas) renders it.
-    if field == "fidelity" or field == "source" or field == "synced_at" then
+    if field == "fidelity" or field == "reproduction"
+            or field == "source" or field == "synced_at" then
         local grade = self:_ensure_grade()
         if not grade then return nil end
         if field == "synced_at" then
             assert(type(grade.synced_at) == "number" and grade.synced_at >= 0,
                 "ClipGrade synced_at must be a non-negative number")
         end
-        if field == "fidelity" and (grade.fidelity == "partial"
-                or grade.fidelity == "unrepresentable") then
-            -- Spec 023 §5.5 / FR-015: JVE renders these clips UNGRADED
-            -- (only primary CDL is displayable), so the badge must say
-            -- why the viewer doesn't match Resolve.
-            return grade.fidelity .. " — full grade requires Resolve render"
+        if field == "fidelity" then
+            -- Spec 023 §5.5 / FR-015: the only flagged state is `not_shown`
+            -- (JVE bakes a passthrough — a spatial grade like a power
+            -- window/sizing — or has no carrier). 'approximate' is NOT
+            -- annotated: it sits on nearly every clip, so the notice is
+            -- noise (Joe 2026-06-19); 'full' carries no notice either. The
+            -- raw `reproduction` field still exposes the value for Find.
+            if grade.reproduction == "not_shown" then
+                return grade.fidelity
+                    .. " — not shown; spatial grade requires Resolve render"
+            end
         end
         return grade[field]
     end

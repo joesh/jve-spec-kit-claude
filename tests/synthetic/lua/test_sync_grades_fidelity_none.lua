@@ -79,7 +79,7 @@ local PRIOR_CDL = {
 }
 ClipGrade.upsert("c_graded", {
     cdl = PRIOR_CDL, lut_ref = nil, fidelity = "primary",
-    source = "resolve", stale = 0, synced_at = now,
+    reproduction = "full", source = "resolve", stale = 0, synced_at = now,
 }, db)
 
 -- ─── Helper response: both items PRESENT with fidelity="none" ──────
@@ -125,7 +125,7 @@ check("restore leaves c_naked still ungraded",
 -- ─── Mixed batch: one fidelity=none, one fidelity=primary ─────────
 ClipGrade.upsert("c_graded", {  -- reset prior state
     cdl = PRIOR_CDL, lut_ref = nil, fidelity = "primary",
-    source = "resolve", stale = 0, synced_at = now,
+    reproduction = "full", source = "resolve", stale = 0, synced_at = now,
 }, db)
 local NEW_CDL = {
     slope_r = 0.92, slope_g = 1.04, slope_b = 1.12,

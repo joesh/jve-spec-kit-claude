@@ -11,6 +11,8 @@ local command_manager = require("core.command_manager")
 local scroll_axis_lock = require("ui.timeline.scroll_axis_lock")
 local cancel = require("core.cancel")
 local qt_constants = require("core.qt_constants")
+local grade_badge = require("ui.grade_badge")
+local ClipGrade = require("models.clip_grade")
 local log = require("core.logger").for_area("timeline")
 
 -- luacheck: globals qt_monotonic_s
@@ -800,6 +802,21 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             end
 
             qt_set_widget_cursor(view.widget, cursor)
+
+            -- FR-015 grade tooltip: the plain-language words for the clip's
+            -- bottom-edge grade stripe. Only re-query when the hovered clip
+            -- changes (avoid a per-pixel SELECT on every mouse move).
+            local hovered = find_clip_under_cursor(view, x, y, width, height)
+            local hovered_id = hovered and hovered.id or nil
+            if hovered_id ~= view._grade_tip_clip_id then
+                view._grade_tip_clip_id = hovered_id
+                local grade = hovered_id and ClipGrade.load(hovered_id) or nil
+                local tip = grade_badge.tooltip_for_reproduction(
+                    grade and grade.reproduction or nil)
+                if qt_constants.PROPERTIES.SET_TOOLTIP then
+                    qt_constants.PROPERTIES.SET_TOOLTIP(view.widget, tip or "")
+                end
+            end
         end
 
     elseif event_type == "release" then

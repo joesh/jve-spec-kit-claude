@@ -35,6 +35,42 @@ local VALID_FIDELITIES = {
     unrepresentable = true,
 }
 
+local VALID_REPRODUCTIONS = {
+    full = true,
+    approximate = true,
+    not_shown = true,
+}
+
+--- Classify what JVE can DISPLAY of a grade (the FR-015 badge axis) — a
+--- separate concept from `fidelity` (Resolve grade complexity). A spatial
+--- Resolve grade is `unrepresentable` AND bakes to an identity LUT, so the
+--- viewer shows passthrough: honest answer is `not_shown`, never silently
+--- "graded" (rule 2.32).
+---   primary                                  → 'full'
+---   non-primary + non-identity LUT carrier   → 'approximate'
+---   non-primary + identity LUT or no carrier → 'not_shown'
+--- @param fidelity         string  'primary'|'partial'|'unrepresentable'
+--- @param lut_ref          string|nil  the baked LUT path, or nil
+--- @param lut_is_identity  boolean|nil whether that LUT is a passthrough;
+---                         REQUIRED (boolean) when lut_ref is present
+--- @return string  'full' | 'approximate' | 'not_shown'
+function M.classify_reproduction(fidelity, lut_ref, lut_is_identity)
+    assert(VALID_FIDELITIES[fidelity], string.format(
+        "ClipGrade.classify_reproduction: fidelity must be one of "
+        .. "'primary'|'partial'|'unrepresentable', got %s", tostring(fidelity)))
+    if fidelity == "primary" then
+        return "full"
+    end
+    if lut_ref ~= nil then
+        assert(type(lut_is_identity) == "boolean", string.format(
+            "ClipGrade.classify_reproduction: lut_is_identity (boolean) "
+            .. "required when lut_ref is present (got %s) — the caller must "
+            .. "classify the baked cube", type(lut_is_identity)))
+        return lut_is_identity and "not_shown" or "approximate"
+    end
+    return "not_shown"
+end
+
 local function assert_cdl_all_or_none(cdl)
     if cdl == nil then return end
     assert(type(cdl) == "table",
@@ -68,6 +104,10 @@ local function assert_valid_grade(grade)
         "ClipGrade.upsert: fidelity must be one of "
         .. "'primary'|'partial'|'unrepresentable', got %s",
         tostring(grade.fidelity)))
+    assert(VALID_REPRODUCTIONS[grade.reproduction], string.format(
+        "ClipGrade.upsert: reproduction must be one of "
+        .. "'full'|'approximate'|'not_shown', got %s",
+        tostring(grade.reproduction)))
     assert(type(grade.source) == "string" and grade.source ~= "",
         "ClipGrade.upsert: source required (non-empty string)")
     assert(grade.stale == 0 or grade.stale == 1, string.format(
@@ -78,7 +118,7 @@ local function assert_valid_grade(grade)
 end
 
 -- Schema columns in INSERT order: clip_id, then CDL_CHANNELS, then trailing.
-local TRAILING_COLUMNS = { "lut_ref", "fidelity", "source", "stale", "synced_at" }
+local TRAILING_COLUMNS = { "lut_ref", "fidelity", "reproduction", "source", "stale", "synced_at" }
 
 local function build_upsert_sql()
     local cols = { "clip_id" }
@@ -193,7 +233,7 @@ function M.load(clip_id, db)
     local sql = [[
         SELECT slope_r, slope_g, slope_b, offset_r, offset_g, offset_b,
                power_r, power_g, power_b, saturation,
-               lut_ref, fidelity, source, stale, synced_at
+               lut_ref, fidelity, reproduction, source, stale, synced_at
         FROM clip_grade WHERE clip_id = ?
     ]]
     
@@ -215,16 +255,44 @@ function M.load(clip_id, db)
             }
         end
         return {
-            cdl       = cdl,
-            lut_ref   = stmt:value(10),
-            fidelity  = stmt:value(11),
-            source    = stmt:value(12),
-            stale     = stmt:value(13),
-            synced_at = stmt:value(14),
+            cdl          = cdl,
+            lut_ref      = stmt:value(10),
+            fidelity     = stmt:value(11),
+            reproduction = stmt:value(12),
+            source       = stmt:value(13),
+            stale        = stmt:value(14),
+            synced_at    = stmt:value(15),
         }
     end)
     
     return rows[1] -- returns nil if no row
+end
+
+--- Batch-load just the `reproduction` axis for many clips in one query.
+--- Returns a map { [clip_id] = 'full'|'approximate'|'not_shown' } containing
+--- ONLY the clips that have a grade row (ungraded clips are absent — the
+--- caller treats absence as "no badge", which is correct: no grade ⇒ nothing
+--- to flag). Used by per-clip render/find paths (timeline badges, Find
+--- filter) that would otherwise issue one SELECT per visible clip. Empty
+--- input → empty map (no SQL issued).
+--- @param clip_ids string[]  list of clip ids
+--- @param db       table|nil optional SQLite connection
+--- @return table  { [clip_id]=reproduction }
+function M.load_reproduction_batch(clip_ids, db)
+    assert(type(clip_ids) == "table",
+        "ClipGrade.load_reproduction_batch: clip_ids array required")
+    local out = {}
+    if #clip_ids == 0 then return out end
+    db = db or database.get_connection()
+    assert(db, "ClipGrade.load_reproduction_batch: no active database connection")
+
+    local sql = "SELECT clip_id, reproduction FROM clip_grade WHERE clip_id IN ("
+        .. database.in_placeholders(#clip_ids) .. ")"
+    database.select_rows(db, sql, clip_ids, function(stmt)
+        out[stmt:value(0)] = stmt:value(1)
+        return true  -- accumulate via closure; row value unused
+    end)
+    return out
 end
 
 return M
