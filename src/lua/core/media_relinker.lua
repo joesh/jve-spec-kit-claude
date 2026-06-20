@@ -224,6 +224,16 @@ local function probe_result_from_emp_info(info)
                 end
             end
         end
+        -- A video stream with no temporal duration IS a still image (EMP
+        -- reports has_video with has_duration=false / duration_us=0 for
+        -- TIFF/PNG/JPEG/…). The model represents a still as a single-frame
+        -- media — Media.classify_is_still keys on duration_frames == 1 — so
+        -- mirror that here. Without it the still has no duration_frames and
+        -- check_extent_containment drops it as "duration unreadable",
+        -- leaving the still permanently unrelinkable.
+        if not result.duration_frames then
+            result.duration_frames = 1
+        end
     elseif has_audio_only then
         local sr = info.audio_sample_rate
         result.fps_num = sr
@@ -283,6 +293,10 @@ local function probe_file_emp(file_path)
     end
     return result
 end
+
+-- Single-file probe is the public seam for callers (and tests) that need to
+-- interpret one file the same way the batch relink path does.
+M.probe_file_emp = probe_file_emp
 
 --- Pre-probe a set of candidate paths in parallel and populate a probe cache.
 -- Uses EMP.MEDIA_PROBE_BATCH with default parallelism (hardware_concurrency).
@@ -882,6 +896,9 @@ end
 --   probe_result   — cached probe (passed back so the caller doesn't
 --                    re-probe in the next pass)
 --   reason         — user-readable rejection reason (only when not passed)
+--   relinkable_if_trimmed — true when the ONLY thing blocking this candidate
+--                    is that accept_trimmed_media is off (a TC-shifted trim
+--                    that would be accepted if the rule were enabled)
 local function check_candidate_tc(cand_path, media_info, matching_rules, probe_fn)
     if not matching_rules.match_timecode then
         return true, nil, nil, false, nil
@@ -925,13 +942,15 @@ local function check_candidate_tc(cand_path, media_info, matching_rules, probe_f
         if matching_rules.accept_trimmed_media then
             return true, cand_tc_value, cand_tc_rate, true, probe_result
         end
-        return false, cand_tc_value, cand_tc_rate, false, probe_result, reason
+        -- Rejected ONLY because accept_trimmed_media is off — flag it so the
+        -- summary can offer "enable Accept Trimmed Media to relink these".
+        return false, cand_tc_value, cand_tc_rate, false, probe_result, reason, true
     end
     -- No file_original_tc → existing trimmed-media containment fallback.
     if matching_rules.accept_trimmed_media then
         return true, cand_tc_value, cand_tc_rate, true, probe_result
     end
-    return false, cand_tc_value, cand_tc_rate, false, probe_result, reason
+    return false, cand_tc_value, cand_tc_rate, false, probe_result, reason, true
 end
 
 -- Resolution + frame-rate pass. probe_result is reused when the TC pass
@@ -986,7 +1005,8 @@ function M.find_candidates_for_media(media_info, candidate_index, matching_rules
         candidate_index, matching_rules, media_info.media_path)
 
     for _, cand_path in ipairs(paths_to_check) do
-        local passed, cand_tc_value, cand_tc_rate, tc_mismatch, probe_result, reason =
+        local passed, cand_tc_value, cand_tc_rate, tc_mismatch, probe_result, reason,
+              relinkable_if_trimmed =
             check_candidate_tc(cand_path, media_info, matching_rules, probe_fn)
         if passed then
             passed, probe_result, reason = check_candidate_resolution_fps(
@@ -1004,7 +1024,11 @@ function M.find_candidates_for_media(media_info, candidate_index, matching_rules
             assert(reason, string.format(
                 "find_candidates_for_media: rejection without a reason for %s "
                 .. "— every reject path must explain itself", cand_path))
-            rejected[#rejected + 1] = { path = cand_path, reason = reason }
+            rejected[#rejected + 1] = {
+                path = cand_path,
+                reason = reason,
+                relinkable_if_trimmed = relinkable_if_trimmed,
+            }
         end
     end
     return results, rejected
@@ -1461,10 +1485,19 @@ local function classify_media(media_info, candidates, clip_loader, rejected)
         candidates, rejected or {}, dropped, partial_fit_candidates)
     log.event("  FAILED: %s — %s", media_info.media_name, reason)
 
+    -- A name-matched candidate rejected ONLY because accept_trimmed_media is off
+    -- means enabling that rule would relink this media. Surface it so the summary
+    -- can prompt the user.
+    local relinkable_if_trimmed = false
+    for _, r in ipairs(rejected or {}) do
+        if r.relinkable_if_trimmed then relinkable_if_trimmed = true break end
+    end
+
     out.failed[#out.failed + 1] = {
         media_id = media_info.media_id,
         kind = kind,
         reason = reason,
+        relinkable_if_trimmed = relinkable_if_trimmed,
     }
     return out
 end
@@ -1549,27 +1582,27 @@ local function collect_paths_to_preprobe(media_infos, candidate_index, matching_
     return paths_to_preprobe
 end
 
--- Pre-probe every candidate that could ever be consulted, in parallel.
--- Serial single-shot probes were the dominant Phase 2 cost (72.5 ms × 562
--- calls = 40s observed). MEDIA_PROBE_BATCH dispatches hardware_concurrency
--- workers through emp::MediaFile::ProbeMetadata, each of which skips
+-- Pre-probe candidates in parallel. Serial single-shot probes were the
+-- dominant cost (72.5 ms × 562 calls = 40s observed). MEDIA_PROBE_BATCH
+-- dispatches hardware_concurrency workers through
+-- emp::MediaFile::ProbeMetadata, each of which skips
 -- avformat_find_stream_info (~5× faster per probe). Combined expectation:
--- ~40s → ~1s on 8-core hardware. We only probe when a matching rule
--- actually consults probe output (TC/resolution/frame rate); otherwise
--- matching is filename-only and probes are never read.
+-- ~40s → ~1s on 8-core hardware.
 --
 -- The native bindings (EMP.MEDIA_PROBE_BATCH + qt_file_stat_batch) are
 -- editor-only. Under plain luajit tests they are absent and we let
 -- per-candidate cached_probe fall through to probe_file_ffprobe during
 -- the match loop. Same correctness, slower wall clock — fine for tests.
-local function maybe_prefetch_candidate_probes(probe_cache, media_infos, candidate_index,
-                                               matching_rules, progress_cb)
-    local needs_probe = matching_rules.match_timecode
-        or matching_rules.match_resolution
-        or matching_rules.match_frame_rate
-    if not needs_probe then return end
-
-    local paths_to_preprobe = collect_paths_to_preprobe(media_infos, candidate_index, matching_rules)
+--
+-- Probe every filename-matched candidate up front, as if all probe-consuming
+-- rules (timecode/resolution/frame rate) were enabled. The relink dialog lets
+-- the user toggle those rules and re-classify live; pre-probing here means a
+-- toggle never triggers a probe pause — classification reads only cached
+-- results. Under plain luajit (no EMP batch bindings) this is a no-op and the
+-- cached_probe closure probes lazily during classification, same as before.
+local function prefetch_all_probes(probe_cache, media_infos, candidate_index, progress_cb)
+    local paths_to_preprobe = collect_paths_to_preprobe(
+        media_infos, candidate_index, { match_filename = true })
 
     local EMP = qt_constants and qt_constants.EMP
     local bindings_ready = EMP and EMP.MEDIA_PROBE_BATCH
@@ -1580,44 +1613,28 @@ local function maybe_prefetch_candidate_probes(probe_cache, media_infos, candida
         progress_cb(10, string.format("Probing %d candidate(s)...", #paths_to_preprobe))
     end
     local n, dt = preprobe_batch(probe_cache, paths_to_preprobe)
-    log.event("relink_media_batch: pre-probed %d candidates "
-        .. "in parallel in %.2fs (%.1f ms/probe effective)",
-        n, dt, n > 0 and (dt * 1000 / n) or 0)
+    log.event("scan_candidates: pre-probed %d candidates in parallel in %.2fs "
+        .. "(%.1f ms/probe effective)", n, dt, n > 0 and (dt * 1000 / n) or 0)
 end
 
-function M.relink_media_batch(media_infos, options, progress_cb)
-    assert(type(media_infos) == "table", "relink_media_batch: media_infos required")
-    assert(type(options) == "table", "relink_media_batch: options required")
-    assert(type(options.search_paths) == "table" and #options.search_paths > 0,
-        "relink_media_batch: options.search_paths must be a non-empty array")
-    assert(type(options.matching_rules) == "table",
-        "relink_media_batch: options.matching_rules required")
-
-    local matching_rules = options.matching_rules
-
-    local results = {
-        relinked = {},
-        failed = {},
-        ambiguous = {},
-        new_media = {},
-    }
-
-    local total_media = #media_infos
-    if total_media == 0 then return results end
-
-    -- Each media_info must carry the required fields used by the pipeline.
+--- Scan the search tree ONCE and pre-probe candidates, returning a reusable
+--- context for classify_batch. The scan + probe is the expensive part and is
+--- independent of the matching rules; separating it lets the relink dialog
+--- re-classify instantly when the user toggles a rule (no rescan, no reprobe).
+-- @param media_infos table Array of media_info structs (need .media_path)
+-- @param search_paths table Non-empty array of directories to scan
+-- @param progress_cb function|nil progress_cb(pct, status)
+-- @return table context {candidate_index, segment_index, probe_cache,
+--   cached_probe, stats} — pass verbatim to classify_batch.
+function M.scan_candidates(media_infos, search_paths, progress_cb)
+    assert(type(media_infos) == "table", "scan_candidates: media_infos required")
+    assert(type(search_paths) == "table" and #search_paths > 0,
+        "scan_candidates: search_paths must be a non-empty array")
     for i, mi in ipairs(media_infos) do
         assert(type(mi.media_path) == "string" and mi.media_path ~= "",
-            string.format("relink_media_batch: media_infos[%d].media_path required", i))
+            string.format("scan_candidates: media_infos[%d].media_path required", i))
     end
 
-    log.event("relink_media_batch: %d media, search=%s, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
-        total_media, table.concat(options.search_paths, ","),
-        tostring(matching_rules.match_filename), tostring(matching_rules.match_timecode),
-        tostring(matching_rules.match_resolution), tostring(matching_rules.match_frame_rate),
-        tostring(matching_rules.accept_trimmed_media), tostring(matching_rules.accept_filename_suffixes))
-
-    -- Step 1: Scan search directories and build candidate index
     if progress_cb then progress_cb(0, "Scanning search directory...") end
     local t_scan = qt_monotonic_s()
 
@@ -1627,46 +1644,40 @@ function M.relink_media_batch(media_infos, options, progress_cb)
         if ext then extensions[ext:lower()] = true end
     end
     assert(next(extensions) ~= nil,
-        "relink_media_batch: no media_info has a parseable file extension; cannot scan for candidates")
+        "scan_candidates: no media_info has a parseable file extension; cannot scan for candidates")
 
     local ext_list = {}
     for ext in pairs(extensions) do ext_list[#ext_list + 1] = ext end
-    log.detail("relink_media_batch: scanning for extensions: %s", table.concat(ext_list, ", "))
+    log.detail("scan_candidates: scanning for extensions: %s", table.concat(ext_list, ", "))
 
-    local candidate_index = build_candidate_index(options.search_paths, extensions)
-
+    local candidate_index = build_candidate_index(search_paths, extensions)
     local cand_count = 0
     for _, paths in pairs(candidate_index) do cand_count = cand_count + #paths end
-    log.event("relink_media_batch: scan complete — %d candidate files in %.1fs",
+    log.event("scan_candidates: scan complete — %d candidate files in %.1fs",
         cand_count, qt_monotonic_s() - t_scan)
 
-    -- Build segment index if enabled
-    local segment_index
-    if matching_rules.accept_filename_suffixes then
-        segment_index = M.build_segment_index(candidate_index)
-    end
+    -- Segment index is built unconditionally so toggling Accept Filename
+    -- Suffixes re-classifies live without a rescan. Building it is cheap
+    -- (numeric-suffix grouping over the already-scanned index).
+    local segment_index = M.build_segment_index(candidate_index)
 
     -- Unified probe cache. cache[path] tri-state:
     --   nil   = not yet probed  (triggers single-shot cached_probe)
     --   false = probed, unsupported / open failed  (cached_probe returns nil)
     --   table = probe_result shape (see probe_result_from_emp_info)
     local probe_cache = {}
-    local probe_count = 0
-    local probe_total_seconds = 0  -- wall-clock spent inside single-shot probe_file calls
-
-    maybe_prefetch_candidate_probes(probe_cache, media_infos, candidate_index,
-                                    matching_rules, progress_cb)
+    local stats = { probe_count = 0, probe_total_seconds = 0 }
 
     local function cached_probe(path)
         local cached = probe_cache[path]
         if cached ~= nil then
             return cached ~= false and cached or nil
         end
-        probe_count = probe_count + 1
-        log.detail("probe[%d]: %s", probe_count, get_filename(path))
+        stats.probe_count = stats.probe_count + 1
+        log.detail("probe[%d]: %s", stats.probe_count, get_filename(path))
         local t_probe = qt_monotonic_s()
         local result = probe_file(path)
-        probe_total_seconds = probe_total_seconds + (qt_monotonic_s() - t_probe)
+        stats.probe_total_seconds = stats.probe_total_seconds + (qt_monotonic_s() - t_probe)
         probe_cache[path] = result or false
         if result then
             log.detail("  → tc=%s@%s res=%sx%s dur=%s",
@@ -1677,12 +1688,51 @@ function M.relink_media_batch(media_infos, options, progress_cb)
         return result
     end
 
-    -- Step 2: Process each media — find candidates, classify, merge
+    prefetch_all_probes(probe_cache, media_infos, candidate_index, progress_cb)
+
+    return {
+        candidate_index = candidate_index,
+        segment_index   = segment_index,
+        probe_cache     = probe_cache,
+        cached_probe    = cached_probe,
+        stats           = stats,
+    }
+end
+
+--- Classify previously-scanned candidates under a set of matching rules.
+--- Pure over the scan context (no filesystem I/O beyond lazy cache misses):
+--- safe to re-run on every rule toggle. Returns the same shape as
+--- relink_media_batch ({relinked, failed, ambiguous, new_media}).
+-- @param media_infos table Array of media_info structs
+-- @param context table The value returned by scan_candidates
+-- @param matching_rules table Matching criteria
+-- @param clip_loader function|nil function(media_id) → array of clip entries
+-- @param progress_cb function|nil progress_cb(pct, status)
+-- @return table {relinked, failed, ambiguous, new_media}
+function M.classify_batch(media_infos, context, matching_rules, clip_loader, progress_cb)
+    assert(type(media_infos) == "table", "classify_batch: media_infos required")
+    assert(type(context) == "table" and context.candidate_index
+        and type(context.cached_probe) == "function",
+        "classify_batch: context from scan_candidates required")
+    assert(type(matching_rules) == "table", "classify_batch: matching_rules required")
+
+    local results = { relinked = {}, failed = {}, ambiguous = {}, new_media = {} }
+    local total_media = #media_infos
+    if total_media == 0 then return results end
+
+    local candidate_index = context.candidate_index
+    local cached_probe    = context.cached_probe
+    local segment_index   = context.segment_index
+
+    log.event("classify_batch: %d media, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
+        total_media,
+        tostring(matching_rules.match_filename), tostring(matching_rules.match_timecode),
+        tostring(matching_rules.match_resolution), tostring(matching_rules.match_frame_rate),
+        tostring(matching_rules.accept_trimmed_media), tostring(matching_rules.accept_filename_suffixes))
+
     local t_match = qt_monotonic_s()
-    local classify_total_seconds = 0
     for i, media_info in ipairs(media_infos) do
-        log.detail("media %d/%d: %s",
-            i, total_media, media_info.media_name)
+        log.detail("media %d/%d: %s", i, total_media, media_info.media_name)
 
         local candidates, rejected = M.find_candidates_for_media(
             media_info, candidate_index, matching_rules, cached_probe)
@@ -1698,10 +1748,8 @@ function M.relink_media_batch(media_infos, options, progress_cb)
             inject_segment_candidates(media_info, candidates, segment_index, cached_probe)
         end
 
-        local t_classify = qt_monotonic_s()
         local media_results = classify_media(
-            media_info, candidates, options.clip_loader, rejected)
-        classify_total_seconds = classify_total_seconds + (qt_monotonic_s() - t_classify)
+            media_info, candidates, clip_loader, rejected)
         merge_media_results(results, media_results)
 
         if progress_cb then
@@ -1720,17 +1768,32 @@ function M.relink_media_batch(media_infos, options, progress_cb)
             #results.relinked, #results.failed, #results.ambiguous))
     end
 
-    local match_total = qt_monotonic_s() - t_match
-    local other_seconds = match_total - probe_total_seconds - classify_total_seconds
-    log.event("relink_media_batch: done in %.1fs — %d relinked, %d failed, %d ambiguous",
-        match_total, #results.relinked, #results.failed, #results.ambiguous)
-    log.detail("relink_media_batch: match breakdown — probes=%.2fs (%d calls, %.1f ms/call), "
-        .. "classify=%.2fs, other=%.2fs",
-        probe_total_seconds, probe_count,
-        probe_count > 0 and (probe_total_seconds * 1000 / probe_count) or 0,
-        classify_total_seconds, other_seconds)
+    log.event("classify_batch: done in %.1fs — %d relinked, %d failed, %d ambiguous",
+        qt_monotonic_s() - t_match, #results.relinked, #results.failed, #results.ambiguous)
 
     return results
+end
+
+--- Batch relink media to candidate files using matching rules.
+-- Convenience composition of scan_candidates + classify_batch for callers
+-- that classify under a single rule set. The relink dialog instead calls the
+-- two phases separately so it can re-classify live as the user toggles rules.
+-- Matches per-media (not per-clip). Output is per-media, not per-clip.
+-- @param media_infos table Array of media_info structs with source_extent_start/end
+-- @param options table {search_paths, matching_rules, clip_loader}
+-- @param progress_cb function|nil progress_cb(pct, status, log_line)
+-- @return table {relinked, failed, ambiguous, new_media}
+function M.relink_media_batch(media_infos, options, progress_cb)
+    assert(type(media_infos) == "table", "relink_media_batch: media_infos required")
+    assert(type(options) == "table", "relink_media_batch: options required")
+    assert(type(options.search_paths) == "table" and #options.search_paths > 0,
+        "relink_media_batch: options.search_paths must be a non-empty array")
+    assert(type(options.matching_rules) == "table",
+        "relink_media_batch: options.matching_rules required")
+
+    local context = M.scan_candidates(media_infos, options.search_paths, progress_cb)
+    return M.classify_batch(
+        media_infos, context, options.matching_rules, options.clip_loader, progress_cb)
 end
 
 -- Testing hook. classify_media is file-local because it's an internal step,

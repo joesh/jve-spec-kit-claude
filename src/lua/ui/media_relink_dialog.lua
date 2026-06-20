@@ -4,10 +4,10 @@
 -- - Show dialog immediately, populate clip list asynchronously (no beachball)
 -- - "Matching Rules..." and "Folder Priority..." buttons
 -- - Run clip-level batch relink with live progress
--- - Two-phase button: Relink → Apply
+-- - Two-phase button: Relink (scan) → Apply, with live rule re-classify between
 --
 -- The apply callback receives a wrapper struct:
---   { relink = <media_relinker.relink_media_batch return>,
+--   { relink = <media_relinker.classify_batch return>,
 --     folder_priority = <array of folder roots in priority order> }
 -- Keeping folder_priority separate from the relink struct preserves
 -- media_relinker's documented return contract ({relinked, failed, ambiguous,
@@ -51,13 +51,19 @@ function M._format_results_summary(results, media_infos)
     local n_relinked = #clean_relinked
     local n_ambiguous = results.ambiguous and #results.ambiguous or 0
 
-    -- Partition failed[] by the relinker's failure kind.
+    -- Partition failed[] by the relinker's failure kind. Track how many
+    -- rejections would relink if the user enabled Accept Trimmed Media — those
+    -- are name-matched files turned down ONLY on the TC-shifted-trim criterion.
     local not_found, rejected = {}, {}
+    local relinkable_if_trimmed = 0
     for _, f in ipairs(results.failed or {}) do
         if f.kind == "not_found" then
             not_found[#not_found + 1] = f
         elseif f.kind == "rejected" then
             rejected[#rejected + 1] = f
+            if f.relinkable_if_trimmed then
+                relinkable_if_trimmed = relinkable_if_trimmed + 1
+            end
         else
             error(string.format(
                 "_format_results_summary: failed entry for media %s has "
@@ -85,6 +91,18 @@ function M._format_results_summary(results, media_infos)
     if n_ambiguous > 0 then
         parts[#parts + 1] = string.format("&nbsp;•&nbsp; <b>%d ambiguous</b>",
             n_ambiguous)
+    end
+
+    -- Action-oriented prompt, directly under the one-line summary: name-matched
+    -- files that were rejected only because Accept Trimmed Media is off would
+    -- relink if the user enabled it. Surfaced here (not buried in the rejected
+    -- list) so the escape hatch is discoverable.
+    if relinkable_if_trimmed > 0 then
+        parts[#parts + 1] = string.format(
+            "<br/><b>%d %s will relink if you enable &ldquo;Accept Trimmed "
+            .. "Media&rdquo;</b> (Matching Rules&hellip;).",
+            relinkable_if_trimmed,
+            relinkable_if_trimmed == 1 and "item" or "items")
     end
 
     if #partial > 0 then
@@ -169,18 +187,18 @@ end
 -- Missing file → defaults (first-run is legitimate).
 -- Corrupt JSON → defaults, but log.warn so a silent "my prefs reset" is traceable.
 local function load_matching_rules()
-    local matching_rules_dialog = require("ui.matching_rules_dialog")
+    local relink_rules = require("ui.relink_rules")
     local path = matching_rules_path()
     local f = io.open(path, "r")
     if not f then
-        return matching_rules_dialog.default_rules()
+        return relink_rules.default_rules()
     end
     local content = f:read("*a")
     f:close()
     local decoded = json.decode(content)
     if type(decoded) ~= "table" then
         log.warn("load_matching_rules: %s is corrupt, reverting to defaults", path)
-        return matching_rules_dialog.default_rules()
+        return relink_rules.default_rules()
     end
     return decoded
 end
@@ -376,76 +394,6 @@ local function extract_folder_roots(media_list)
     return result
 end
 
---- Show folder priority dialog — drag-to-reorder list.
--- Items appear top-to-bottom in priority order: top row = highest priority.
--- The user drags rows to reorder. OK returns the resulting order;
--- Cancel returns nil (caller keeps the prior order).
-local function show_folder_priority_dialog(folder_roots, parent_window)
-    local qt = require("core.qt_constants")
-
-    local dialog = qt.DIALOG.CREATE("Folder Priority", 650, 400, parent_window)
-    local layout = qt.LAYOUT.CREATE_VBOX()
-
-    local header = qt.WIDGET.CREATE_LABEL(
-        "When the same filename exists in multiple source folders,\n" ..
-        "higher-priority folders win.\n\n" ..
-        "Drag rows to reorder — top = highest priority.")
-    qt.LAYOUT.ADD_WIDGET(layout, header)
-    qt.LAYOUT.ADD_SPACING(layout, 8)
-
-    -- QTreeWidget in InternalMove drag-drop mode gives us drag-reorder
-    -- natively. One column → reads as a flat list.
-    local tree = qt.WIDGET.CREATE_TREE()
-    qt.CONTROL.SET_TREE_HEADERS(tree, { "Source Folder (drag to reorder)" })
-    qt.CONTROL.SET_TREE_DRAG_DROP_MODE(tree, "internal")
-
-    -- Map the tree-item id (assigned by add_tree_item) → folder root string,
-    -- so we can reconstruct order after the user drags things around.
-    local id_to_root = {}
-    for _, root in ipairs(folder_roots) do
-        local item_id = qt.CONTROL.ADD_TREE_ITEM(tree, { root })
-        id_to_root[item_id] = root
-    end
-    qt.LAYOUT.ADD_WIDGET(layout, tree)
-
-    local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
-    qt.CONTROL.BUTTON_BOX_ADD(button_box, "OK", "accept")
-    qt.CONTROL.BUTTON_BOX_ADD(button_box, "Cancel", "reject")
-    qt.LAYOUT.ADD_WIDGET(layout, button_box)
-
-    local result_order = nil
-
-    local ok_name = "__folder_priority_ok"
-    _G[ok_name] = function()
-        -- Read visual top-to-bottom order from the tree after any drags.
-        local ordered_ids = qt.CONTROL.GET_TREE_ITEMS_IN_ORDER(tree)
-        result_order = {}
-        for _, item_id in ipairs(ordered_ids) do
-            local root = id_to_root[item_id]
-            assert(root, string.format(
-                "folder priority dialog: tree returned unknown item id %s",
-                tostring(item_id)))
-            result_order[#result_order + 1] = root
-        end
-        qt.DIALOG.CLOSE(dialog, true)
-    end
-    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "accepted", ok_name)
-
-    local cancel_name = "__folder_priority_cancel"
-    _G[cancel_name] = function()
-        qt.DIALOG.CLOSE(dialog, false)
-    end
-    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
-
-    qt.DIALOG.SET_LAYOUT(dialog, layout)
-    qt.DIALOG.SHOW(dialog)
-
-    _G[ok_name] = nil
-    _G[cancel_name] = nil
-
-    return result_order
-end
-
 --- Show the reconnect media dialog (blocking modal).
 -- Shows dialog immediately, populates clip list asynchronously.
 -- @param media_list table Non-empty array of media records to relink
@@ -462,18 +410,22 @@ function M.show(media_list, parent_window, opts)
     local file_browser = require("core.file_browser")
     local media_relinker = require("core.media_relinker")
     local progress_panel = require("ui.progress_panel")
-    local matching_rules_dialog = require("ui.matching_rules_dialog")
+    local relink_rules = require("ui.relink_rules")
+    local raised_style = require("ui.raised_style")
 
-
-    -- Extract folder roots immediately (cheap — just path parsing)
-    local folder_roots = extract_folder_roots(media_list)
-    local folder_priority = folder_roots
+    -- Folder priority survives only as a deterministic planner tiebreak (which
+    -- offline media adopts a candidate when basenames collide across original
+    -- source volumes). It is no longer user-editable: a single search dir +
+    -- per-file media identity make collisions a near-never case. Pass the
+    -- frequency-ordered roots straight through to on_apply/build_plan.
+    local folder_priority = extract_folder_roots(media_list)
 
     -- State
     local last_dir = file_browser.get_last_directory("relink_media")
     local search_dir = (last_dir and last_dir ~= "") and last_dir or nil
     local relink_results = nil
     local media_infos = nil  -- built after dialog appears
+    local scan_context = nil  -- set by first Relink press; reused on rule toggles
     local globals = {}
 
     local matching_rules = load_matching_rules()
@@ -503,7 +455,7 @@ function M.show(media_list, parent_window, opts)
     qt.LAYOUT.ADD_WIDGET(main_layout, loading_label)
 
     -- -----------------------------------------------------------------------
-    -- Search directory row + buttons
+    -- Search directory row
     -- -----------------------------------------------------------------------
     local dir_row = qt.LAYOUT.CREATE_HBOX()
     qt.LAYOUT.ADD_WIDGET(dir_row, qt.WIDGET.CREATE_LABEL("Search in:"))
@@ -513,61 +465,42 @@ function M.show(media_list, parent_window, opts)
     local browse_btn = qt.WIDGET.CREATE_BUTTON("Browse...")
     qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(browse_btn, false)
     qt.LAYOUT.ADD_WIDGET(dir_row, browse_btn)
-    local rules_btn = qt.WIDGET.CREATE_BUTTON("Matching Rules...")
-    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(rules_btn, false)
-    qt.LAYOUT.ADD_WIDGET(dir_row, rules_btn)
     qt.LAYOUT.ADD_LAYOUT(main_layout, dir_row)
-
-    -- Folder priority button (only if multiple source folders)
-    local priority_btn = nil
-    if #folder_roots > 1 then
-        local priority_row = qt.LAYOUT.CREATE_HBOX()
-        priority_btn = qt.WIDGET.CREATE_BUTTON(
-            string.format("Folder Priority... (%d source folders)", #folder_roots))
-        qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(priority_btn, false)
-        qt.LAYOUT.ADD_WIDGET(priority_row, priority_btn)
-        qt.LAYOUT.ADD_STRETCH(priority_row)
-        qt.LAYOUT.ADD_LAYOUT(main_layout, priority_row)
-
-        local priority_name = "__relink_dialog_priority"
-        _G[priority_name] = function()
-            local updated = show_folder_priority_dialog(folder_priority, dialog)
-            if updated then
-                folder_priority = updated
-                log.event("folder priority updated: %s", table.concat(folder_priority, " > "))
-            end
-        end
-        qt.CONTROL.SET_BUTTON_CLICK_HANDLER(priority_btn, priority_name)
-        globals[#globals + 1] = priority_name
-    end
 
     qt.LAYOUT.ADD_SPACING(main_layout, 8)
 
-    -- Browse handler
-    local browse_name = "__relink_dialog_browse"
-    _G[browse_name] = function()
-        local dir = file_browser.open_directory(
-            "relink_media", parent_window or dialog,
-            "Select Search Directory")
-        if dir and dir ~= "" then
-            search_dir = dir
-            qt.PROPERTIES.SET_TEXT(dir_edit, dir)
-        end
-    end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(browse_btn, browse_name)
-    globals[#globals + 1] = browse_name
+    -- -----------------------------------------------------------------------
+    -- Matching rules — always-visible inline panel. Toggling a checkbox after
+    -- the first scan re-classifies the already-scanned candidates live (no
+    -- rescan) and re-renders the summary, so the user can dial rules in and
+    -- watch the relinked/partial/rejected counts move.
+    -- -----------------------------------------------------------------------
+    local rules_header = qt.WIDGET.CREATE_LABEL("Matching Rules")
+    qt.PROPERTIES.SET_STYLE(rules_header, "font-weight: bold; font-size: 13px;")
+    qt.LAYOUT.ADD_WIDGET(main_layout, rules_header)
 
-    -- Matching Rules handler
-    local rules_name = "__relink_dialog_rules"
-    _G[rules_name] = function()
-        local updated = matching_rules_dialog.show(matching_rules, dialog)
-        if updated then
-            matching_rules = updated
-            save_matching_rules(matching_rules)
-        end
+    local SECTION_LABELS = { match = "Match by:", options = "Options:" }
+    local SECTION_ORDER = { "match", "options" }
+    local section_rows = {}
+    for _, section in ipairs(SECTION_ORDER) do
+        local row = qt.LAYOUT.CREATE_HBOX()
+        qt.LAYOUT.ADD_WIDGET(row, qt.WIDGET.CREATE_LABEL(SECTION_LABELS[section]))
+        section_rows[section] = row
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(rules_btn, rules_name)
-    globals[#globals + 1] = rules_name
+    local rule_checkboxes = {}  -- rule key → checkbox widget
+    for _, rule in ipairs(relink_rules.RULES) do
+        local cb = qt.WIDGET.CREATE_CHECKBOX()
+        qt.PROPERTIES.SET_TEXT(cb, rule.label)
+        qt.PROPERTIES.SET_CHECKED(cb, matching_rules[rule.key] == true)
+        qt.LAYOUT.ADD_WIDGET(section_rows[rule.section], cb)
+        rule_checkboxes[rule.key] = cb
+    end
+    for _, section in ipairs(SECTION_ORDER) do
+        qt.LAYOUT.ADD_STRETCH(section_rows[section])
+        qt.LAYOUT.ADD_LAYOUT(main_layout, section_rows[section])
+    end
+
+    qt.LAYOUT.ADD_SPACING(main_layout, 8)
 
     -- -----------------------------------------------------------------------
     -- Progress panel
@@ -580,8 +513,8 @@ function M.show(media_list, parent_window, opts)
     qt.DISPLAY.SET_VISIBLE(error_label, false)
     qt.LAYOUT.ADD_WIDGET(main_layout, error_label)
 
-    -- Results summary: shown after relink completes. Distinguishes
-    -- four buckets:
+    -- Results summary: shown after the first scan and re-rendered on every
+    -- rule toggle. Distinguishes four buckets:
     --   1. relinked — good matches we'll apply
     --   2. partial — same-basename file found but doesn't cover the
     --      full clip range; clips will be flagged on the timeline
@@ -599,13 +532,21 @@ function M.show(media_list, parent_window, opts)
         "color: #dddddd; font-family: monospace; font-size: 11px; " ..
         "padding: 6px; background: #1e1e1e; border: 1px solid #333;")
     qt.PROPERTIES.SET_SIZE(results_summary, 660, 180)
+    -- Expand to fill the dialog's lower region: the progress log above it is
+    -- hidden once the scan completes (see progress.hide() below), so the results
+    -- summary should grow into that freed space instead of staying a fixed 180px
+    -- band with a blank gap beneath. No trailing ADD_STRETCH — that spacer would
+    -- compete for the slack and re-open the gap.
+    qt.GEOMETRY.SET_SIZE_POLICY(results_summary, "Expanding", "Expanding")
     qt.DISPLAY.SET_VISIBLE(results_summary, false)
     qt.LAYOUT.ADD_WIDGET(main_layout, results_summary)
-
-    qt.LAYOUT.ADD_STRETCH(main_layout)
+    -- Give the results area the layout's vertical slack (stretch 1) so it owns
+    -- the lower region; every other row stays at its hint. Replaces the old
+    -- trailing ADD_STRETCH that parked the slack below the results as dead space.
+    qt.LAYOUT.SET_STRETCH_FACTOR(main_layout, results_summary, 1)
 
     -- -----------------------------------------------------------------------
-    -- Button box: Relink (accept/default) + Cancel (reject)
+    -- Button box: Relink/Apply (accept/default) + Cancel (reject)
     -- -----------------------------------------------------------------------
     local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
     local relink_btn = qt.CONTROL.BUTTON_BOX_ADD(button_box, "Relink", "accept")
@@ -613,74 +554,37 @@ function M.show(media_list, parent_window, opts)
     qt.CONTROL.SET_ENABLED(relink_btn, false)  -- disabled until clips loaded
     qt.LAYOUT.ADD_WIDGET(main_layout, button_box)
 
-    -- Cancel (rejected signal)
-    local cancel_name = "__relink_dialog_cancel"
-    _G[cancel_name] = function()
-        qt.DIALOG.CLOSE(dialog, false)
+    -- Subtle 3D styling (keycap buttons + raised results card). Visual constants
+    -- live in ui.raised_style; tune there. results_summary keeps its monospace
+    -- text style — only the soft shadow is added so it reads as raised.
+    raised_style.apply_button(browse_btn)
+    raised_style.apply_button(relink_btn)
+    raised_style.apply_button(cancel_btn)
+    raised_style.apply_shadow(results_summary)
+
+    -- -----------------------------------------------------------------------
+    -- Helpers
+    -- -----------------------------------------------------------------------
+    -- V13: every clip is a timeline placement; no master/timeline discriminator.
+    local Clip = require("models.clip")
+    local function clip_loader(media_id)
+        local clips = Clip.find_clips_for_media(media_id)
+        local entries = {}
+        for _, clip in ipairs(clips) do
+            entries[#entries + 1] = {
+                clip_id = clip.id,
+                track_type = clip.track_type,
+                source_in = clip.source_in,
+                source_out = clip.source_out,
+                fps_num = clip.frame_rate.fps_numerator,
+                fps_den = clip.frame_rate.fps_denominator,
+            }
+        end
+        return entries
     end
-    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
-    globals[#globals + 1] = cancel_name
 
-    -- Relink/Apply handler (accepted signal)
-    local relink_name = "__relink_dialog_relink"
-    _G[relink_name] = function()
-        if not search_dir or search_dir == "" then
-            qt.PROPERTIES.SET_TEXT(error_label, "Select a search directory first")
-            qt.DISPLAY.SET_VISIBLE(error_label, true)
-            return
-        end
-
-        if not dir_exists(search_dir) then
-            qt.PROPERTIES.SET_TEXT(error_label, string.format(
-                "Search directory does not exist: %s", search_dir))
-            qt.DISPLAY.SET_VISIBLE(error_label, true)
-            return
-        end
-
-        qt.DISPLAY.SET_VISIBLE(error_label, false)
-
-        -- Disable all controls during relink operation
-        qt.CONTROL.SET_ENABLED(relink_btn, false)
-        qt.CONTROL.SET_ENABLED(browse_btn, false)
-        qt.CONTROL.SET_ENABLED(rules_btn, false)
-        if priority_btn then qt.CONTROL.SET_ENABLED(priority_btn, false) end
-        qt.PROPERTIES.SET_TEXT(relink_btn, "Relinking…")
-        progress.reset()
-        progress.show()
-        qt.CONTROL.PROCESS_EVENTS()
-
-        local Clip = require("models.clip")
-        local options = {
-            search_paths = { search_dir },
-            matching_rules = matching_rules,
-            clip_loader = function(media_id)
-                local clips = Clip.find_clips_for_media(media_id)
-                local entries = {}
-                for _, clip in ipairs(clips) do
-                    -- V13: every clip is a timeline placement; no
-                    -- master/timeline kind discriminator needed.
-                    entries[#entries + 1] = {
-                        clip_id = clip.id,
-                        track_type = clip.track_type,
-                        source_in = clip.source_in,
-                        source_out = clip.source_out,
-                        fps_num = clip.frame_rate.fps_numerator,
-                        fps_den = clip.frame_rate.fps_denominator,
-                    }
-                end
-                return entries
-            end,
-        }
-        local results = media_relinker.relink_media_batch(media_infos, options, progress.update)
-        progress.flush()
-
-        -- Always show the results summary — user needs to see what the
-        -- relinker found AND what it didn't, broken down by failure
-        -- kind. The distinction between "partial coverage" and "not
-        -- found" is load-bearing: partial means Apply will flag clips
-        -- with a shortfall note (they stay offline but with an
-        -- actionable message); not-found means the user needs to
-        -- locate the file or accept the clips remaining offline.
+    -- media_id → label/extent lookup the summary formatter needs.
+    local function build_info_lookup()
         local info_lookup = {}
         for _, mi in ipairs(media_infos) do
             info_lookup[mi.media_id] = {
@@ -690,39 +594,148 @@ function M.show(media_list, parent_window, opts)
                 source_extent_end   = mi.source_extent_end,
             }
         end
-        qt.CONTROL.SET_TEXT_EDIT_HTML(results_summary,
-            M._format_results_summary(results, info_lookup))
-        qt.DISPLAY.SET_VISIBLE(results_summary, true)
+        return info_lookup
+    end
 
-        if #results.relinked == 0 then
-            -- Nothing to apply — re-enable everything so user can retry
-            qt.CONTROL.SET_ENABLED(relink_btn, true)
-            qt.CONTROL.SET_ENABLED(browse_btn, true)
-            qt.CONTROL.SET_ENABLED(rules_btn, true)
-            if priority_btn then qt.CONTROL.SET_ENABLED(priority_btn, true) end
-            qt.PROPERTIES.SET_TEXT(relink_btn, "Relink")
+    local function set_rule_controls_enabled(enabled)
+        for _, rule in ipairs(relink_rules.RULES) do
+            qt.CONTROL.SET_ENABLED(rule_checkboxes[rule.key], enabled)
+        end
+    end
+
+    -- Classify the already-scanned candidates under the current rules and
+    -- render the summary. Cheap (no rescan/reprobe); safe on every toggle.
+    -- Leaves the Apply button enabled iff there is something to apply.
+    local function reclassify_and_render()
+        assert(scan_context, "reclassify_and_render: called before scan")
+        relink_results = media_relinker.classify_batch(
+            media_infos, scan_context, matching_rules, clip_loader)
+        qt.CONTROL.SET_TEXT_EDIT_HTML(results_summary,
+            M._format_results_summary(relink_results, build_info_lookup()))
+        qt.DISPLAY.SET_VISIBLE(results_summary, true)
+        qt.CONTROL.SET_ENABLED(relink_btn, #relink_results.relinked > 0)
+    end
+
+    -- First scan: walk the search tree once and pre-probe, then classify.
+    -- The context is retained so rule toggles re-classify without rescanning.
+    local function run_scan()
+        if not search_dir or search_dir == "" then
+            qt.PROPERTIES.SET_TEXT(error_label, "Select a search directory first")
+            qt.DISPLAY.SET_VISIBLE(error_label, true)
             return
         end
-
-        -- Success — show Apply button, keep other controls disabled
-        relink_results = results
-        qt.PROPERTIES.SET_TEXT(relink_btn, "Apply")
-        qt.CONTROL.SET_ENABLED(relink_btn, true)
-
-        _G[relink_name] = function()
-            qt.CONTROL.SET_ENABLED(relink_btn, false)
-            qt.CONTROL.SET_ENABLED(cancel_btn, false)
-            qt.PROPERTIES.SET_TEXT(relink_btn, "Applying…")
-            qt.PROPERTIES.SET_TEXT(header, "Applying relink changes…")
-            qt.CONTROL.PROCESS_EVENTS()
-            if opts.on_apply then
-                opts.on_apply({
-                    relink          = relink_results,
-                    folder_priority = folder_priority,
-                })
-            end
-            qt.DIALOG.CLOSE(dialog, true)
+        if not dir_exists(search_dir) then
+            qt.PROPERTIES.SET_TEXT(error_label, string.format(
+                "Search directory does not exist: %s", search_dir))
+            qt.DISPLAY.SET_VISIBLE(error_label, true)
+            return
         end
+        qt.DISPLAY.SET_VISIBLE(error_label, false)
+
+        qt.CONTROL.SET_ENABLED(relink_btn, false)
+        qt.CONTROL.SET_ENABLED(browse_btn, false)
+        set_rule_controls_enabled(false)
+        qt.PROPERTIES.SET_TEXT(relink_btn, "Scanning…")
+        progress.reset()
+        progress.show()
+        qt.CONTROL.PROCESS_EVENTS()
+
+        scan_context = media_relinker.scan_candidates(
+            media_infos, { search_dir }, progress.update)
+        progress.flush()
+        -- Scan/probe done — collapse the progress band so the results summary
+        -- (Expanding policy) grows into the freed space; its header line
+        -- ("N relinked • …") carries the completion confirmation.
+        progress.hide()
+
+        reclassify_and_render()
+
+        qt.CONTROL.SET_ENABLED(browse_btn, true)
+        set_rule_controls_enabled(true)
+        qt.PROPERTIES.SET_TEXT(relink_btn, "Apply")
+    end
+
+    -- Apply the current (live-classified) results.
+    local function run_apply()
+        if not (relink_results and #relink_results.relinked > 0) then return end
+        qt.CONTROL.SET_ENABLED(relink_btn, false)
+        qt.CONTROL.SET_ENABLED(cancel_btn, false)
+        set_rule_controls_enabled(false)
+        qt.PROPERTIES.SET_TEXT(relink_btn, "Applying…")
+        qt.PROPERTIES.SET_TEXT(header, "Applying relink changes…")
+        qt.CONTROL.PROCESS_EVENTS()
+        if opts.on_apply then
+            opts.on_apply({
+                relink          = relink_results,
+                folder_priority = folder_priority,
+            })
+        end
+        qt.DIALOG.CLOSE(dialog, true)
+    end
+
+    -- -----------------------------------------------------------------------
+    -- Handlers
+    -- -----------------------------------------------------------------------
+    -- Cancel (rejected signal)
+    local cancel_name = "__relink_dialog_cancel"
+    _G[cancel_name] = function()
+        qt.DIALOG.CLOSE(dialog, false)
+    end
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
+    globals[#globals + 1] = cancel_name
+
+    -- Browse: a new search tree invalidates the cached scan; next press rescans.
+    local browse_name = "__relink_dialog_browse"
+    _G[browse_name] = function()
+        local dir = file_browser.open_directory(
+            "relink_media", parent_window or dialog,
+            "Select Search Directory")
+        if dir and dir ~= "" then
+            search_dir = dir
+            qt.PROPERTIES.SET_TEXT(dir_edit, dir)
+            scan_context = nil
+            relink_results = nil
+            qt.DISPLAY.SET_VISIBLE(results_summary, false)
+            qt.PROPERTIES.SET_TEXT(relink_btn, "Relink")
+            qt.CONTROL.SET_ENABLED(relink_btn, true)
+        end
+    end
+    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(browse_btn, browse_name)
+    globals[#globals + 1] = browse_name
+
+    -- One toggle handler per rule checkbox. Persists the change, enforces the
+    -- "at least one anchor" guard (reverting the toggle if it would drop the
+    -- last of Filename/Timecode), and re-classifies live once a scan exists.
+    for _, rule in ipairs(relink_rules.RULES) do
+        local key = rule.key
+        local handler_name = "__relink_rule_" .. key
+        _G[handler_name] = function()
+            local candidate = {}
+            for _, r in ipairs(relink_rules.RULES) do
+                candidate[r.key] = qt.PROPERTIES.GET_CHECKED(rule_checkboxes[r.key])
+            end
+            local ok, err = relink_rules.validate(candidate)
+            if not ok then
+                -- Revert this toggle — the matcher needs an anchor.
+                qt.PROPERTIES.SET_CHECKED(rule_checkboxes[key],
+                    not qt.PROPERTIES.GET_CHECKED(rule_checkboxes[key]))
+                qt.PROPERTIES.SET_TEXT(error_label, err)
+                qt.DISPLAY.SET_VISIBLE(error_label, true)
+                return
+            end
+            qt.DISPLAY.SET_VISIBLE(error_label, false)
+            matching_rules = candidate
+            save_matching_rules(matching_rules)
+            if scan_context then reclassify_and_render() end
+        end
+        qt.CONTROL.SET_BUTTON_CLICK_HANDLER(rule_checkboxes[key], handler_name)
+        globals[#globals + 1] = handler_name
+    end
+
+    -- Relink/Apply (accepted signal): scan on first press, apply thereafter.
+    local relink_name = "__relink_dialog_relink"
+    _G[relink_name] = function()
+        if scan_context then run_apply() else run_scan() end
     end
     qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "accepted", relink_name)
     globals[#globals + 1] = relink_name
@@ -732,7 +745,7 @@ function M.show(media_list, parent_window, opts)
     -- -----------------------------------------------------------------------
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
     log.event("Showing Reconnect Media dialog (%d media, %d source folders)",
-        #media_list, #folder_roots)
+        #media_list, #folder_priority)
 
     qt.DIALOG.SHOW(dialog, false)  -- non-blocking: dialog appears now
 

@@ -101,7 +101,11 @@ function M.create(layout, opts)
     function panel.flush()
         -- Final update: progress bar, status, and log
         qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, 100)
-        if log_dirty or true then
+        -- Only reveal the log area if lines were actually appended. A flow that
+        -- reports progress via status text only (e.g. media relink) appends no
+        -- log lines, so revealing the widget just parks an empty box — the
+        -- relink dialog's blank gap. The prior `or true` force-showed it.
+        if log_dirty then
             qt.DISPLAY.SET_VISIBLE(log_area, true)
             local start = math.max(1, #log_lines - MAX_DISPLAY_LINES + 1)
             local display = {}
