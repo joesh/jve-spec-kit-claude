@@ -1273,13 +1273,17 @@ function M.load_clips(sequence_id)
 
     query:bind_value(1, sequence_id)
 
+    -- exec() returning false is a SQL execution error, never "no rows" (an empty
+    -- sequence exec()s true and next() is false on the first call). Swallowing it
+    -- would silently render an empty timeline; fail loud instead (mirrors
+    -- load_master_audio_refs and the prepare-failure path above).
+    assert(query:exec(), string.format(
+        "load_clips: clip query exec failed for sequence_id=%s", tostring(sequence_id)))
     local clips = {}
-    if query:exec() then
-        while query:next() do
-            local clip = build_clip_from_query_row(query, sequence_id)
-            if clip then
-                table.insert(clips, clip)
-            end
+    while query:next() do
+        local clip = build_clip_from_query_row(query, sequence_id)
+        if clip then
+            table.insert(clips, clip)
         end
     end
 
