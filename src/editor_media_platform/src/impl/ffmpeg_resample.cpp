@@ -1,6 +1,7 @@
 #include "ffmpeg_resample.h"
 #include "ffmpeg_context.h"
-#include <cassert>
+#include "../../../assert_handler.h"  // JVE_ASSERT (fires in Release; plain assert is stripped by -DNDEBUG)
+#include <string>
 
 namespace emp {
 namespace impl {
@@ -96,30 +97,34 @@ Result<void> FFmpegResampleContext::init(int src_sample_rate, const AVChannelLay
 
 int64_t FFmpegResampleContext::convert(const uint8_t* const* src_data, int src_samples,
                                         float* dst_data, int64_t dst_max_samples) {
-    assert(m_swr_ctx && "Resample context not initialized");
+    JVE_ASSERT(m_swr_ctx, "FFmpegResampleContext::convert: resample context not initialized");
 
     uint8_t* dst_planes[1] = { reinterpret_cast<uint8_t*>(dst_data) };
 
     int ret = swr_convert(m_swr_ctx, dst_planes, static_cast<int>(dst_max_samples),
                           src_data, src_samples);
 
-    if (ret < 0) {
-        return 0;  // Conversion error
-    }
+    // ret < 0 is a libswresample failure (AVERROR), NOT "0 frames produced"
+    // (that is ret == 0). Returning 0 here silently dropped audio: the decode
+    // loop reads it as "this frame yielded no output" and continues, so a
+    // resample fault surfaces as short/silent playback with no error. Fail loud.
+    JVE_ASSERT(ret >= 0,
+        ("FFmpegResampleContext::convert: swr_convert failed (AVERROR " + std::to_string(ret) + ")").c_str());
     return ret;
 }
 
 int64_t FFmpegResampleContext::flush(float* dst_data, int64_t dst_max_samples) {
-    assert(m_swr_ctx && "Resample context not initialized");
+    JVE_ASSERT(m_swr_ctx, "FFmpegResampleContext::flush: resample context not initialized");
 
     uint8_t* dst_planes[1] = { reinterpret_cast<uint8_t*>(dst_data) };
 
     int ret = swr_convert(m_swr_ctx, dst_planes, static_cast<int>(dst_max_samples),
                           nullptr, 0);
 
-    if (ret < 0) {
-        return 0;
-    }
+    // ret < 0 is a libswresample failure (AVERROR), not a drained-FIFO 0. Same
+    // silent-drop hazard as convert() — fail loud instead of returning 0.
+    JVE_ASSERT(ret >= 0,
+        ("FFmpegResampleContext::flush: swr_convert(flush) failed (AVERROR " + std::to_string(ret) + ")").c_str());
     return ret;
 }
 
@@ -134,7 +139,7 @@ void FFmpegResampleContext::reset() {
 }
 
 int64_t FFmpegResampleContext::get_out_samples(int in_samples) const {
-    assert(m_swr_ctx && "Resample context not initialized");
+    JVE_ASSERT(m_swr_ctx, "FFmpegResampleContext::get_out_samples: resample context not initialized");
     return swr_get_out_samples(m_swr_ctx, in_samples);
 }
 
