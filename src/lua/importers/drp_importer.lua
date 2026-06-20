@@ -1544,11 +1544,22 @@ local function parse_resolve_tracks(seq_elem, opts)
                 local y_in_sec  = eval_curve(retime_keyframes, in_sec)
                 local y_out_sec = eval_curve(retime_keyframes, out_sec)
                 if y_out_sec >= y_in_sec then
-                    -- FORWARD retime: source ascends with playback. <In> maps to
-                    -- the inclusive head (CEIL — first whole frame at-or-after
-                    -- y_in); the exclusive playback end <In>+<Duration> maps to
-                    -- the exclusive tail (FLOOR — last whole frame consumed).
-                    local in_frame  = rcm.snap_ceil (y_in_sec  * frame_rate)
+                    -- FORWARD retime: source ascends with playback. The clip's
+                    -- first timeline frame displays the source frame whose
+                    -- half-open interval [n, n+1) contains the sub-frame-accurate
+                    -- source position y_in — i.e. FLOOR(y_in). Resolve cuts its
+                    -- media-managed trim from that displayed frame, so source_in
+                    -- must floor too. (CEIL was a pre-sub-frame approximation:
+                    -- when the curve was sampled at the floored whole <In>, y_in
+                    -- was effectively whole and ceil rounded the dropped fraction
+                    -- back up. Now that the curve is sampled sub-frame-accurately
+                    -- — see the <In>+in_sub_frame fix above — ceil double-rounds
+                    -- and lands one source frame past Resolve's cut whenever y_in
+                    -- is fractional, e.g. 00.5G-1: y_in 517.043, ceil 518 vs the
+                    -- displayed floor 517.) The exclusive playback end
+                    -- <In>+<Duration> still maps to the exclusive tail (FLOOR —
+                    -- last whole frame consumed).
+                    local in_frame  = rcm.snap_floor(y_in_sec  * frame_rate)
                     local out_frame = rcm.snap_floor(y_out_sec * frame_rate)
                     -- Resolve occasionally writes a sub-frame-negative first
                     -- anchor (Y in [-0.01,0)); Inspector shows Source In = frame
@@ -1556,6 +1567,14 @@ local function parse_resolve_tracks(seq_elem, opts)
                     -- asserts below.
                     if in_frame < 0 and y_in_sec * frame_rate > -1.0 then
                         in_frame = 0
+                    end
+                    -- A freeze (flat curve, y_out==y_in) or an extreme slow-down
+                    -- collapses the source span onto a single frame:
+                    -- floor(y_in)==floor(y_out). A clip always reads at least one
+                    -- source frame and holds it, so guarantee a 1-frame source
+                    -- span (freeze model: source_out = source_in + 1).
+                    if out_frame <= in_frame then
+                        out_frame = in_frame + 1
                     end
                     in_offset = rcm.frames_to_native(in_frame, native_rate, frame_rate)
                     source_duration =

@@ -705,6 +705,7 @@ function M.decode_media_timemap(hex_str)
         -- Valid curves span the full master clip:
         --   Forward: first≈(0, 0)         last≈(XMax, YMax)
         --   Reverse: first≈(0, YMax)      last≈(XMax, 0)
+        --   Freeze:  first≈(0, YMax)      last≈(XMax, YMax)   (flat hold)
         -- Discard only when keyframes look like garbage (all-zero anchors from
         -- tangent-only test fixtures).
         if keyframes and #keyframes >= 2 then
@@ -713,12 +714,19 @@ function M.decode_media_timemap(hex_str)
             local epsilon = 0.1  -- seconds; 0.01 was too tight for Resolve's rounding
             local x_ok = math.abs(first.x) < epsilon
                 and math.abs(last.x - x_max) < epsilon
-            -- Y endpoints: forward (0→YMax) or reverse (YMax→0)
+            -- Y endpoints: forward (0→YMax), reverse (YMax→0), or freeze
+            -- (YMax→YMax). A freeze is a flat curve (YMin==YMax in the blob): a
+            -- legitimate Resolve retime that holds one source frame, NOT garbage.
+            -- Keeping it lets the importer evaluate the constant held source
+            -- position; discarding it forced a from-origin ramp synthesis that
+            -- landed source_in at the wrong (far-too-early) frame.
             local forward_ok = math.abs(first.y) < epsilon
                 and math.abs(last.y - y_max) < epsilon
             local reverse_ok = math.abs(first.y - y_max) < epsilon
                 and math.abs(last.y) < epsilon
-            if not (x_ok and (forward_ok or reverse_ok)) then
+            local freeze_ok = math.abs(first.y - y_max) < epsilon
+                and math.abs(last.y - y_max) < epsilon
+            if not (x_ok and (forward_ok or reverse_ok or freeze_ok)) then
                 log.detail("decode_media_timemap: keyframes inconsistent with YMax/XMax — first=(%.3f,%.3f) last=(%.3f,%.3f) ymax=%.3f xmax=%.3f — discarding curve",
                     first.x, first.y, last.x, last.y, y_max, x_max)
                 keyframes = nil
