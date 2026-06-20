@@ -211,6 +211,7 @@ for t in \
   test_audio_per_channel_extraction.lua \
   test_inspector_set_value_undo.lua \
   test_inspector_focus_scroll.lua \
+  test_inspector_panel_theme.lua \
   test_peak_gen_admission.lua \
   test_peak_per_channel.lua \
   test_peak_braw_per_channel.lua \

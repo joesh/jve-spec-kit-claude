@@ -425,14 +425,11 @@ int lua_create_timeline_renderer(lua_State* L) {
 }
 
 int lua_create_inspector_panel(lua_State* L) {
+    // Bare container — color is the theme layer's job (see
+    // inspector.mount, which styles it from the INSPECTOR_CONTENT_BG
+    // token). The binding owns structure only, never appearance.
     StyledWidget* inspector_container = new StyledWidget();
     inspector_container->setObjectName("LuaInspectorContainer");
-    inspector_container->setStyleSheet(
-        "QWidget#LuaInspectorContainer { "
-        "    background: #2b2b2b; "
-        "    border: 1px solid #444; "
-        "}"
-    );
     lua_push_widget(L, inspector_container);
     return 1;
 }
