@@ -1,5 +1,6 @@
 #include "ffmpeg_context.h"
 #include "ffmpeg_hwaccel.h"
+#include "../../../assert_handler.h"  // JVE_ASSERT (fires in Release; plain assert is stripped by -DNDEBUG)
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -402,13 +403,18 @@ Result<void> FFmpegScaleContext::reinit_output(int dst_width, int dst_height) {
 }
 
 void FFmpegScaleContext::convert(AVFrame* src, uint8_t* dst_data, int dst_stride) {
-    assert(m_sws_ctx && "Scale context not initialized");
+    JVE_ASSERT(m_sws_ctx, "FFmpegScaleContext::convert: scale context not initialized");
 
     uint8_t* dst_planes[4] = {dst_data, nullptr, nullptr, nullptr};
     int dst_strides[4] = {dst_stride, 0, 0, 0};
 
-    sws_scale(m_sws_ctx, src->data, src->linesize, 0, src->height,
-              dst_planes, dst_strides);
+    // sws_scale returns the output slice height, or a negative AVERROR on
+    // failure. Ignoring it let a scale fault produce a garbage/black frame with
+    // no error surfaced — a silent failure on the hot video path. Fail loud.
+    int ret = sws_scale(m_sws_ctx, src->data, src->linesize, 0, src->height,
+                        dst_planes, dst_strides);
+    JVE_ASSERT(ret >= 0,
+        ("FFmpegScaleContext::convert: sws_scale failed (AVERROR " + std::to_string(ret) + ")").c_str());
 }
 
 // Utility functions
