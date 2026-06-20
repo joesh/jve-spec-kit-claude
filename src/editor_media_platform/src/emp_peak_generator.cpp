@@ -4,9 +4,9 @@
 #include <algorithm>
 #include <limits>
 #include <vector>
-#include <cassert>
 #include <sys/stat.h>
 #include "../../jve_log.h"
+#include "../../assert_handler.h"  // JVE_ASSERT (fires in Release; plain assert is stripped by -DNDEBUG)
 
 namespace emp {
 
@@ -63,10 +63,10 @@ void PeakGenerator::RequestPeaks(const std::string& media_id,
                                   const std::string& output_path,
                                   int source_channel)
 {
-    assert(!media_id.empty() && "PeakGenerator::RequestPeaks: media_id must not be empty");
-    assert(!media_path.empty() && "PeakGenerator::RequestPeaks: media_path must not be empty");
-    assert(!output_path.empty() && "PeakGenerator::RequestPeaks: output_path must not be empty");
-    assert(source_channel >= -1 &&
+    JVE_ASSERT(!media_id.empty(), "PeakGenerator::RequestPeaks: media_id must not be empty");
+    JVE_ASSERT(!media_path.empty(), "PeakGenerator::RequestPeaks: media_path must not be empty");
+    JVE_ASSERT(!output_path.empty(), "PeakGenerator::RequestPeaks: output_path must not be empty");
+    JVE_ASSERT(source_channel >= -1,
         "PeakGenerator::RequestPeaks: source_channel must be -1 (composite) or >= 0");
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -284,7 +284,7 @@ static bool OpenMediaAndReader(std::shared_ptr<MediaFile>& out_media,
 
 static int64_t ComputeTotalSamples(const MediaFileInfo& info)
 {
-    assert(info.duration_us > 0 && "PeakGenerator: duration_us must be positive");
+    JVE_ASSERT(info.duration_us > 0, "PeakGenerator: duration_us must be positive");
     return static_cast<int64_t>(
         static_cast<double>(info.duration_us) / 1000000.0 * info.audio_sample_rate);
 }
@@ -328,11 +328,11 @@ static PeakBuffer AllocatePeakBuffer(int64_t total_samples)
 static void TrimPeakBufferToActualSamples(PeakBuffer& buf, int64_t actual_samples)
 {
     PeakBuffer trimmed = AllocatePeakBuffer(actual_samples);
-    assert(trimmed.level_offsets[0] == 0 &&
+    JVE_ASSERT(trimmed.level_offsets[0] == 0,
         "PeakGenerator: trimmed level 0 must start at offset 0");
-    assert(buf.level_offsets[0] == 0 &&
+    JVE_ASSERT(buf.level_offsets[0] == 0,
         "PeakGenerator: source level 0 must start at offset 0");
-    assert(trimmed.bins_per_level[0] <= buf.bins_per_level[0] &&
+    JVE_ASSERT(trimmed.bins_per_level[0] <= buf.bins_per_level[0],
         "PeakGenerator: trim target must not exceed original bin count");
 
     size_t copy_floats = trimmed.bins_per_level[0] * 2;
@@ -346,8 +346,8 @@ static void AccumulateSamplesToLevel0(PeakBuffer& buf,
                                        int channels,
                                        int64_t samples_processed)
 {
-    assert(audio && "PeakGenerator: audio data pointer is null");
-    assert(channels > 0 && "PeakGenerator: channels must be > 0");
+    JVE_ASSERT(audio, "PeakGenerator: audio data pointer is null");
+    JVE_ASSERT(channels > 0, "PeakGenerator: channels must be > 0");
 
     for (int64_t s = 0; s < decoded_frames; ++s) {
         float sample_min = audio[s * channels];
@@ -472,7 +472,7 @@ bool PeakGenerator::InitJob(ChunkedJob& job)
     }
 
     job.total_samples = ComputeTotalSamples(job.info);
-    assert(job.total_samples > 0 &&
+    JVE_ASSERT(job.total_samples > 0,
         "PeakGenerator::InitJob: total_samples must be positive");
 
     job.peak_buf = AllocatePeakBuffer(job.total_samples);
@@ -545,10 +545,10 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
         return false;
     }
 
-    assert(pcm->data_f32() && "PeakGenerator::ProcessOneChunk: decoded PCM has null data");
+    JVE_ASSERT(pcm->data_f32(), "PeakGenerator::ProcessOneChunk: decoded PCM has null data");
 
     int64_t frames_to_use = std::min(decoded_frames, job.total_samples - job.decode_position);
-    assert(frames_to_use > 0 &&
+    JVE_ASSERT(frames_to_use > 0,
         "PeakGenerator::ProcessOneChunk: no usable frames");
 
     AccumulateSamplesToLevel0(job.peak_buf, pcm->data_f32(), frames_to_use,
