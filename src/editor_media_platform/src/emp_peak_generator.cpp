@@ -555,11 +555,14 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
                               pcm->channels(), job.decode_position);
 
     job.decode_position += decoded_frames;
-    // Successful decode: these samples are in the buffer. On an all-success
-    // job decoded_ok_samples tracks decode_position exactly, so FinalizeJob's
-    // coverage check is unchanged for healthy media; only failed chunks make
-    // the two diverge.
-    job.decoded_ok_samples += decoded_frames;
+    // decoded_ok_samples counts samples actually WRITTEN to the buffer, which
+    // is frames_to_use (clamped to the total boundary) — not decoded_frames,
+    // which can overshoot total_samples on a boundary-crossing chunk. Using the
+    // clamped count keeps FinalizeJob's coverage gate honest: an overshooting
+    // success chunk can't inflate coverage and let a truncated (failed-chunk)
+    // job slip past the 0.95 threshold. On a healthy job the sum of frames_to_use
+    // equals total_samples exactly, so the gate is unchanged for good media.
+    job.decoded_ok_samples += frames_to_use;
     job.progress_samples.store(
         std::min(job.decode_position, job.total_samples),
         std::memory_order_release);
