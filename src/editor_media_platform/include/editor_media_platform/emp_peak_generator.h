@@ -119,7 +119,14 @@ private:
 
         // Peak data (level 0 written by workers, read by main thread via fence)
         PeakBuffer peak_buf;
-        int64_t decode_position = 0;  // next sample to decode
+        int64_t decode_position = 0;     // next sample to decode (advances even
+                                         // on a failed chunk, to terminate)
+        int64_t decoded_ok_samples = 0;  // samples actually decoded into the
+                                         // buffer; failed chunks do NOT count.
+                                         // FinalizeJob's coverage check uses
+                                         // this, so an undecodable channel
+                                         // fails the job instead of writing a
+                                         // flat peak file as "complete".
     };
 
     // Worker thread entry point

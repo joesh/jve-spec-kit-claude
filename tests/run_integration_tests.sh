@@ -213,6 +213,7 @@ for t in \
   test_inspector_focus_scroll.lua \
   test_peak_gen_admission.lua \
   test_peak_per_channel.lua \
+  test_peak_braw_per_channel.lua \
   test_peak_composite_fold.lua \
   test_channel_names_ixml.lua \
   test_peak_gen_cancel_all_re_request.lua \

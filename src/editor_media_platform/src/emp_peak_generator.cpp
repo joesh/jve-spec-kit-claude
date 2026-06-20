@@ -510,8 +510,14 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
     // exactly that channel.
     auto pcm_result = job.reader->DecodeAudioRange(t0, t1, job.out_fmt, job.source_channel);
     if (pcm_result.is_error()) {
-        JVE_LOG_WARN(Media, "PeakGenerator: decode failed at sample %lld for %s",
-            (long long)job.decode_position, job.media_id.c_str());
+        // Advance the file position so the job still terminates, but do NOT
+        // count these samples as decoded (decoded_ok_samples). FinalizeJob
+        // uses decoded_ok_samples for its coverage check, so a chunk that
+        // failed to decode lowers coverage and — if enough fail — fails the
+        // job loudly instead of writing a flat/garbage peak file as "complete".
+        JVE_LOG_WARN(Media, "PeakGenerator: decode failed at sample %lld for %s: %s",
+            (long long)job.decode_position, job.media_id.c_str(),
+            pcm_result.error().message.c_str());
         job.decode_position += this_chunk;
         job.progress_samples.store(
             std::min(job.decode_position, job.total_samples),
@@ -549,6 +555,11 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
                               pcm->channels(), job.decode_position);
 
     job.decode_position += decoded_frames;
+    // Successful decode: these samples are in the buffer. On an all-success
+    // job decoded_ok_samples tracks decode_position exactly, so FinalizeJob's
+    // coverage check is unchanged for healthy media; only failed chunks make
+    // the two diverge.
+    job.decoded_ok_samples += decoded_frames;
     job.progress_samples.store(
         std::min(job.decode_position, job.total_samples),
         std::memory_order_release);
@@ -562,38 +573,46 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
 
 void PeakGenerator::FinalizeJob(ChunkedJob& job)
 {
-    // Authoritative actual-decoded count. decode_position may transiently
-    // exceed total_samples when a chunk over-delivers (clamped via min).
-    // It may also fall short of total_samples when the decoder hits EOF
-    // before the duration estimate predicted (AAC priming etc.).
-    int64_t actual_samples = std::min(job.decode_position, job.total_samples);
-    assert(actual_samples > 0 &&
-        "PeakGenerator::FinalizeJob: no samples were decoded");
+    // Authoritative actual-decoded count: samples that genuinely decoded
+    // into the buffer. decoded_ok_samples excludes failed chunks (which
+    // still advanced decode_position to let the job terminate). It may fall
+    // short of total_samples on clean EOF (the decoder hits end before the
+    // duration estimate predicted — AAC priming etc.), in which case it
+    // equals decode_position and behavior matches the historical path.
+    int64_t actual_samples = std::min(job.decoded_ok_samples, job.total_samples);
 
     // Refuse to persist a peak file whose decoded coverage falls far
-    // short of the expected total. ProcessOneChunk accepts a zero-frame
-    // read as clean EOF; we have observed this firing mid-stream at
-    // ~50% of expected samples on otherwise-healthy Resolve Media-Manage
-    // MOVs (TSO 2026-04-24, anamnesis-gold-timeline). Root cause is not
-    // understood — the regen on the next project open produced a
-    // complete peak file against the same media. A truncated peak file
-    // whose mtime matches the media's mtime is served as authoritative
-    // by peak_cache across sessions, so dropping the file is the only
-    // way to force a retry. The stricter coverage check in
-    // peak_cache.try_load_existing catches pre-existing truncated
-    // files; this prevents newly-generated ones from joining them.
+    // short of the expected total. Two ways this fires:
+    //   - Truncation: ProcessOneChunk accepts a zero-frame read as clean
+    //     EOF; we have observed this mid-stream at ~50% of expected samples
+    //     on otherwise-healthy Resolve Media-Manage MOVs (TSO 2026-04-24,
+    //     anamnesis-gold-timeline). Root cause unknown — regen on the next
+    //     open produced a complete file against the same media.
+    //   - Decode failure: an undecodable channel (e.g. per-channel
+    //     extraction the backend can't do, or an out-of-range channel)
+    //     leaves decoded_ok_samples at/near 0. Failing the job loudly here
+    //     is what stops a flat/garbage envelope being written as "complete".
+    // A truncated peak file whose mtime matches the media's mtime is served
+    // as authoritative by peak_cache across sessions, so failing the job
+    // (no file written) is the only way to force a retry. The stricter
+    // coverage check in peak_cache.try_load_existing catches pre-existing
+    // truncated files; this prevents newly-generated ones from joining them.
     constexpr double TRUNCATION_THRESHOLD = 0.95;
-    const double coverage = static_cast<double>(actual_samples)
-        / static_cast<double>(job.total_samples);
+    const double coverage = job.total_samples > 0
+        ? static_cast<double>(actual_samples) / static_cast<double>(job.total_samples)
+        : 0.0;
     if (coverage < TRUNCATION_THRESHOLD) {
-        JVE_LOG_WARN(Media,
+        JVE_LOG_ERROR(Media,
             "PeakGenerator: decoded %lld / %lld samples (%.1f%%) for %s — "
-            "refusing to write truncated peak file; next open will retry",
+            "failing job, refusing to write incomplete peak file; next open will retry",
             (long long)actual_samples, (long long)job.total_samples,
             coverage * 100.0, job.media_id.c_str());
         MarkJobDone(job, /*success=*/false);
         return;
     }
+
+    assert(actual_samples > 0 &&
+        "PeakGenerator::FinalizeJob: coverage passed but no samples decoded");
 
     // If the decoder delivered fewer samples than the duration-based
     // estimate, shrink the peak buffer so mipmaps and the written file

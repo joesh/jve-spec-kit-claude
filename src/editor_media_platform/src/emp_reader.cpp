@@ -899,7 +899,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRange(FrameTime t0, FrameTi
 // for BRAW, and it requests source rate — no resample is needed. Future
 // callers that need resampling or stereo downmix must add it explicitly.
 Result<std::shared_ptr<PcmChunk>> Reader::decode_braw_audio_range(
-    TimeUS t0_us, TimeUS t1_us, const AudioFormat& out) {
+    TimeUS t0_us, TimeUS t1_us, const AudioFormat& out, int source_channel) {
     const int32_t src_rate = m_impl->braw->audio_sample_rate();
     const int32_t src_ch = m_impl->braw->audio_channels();
     if (out.sample_rate != src_rate) {
@@ -909,6 +909,11 @@ Result<std::shared_ptr<PcmChunk>> Reader::decode_braw_audio_range(
     }
     if (out.fmt != SampleFormat::F32) {
         return Error::unsupported("BRAW audio: only F32 output supported");
+    }
+    if (source_channel >= src_ch) {
+        return Error::invalid_arg(
+            "BRAW audio: source_channel " + std::to_string(source_channel) +
+            " out of range for " + std::to_string(src_ch) + "-channel source");
     }
 
     const int64_t start_sample = (t0_us * src_rate) / 1000000;
@@ -925,6 +930,25 @@ Result<std::shared_ptr<PcmChunk>> Reader::decode_braw_audio_range(
     // it from pcm.size() / channels so we don't thread it separately.
 
     const TimeUS start_us = (start_sample * 1000000) / src_rate;
+
+    // Composite (-1): keep the native interleaved channels; the peak/mix
+    // consumer folds them. Single channel (>= 0): deinterleave that one
+    // source channel into dual-mono stereo, mirroring the swr remap matrix
+    // the FFmpeg path uses (route one channel to BOTH stereo lanes).
+    if (source_channel >= 0) {
+        const int64_t frames = static_cast<int64_t>(pcm.size()) / src_ch;
+        constexpr int STEREO = 2;
+        std::vector<float> dual_mono(static_cast<size_t>(frames * STEREO));
+        for (int64_t f = 0; f < frames; ++f) {
+            const float v = pcm[static_cast<size_t>(f * src_ch + source_channel)];
+            dual_mono[static_cast<size_t>(f * STEREO)] = v;
+            dual_mono[static_cast<size_t>(f * STEREO + 1)] = v;
+        }
+        auto chunk_impl = std::make_unique<PcmChunkImpl>(
+            src_rate, STEREO, SampleFormat::F32, start_us, std::move(dual_mono));
+        return std::make_shared<PcmChunk>(std::move(chunk_impl));
+    }
+
     auto chunk_impl = std::make_unique<PcmChunkImpl>(
         src_rate, src_ch, SampleFormat::F32, start_us, std::move(pcm));
     return std::make_shared<PcmChunk>(std::move(chunk_impl));
@@ -951,15 +975,11 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     }
 
     // BRAW bypasses the FFmpeg decode + resample path — read synchronously
-    // from the SDK at native rate/channels. See decode_braw_audio_range.
-    // Per-channel extraction is not wired through the BRAW path yet; fail fast
-    // rather than silently returning the wrong (composite native) audio.
+    // from the SDK at native rate/channels. See decode_braw_audio_range,
+    // which honors source_channel the same way the swr path does (composite
+    // fold vs. single-channel dual-mono extraction).
     if (m_impl->braw && m_impl->braw->has_audio()) {
-        if (source_channel >= 0) {
-            return Error::unsupported(
-                "DecodeAudioRangeUS: per-channel extraction not supported for BRAW audio");
-        }
-        return decode_braw_audio_range(t0_us, t1_us, out);
+        return decode_braw_audio_range(t0_us, t1_us, out, source_channel);
     }
 
     // ── Decode cache: serve from chunk cache if available ──

@@ -93,9 +93,12 @@ public:
 private:
     // BRAW-specific audio path — synchronous SDK read, no resample.
     // DecodeAudioRangeUS delegates here when the media uses the BRAW
-    // backend and the clip has an audio track.
+    // backend and the clip has an audio track. source_channel mirrors the
+    // FFmpeg/swr path: -1 = composite (native interleaved channels, folded
+    // downstream); >= 0 = extract that one source channel to dual-mono
+    // stereo (out range error if it exceeds the source channel count).
     Result<std::shared_ptr<PcmChunk>> decode_braw_audio_range(
-        TimeUS t0_us, TimeUS t1_us, const AudioFormat& out);
+        TimeUS t0_us, TimeUS t1_us, const AudioFormat& out, int source_channel);
 
     std::unique_ptr<ReaderImpl> m_impl;
     std::shared_ptr<MediaFile> m_media_file;
