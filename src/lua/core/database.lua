@@ -1143,16 +1143,19 @@ local function load_master_audio_refs(master_seq_id)
     assert(q, "load_master_audio_refs: failed to prepare query")
     q:bind_value(1, master_seq_id)
     local refs = {}
-    if q:exec() then
-        while q:next() do
-            refs[#refs + 1] = {
-                media_id             = q:value(0),
-                source_channel       = q:value(1),
-                source_in_frame      = q:value(2),
-                sequence_start_frame = q:value(3),
-                audio_sample_rate    = q:value(4),
-            }
-        end
+    -- exec() returning false is a query error (not "zero rows"); a swallowed
+    -- error here would surface later as a composite clip with no channels.
+    assert(q:exec(), string.format(
+        "load_master_audio_refs: query exec failed for master_seq_id=%s",
+        tostring(master_seq_id)))
+    while q:next() do
+        refs[#refs + 1] = {
+            media_id             = q:value(0),
+            source_channel       = q:value(1),
+            source_in_frame      = q:value(2),
+            sequence_start_frame = q:value(3),
+            audio_sample_rate    = q:value(4),
+        }
     end
     q:finalize()
     return refs
@@ -1180,6 +1183,7 @@ end
 --- track's label from the recorder's iXML channel name (lazy probe).
 function M.get_track_channel_source(track_id)
     assert(track_id, "get_track_channel_source: track_id required")
+    assert(db_connection, "get_track_channel_source: no database connection")
     local q = db_connection:prepare([[
         SELECT mr.media_id, mr.source_channel, m.file_path
         FROM media_refs mr
