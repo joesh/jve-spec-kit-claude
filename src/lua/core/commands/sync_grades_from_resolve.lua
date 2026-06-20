@@ -533,78 +533,99 @@ request_and_apply_grades = function(client, args, report, db, command,
     -- 15 minutes is sized for 30k clips at the measured rate with
     -- headroom — well above any real Anamnesis-class timeline.
     local BAKE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
+    -- Apply a non-nil read_grades response and build its terminal
+    -- (result, code, message) tuple for notify(). Returns the
+    -- version_skew failure when the helper predates the warnings
+    -- protocol; otherwise mutates the model via M.apply and returns the
+    -- success payload. Internal-invariant asserts (e.g. a missing baked
+    -- cube in new_grade_from_response_row) propagate as Lua errors to
+    -- the caller's pcall — see the response handler below.
+    --
+    -- Helper anomaly channel (helper-protocol.md §read_grades
+    -- `warnings`): bake/page anomalies that didn't fail the verb but
+    -- leave user-visible damage (clips without a grade carrier, Resolve
+    -- stuck on the Color page). Logged at warn so they're visible at
+    -- default log level — stderr-only proved invisible in the
+    -- 2026-06-10 incident. Missing field = version skew (helper predates
+    -- this protocol); surface as structured error so the user can
+    -- restart JVE to respawn the helper.
+    local function build_terminal_result(response)
+        if type(response.result.warnings) ~= "table" then
+            return nil, "version_skew",
+                "read_grades response has no warnings array — "
+                .. "helper process predates this protocol; "
+                .. "restart JVE to respawn the helper"
+        end
+        for _, w in ipairs(response.result.warnings) do
+            log.warn("read_grades: %s", w)
+        end
+        local captured = M.apply(response.result, sequence_id, db,
+            os.time())
+        -- Persist captured onto the live command so the undoer can find
+        -- it. command_manager holds this same command-object reference
+        -- in the undo stack; a late set_parameter from the async
+        -- response handler is visible to the undoer when the user
+        -- eventually presses undo. Without this, undo would hit the
+        -- undoer's "args.captured required" assert (contract break per
+        -- 2.13/2.32 — fail-loud is correct; a silent no-op would leave
+        -- the user with a broken "undo did nothing" state).
+        command:set_parameter("captured", captured)
+        -- applied_count = response rows that landed on a JVE clip (via
+        -- ledger). Subtract unmatched so callers see the count that
+        -- actually mutated state, not the raw helper row count (which
+        -- can include unmatched resolve_item_ids per FR-011c
+        -- report-not-skip).
+        return {
+            applied_count           = #response.result.grades
+                - #captured.unmatched_resolve_items,
+            unmatched_resolve_items = captured.unmatched_resolve_items,
+            captured                = captured,
+            -- What auto-discovery (FR-011c) just (un)linked — the
+            -- counterpart of applied_count for identity. Callers and
+            -- tests see matching outcomes per-sync instead of via a
+            -- separate connect command's result.
+            discovery               = {
+                matched        = report.matched,
+                already_linked = report.already_linked,
+                unmatched      = report.unmatched,
+                ambiguous      = report.ambiguous,
+                audio_skipped  = report.audio_skipped,
+                rate_mismatch  = report.rate_mismatch,
+                stamped        = report.stamped,
+                stamp_skipped  = report.stamp_skipped,
+                stamp_failures = report.stamp_failures,
+            },
+        }, nil, nil
+    end
+
     client:request("read_grades", helper_args,
         function(response, code, message)
             if response == nil then
                 notify(args, nil, code, message)
                 return
             end
-            -- Async-tail asserts crash by design — see the contract
-            -- documented in bridge_completion.lua (executor's pcall
-            -- only catches sync-phase asserts before client:request
-            -- returns; this callback runs after that pcall has
-            -- popped). Masking an internal invariant violation as
-            -- resolve_api_error would conflate origin (rule 2.21)
-            -- and downgrade rule 1.14.
-            --
-            -- Helper anomaly channel (helper-protocol.md
-            -- §read_grades `warnings`): bake/page anomalies that
-            -- didn't fail the verb but leave user-visible damage
-            -- (clips without a grade carrier, Resolve stuck on the
-            -- Color page). Logged at warn so they're visible at
-            -- default log level — stderr-only proved invisible in
-            -- the 2026-06-10 incident. Missing field = version skew
-            -- (helper predates this protocol); surface as structured
-            -- error so the user can restart JVE to respawn the helper.
-            if type(response.result.warnings) ~= "table" then
-                notify(args, nil, "version_skew",
-                    "read_grades response has no warnings array — "
-                    .. "helper process predates this protocol; "
-                    .. "restart JVE to respawn the helper")
+            -- The apply phase can hit internal-invariant asserts (e.g. a
+            -- baked cube missing from disk in new_grade_from_response_row).
+            -- The C++ socket boundary SWALLOWS errors raised on this
+            -- response callback — jve_invoke_lua_callback →
+            -- jve_handle_lua_callback_error logs+pops+continues and never
+            -- re-raises (see src/jve_lua_callback.h). So an un-caught
+            -- assert here would never reach notify(): the *_completed
+            -- signal would never fire and the FR-016 "Syncing…" indicator
+            -- would hang until restart (rule 2.32 silent failure). Catch
+            -- apply failures and route them through the ONE terminal path
+            -- as a loud failure. No fallback values — the error is
+            -- surfaced (error log + completion signal + on_complete), not
+            -- masked as a fake result. apply_failed names the origin as a
+            -- JVE-internal apply fault, distinct from resolve_api_error
+            -- (rule 2.21 — don't conflate the failing layer).
+            local ok, result, rcode, rmessage =
+                pcall(build_terminal_result, response)
+            if not ok then
+                notify(args, nil, "apply_failed", tostring(result))
                 return
             end
-            for _, w in ipairs(response.result.warnings) do
-                log.warn("read_grades: %s", w)
-            end
-            local captured = M.apply(response.result, sequence_id, db,
-                os.time())
-            -- Persist captured onto the live command so the undoer
-            -- can find it. command_manager holds this same command-
-            -- object reference in the undo stack; a late
-            -- set_parameter from the async response handler is
-            -- visible to the undoer when the user eventually presses
-            -- undo. Without this, undo would hit the undoer's
-            -- "args.captured required" assert (contract break per
-            -- 2.13/2.32 — fail-loud is correct; a silent no-op
-            -- would leave the user with a broken "undo did
-            -- nothing" state).
-            command:set_parameter("captured", captured)
-            -- applied_count = response rows that landed on a JVE
-            -- clip (via ledger). Subtract unmatched so callers see
-            -- the count that actually mutated state, not the raw
-            -- helper row count (which can include unmatched
-            -- resolve_item_ids per FR-011c report-not-skip).
-            notify(args, {
-                applied_count           = #response.result.grades
-                    - #captured.unmatched_resolve_items,
-                unmatched_resolve_items = captured.unmatched_resolve_items,
-                captured                = captured,
-                -- What auto-discovery (FR-011c) just (un)linked — the
-                -- counterpart of applied_count for identity. Callers
-                -- and tests see matching outcomes per-sync instead of
-                -- via a separate connect command's result.
-                discovery               = {
-                    matched        = report.matched,
-                    already_linked = report.already_linked,
-                    unmatched      = report.unmatched,
-                    ambiguous      = report.ambiguous,
-                    audio_skipped  = report.audio_skipped,
-                    rate_mismatch  = report.rate_mismatch,
-                    stamped        = report.stamped,
-                    stamp_skipped  = report.stamp_skipped,
-                    stamp_failures = report.stamp_failures,
-                },
-            }, nil, nil)
+            notify(args, result, rcode, rmessage)
         end,
         { timeout_ms = BAKE_REQUEST_TIMEOUT_MS })
 end

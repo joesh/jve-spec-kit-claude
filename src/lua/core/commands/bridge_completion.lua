@@ -14,8 +14,15 @@
 --- the caught error through `notify()` — that catches SYNC-phase asserts
 --- (input validation, payload_builder, Sequence.load, anything BEFORE
 --- `client:request` returns). ASYNC-phase asserts (failures inside the
---- response callback) are deliberately NOT pcall-wrapped: those are
---- internal-invariant violations and must crash hard per rule 1.14.
+--- response callback) MUST ALSO be pcall-caught and routed through
+--- `notify()` as a failure: the C++ socket boundary delivering the
+--- response (jve_invoke_lua_callback → jve_handle_lua_callback_error)
+--- SWALLOWS any error raised on that callback — it logs+pops+continues
+--- and never re-raises — so an un-caught async assert never reaches
+--- notify(), the `<op>_completed` signal never fires, and any
+--- in-progress UI indicator (e.g. FR-016 "Syncing…") hangs until
+--- restart. A swallowed assert is a worse 2.32 silent failure than a
+--- surfaced one; route it through the one terminal path instead.
 ---
 --- Signal asymmetry — do NOT merge:
 ---   * `grades_changed(sequence_id)`: model-mutation signal; cache
@@ -117,10 +124,12 @@ end
 --- intact.
 ---
 --- Async (helper response) terminal paths route through notify()
---- directly from inside M.execute and bypass this wrapper. Those are
---- uncatchable on the response thread by design (rule 1.14):
---- invariant violations in the async tail are real internal bugs that
---- must crash, not be downgraded.
+--- directly from inside M.execute and bypass this wrapper. They must
+--- pcall the response-handler body themselves and route a caught error
+--- through notify() as a failure: the C++ socket boundary swallows
+--- errors raised on the response callback (logs+pops+continues, never
+--- re-raises), so an un-caught async assert would vanish silently and
+--- strand the *_completed signal (rule 2.32) — worse than surfacing it.
 ---
 --- @param command_executors table  executors registry to install into
 --- @param op_name string           the command's registered op name
