@@ -135,10 +135,10 @@ db:exec(string.format(
 -- Without removing it, step 2's "first gen for this media_id" assertion
 -- runs against a stale peak file whose embedded mtime matches the current
 -- fixture mtime, so try_load_existing reuses instead of regenerating.
--- get_peak_cache_dir requires the project to exist, so this must run AFTER
--- the INSERT above.
+-- The peak cache dir is global (project-independent); the stale file is
+-- keyed by media_id, so clearing it here is what matters.
 do
-    local stale_peak_dir = assert(database.get_peak_cache_dir(project_id),
+    local stale_peak_dir = assert(database.get_peak_cache_dir(),
         "test setup: database.get_peak_cache_dir must return a path "
         .. "(stale peak files from prior runs would otherwise persist and "
         .. "invalidate the regen-detection assertions)")
@@ -217,7 +217,7 @@ local n2 = take_request_count_delta("step2")
 assert(n2 == 1, string.format(
     "relink to CLICK_WAV should request exactly 1 gen, got %d", n2))
 
-local cache_dir = database.get_peak_cache_dir(project_id)
+local cache_dir = database.get_peak_cache_dir()
 -- Per-channel peak file stem is "<media_id>__ch<N>" (composite would be the
 -- bare media_id). This media is mono → channel 0.
 local peak_path = cache_dir .. "/" .. media_id .. "__ch" .. CHANNEL .. ".peaks"

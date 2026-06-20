@@ -352,12 +352,30 @@ end
 --- state; (2) per referenced (media, channel) — queue/load that channel's
 --- waveform envelope. One audio clip plays one file channel, so the
 --- channels enumerated in pass 2 are exactly the waveforms the timeline shows.
+-- One-time legacy-layout sweep + size-capped LRU reclamation of the global
+-- peak cache. Runs at the tail of init_for_project, once the session's peaks
+-- are warmed: the keys held open (loaded handles) or mid-generation are
+-- protected from eviction; everything else is eligible to age out under the
+-- configured byte ceiling. (Reclamation replaces the old per-project
+-- directory deletion, which a global cache has no equivalent for.)
+local function reclaim_global_cache(database)
+    local reclaim = require("core.media.peak_cache_reclaim")
+    reclaim.migrate_legacy_layout(database.get_cache_root())
+
+    local in_use = {}
+    for key in pairs(peak_handles) do in_use[key] = true end
+    for key, status in pairs(generation_status) do
+        if status == "generating" then in_use[key] = true end
+    end
+    reclaim.reclaim_lru(cache_dir, reclaim.read_max_bytes(), in_use)
+end
+
 function M.init_for_project(project_id)
     assert(project_id and project_id ~= "",
         "peak_cache.init_for_project: project_id required")
 
     local database = require("core.database")
-    cache_dir = database.get_peak_cache_dir(project_id)
+    cache_dir = database.get_peak_cache_dir()
     assert(cache_dir and cache_dir ~= "",
         "peak_cache.init_for_project: get_peak_cache_dir returned empty")
 
@@ -411,6 +429,7 @@ function M.init_for_project(project_id)
         t_query - t_start, t_probe - t_query, t_done - t_probe, t_done - t_start)
 
     start_completion_poll()
+    reclaim_global_cache(database)
 end
 
 --- Ensure peaks exist for a media file. Triggers background generation if needed.
@@ -665,24 +684,6 @@ function M.handle_media_changed(media_ids)
     for media_id in pairs(media_ids) do
         release_all_for_media(media_id)
         refresh_one_media(media_id, Media)
-    end
-end
-
---- Cleanup orphaned peak files. A file is `<media_id>.peaks` (composite) or
---- `<media_id>__ch<N>.peaks` (per-channel); both map to the same media_id,
---- so a file is an orphan iff its media is no longer active.
-function M.cleanup_orphans(active_media_ids)
-    assert(cache_dir, "peak_cache.cleanup_orphans: not initialized")
-    assert(type(active_media_ids) == "table",
-        "peak_cache.cleanup_orphans: active_media_ids table required")
-
-    for _, filename in ipairs(fs_utils.list_dir(cache_dir)) do
-        local stem = filename:match("^(.+)%.peaks$")
-        local media_id = stem and media_id_from_job_key(stem)
-        if media_id and not active_media_ids[media_id] then
-            os.remove(cache_dir .. "/" .. filename)
-            log.event("peak_cache: cleaned orphan %s", filename)
-        end
     end
 end
 

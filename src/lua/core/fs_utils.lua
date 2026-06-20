@@ -75,6 +75,29 @@ function M.list_dir(dir)
     return result
 end
 
+--- Scan a directory's regular files, returning one entry per file with its
+--- name, byte size, and access time (seconds since epoch, sub-second).
+--- A single in-process opendir + per-entry stat — no shell fork, no
+--- per-file binding crossing (the peak-cache LRU sweep runs this over
+--- thousands of files at project-open). A non-existent directory returns
+--- an empty table (the "no cache yet" case); a genuine opendir failure on
+--- an existing path raises via the binding's (nil, err) → assert here.
+---
+--- Forwards to qt_dir_scan (misc_bindings.cpp), registered at startup and
+--- stubbed for the headless harness in tests/test_env.lua.
+---
+--- @param dir string absolute directory path
+--- @return table array of { name=string, size=number, atime=number }
+function M.dir_scan(dir)
+    if not dir or dir == "" then return {} end
+    assert(type(_G.qt_dir_scan) == "function",
+        "fs_utils.dir_scan: qt_dir_scan binding not registered "
+        .. "(production: src/qt_bindings.cpp; headless: tests/test_env.lua)")
+    local entries, err = _G.qt_dir_scan(dir)
+    assert(entries, string.format("fs_utils.dir_scan: %s", tostring(err)))
+    return entries
+end
+
 -- Internal: run cmd with stdout redirected to a temp file; read it back.
 -- Returns (exit_code, data_or_nil). data is nil when the temp file
 -- couldn't be opened (extreme FS failure; real bug).

@@ -2,7 +2,8 @@
 #include "../../jve_log.h"
 #include "../../timeline_renderer.h" // For lua_create_timeline_renderer
 #include <chrono>
-#include <sys/stat.h>      // ::stat for nanosecond mtime (POSIX)
+#include <sys/stat.h>      // ::stat for nanosecond mtime/atime (POSIX)
+#include <dirent.h>        // opendir/readdir for qt_dir_scan
 #include <QApplication> // For QApplication::focusWidget()
 #include <QDir>
 #include <QFileInfo>
@@ -164,6 +165,79 @@ static int lua_qt_file_stat_batch(lua_State* L) {
             lua_pop(L, 1);  // pop path; no entry for missing files
         }
     }
+    return 1;
+}
+
+// qt_dir_scan(dir) -> { {name=, size=, atime=, is_dir=}, ... } | nil, errmsg
+//
+// Lists the immediate children of `dir` (regular files and subdirectories;
+// symlinks, sockets, etc. are skipped), returning each entry's name, byte
+// size, access time (seconds since epoch, sub-second precision), and an
+// is_dir flag — in a single opendir + per-entry stat loop. One in-process
+// pass, no per-entry Lua<->C boundary crossing and no shell fork: this runs
+// over thousands of files at project-open for the peak-cache LRU sweep, and
+// also lists subdirectories for the one-time legacy-layout migration (which
+// must work under a Finder-launched .app's stripped PATH, where ls/test
+// shellouts silently resolve to nothing).
+//
+// atime is the LRU signal: reading a peak file's mmap'd bytes (PEAK_QUERY)
+// faults its pages and bumps atime, so recently-displayed waveforms sort
+// last and survive eviction. A missing dir returns an empty list (the
+// caller treats "no cache yet" as "nothing to do"); only a genuine opendir
+// failure on an existing path errors.
+static int lua_qt_dir_scan(lua_State* L) {
+    const char* dir = luaL_checkstring(L, 1);
+
+    DIR* dp = ::opendir(dir);
+    if (!dp) {
+        if (errno == ENOENT) {        // dir not created yet — empty result
+            lua_newtable(L);
+            return 1;
+        }
+        lua_pushnil(L);
+        lua_pushfstring(L, "qt_dir_scan: opendir failed for %s (errno=%d)",
+            dir, errno);
+        return 2;
+    }
+
+    lua_newtable(L);                  // result array
+    int out_idx = 0;
+    std::string base(dir);
+    if (!base.empty() && base.back() != '/') base.push_back('/');
+
+    struct dirent* entry;
+    while ((entry = ::readdir(dp)) != nullptr) {
+        const char* name = entry->d_name;
+        if (name[0] == '.' && (name[1] == '\0' ||
+            (name[1] == '.' && name[2] == '\0'))) {
+            continue;                 // skip "." and ".."
+        }
+        struct stat st;
+        if (::stat((base + name).c_str(), &st) != 0) continue;
+        const bool is_dir = S_ISDIR(st.st_mode);
+        if (!is_dir && !S_ISREG(st.st_mode)) continue;  // skip symlinks/sockets/etc.
+
+#if defined(__APPLE__)
+        double atime = static_cast<double>(st.st_atimespec.tv_sec)
+                     + static_cast<double>(st.st_atimespec.tv_nsec) / 1e9;
+#elif defined(__linux__)
+        double atime = static_cast<double>(st.st_atim.tv_sec)
+                     + static_cast<double>(st.st_atim.tv_nsec) / 1e9;
+#else
+        double atime = static_cast<double>(st.st_atime);
+#endif
+        lua_newtable(L);              // info table for this entry
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "name");
+        lua_pushinteger(L, static_cast<lua_Integer>(st.st_size));
+        lua_setfield(L, -2, "size");
+        lua_pushnumber(L, atime);
+        lua_setfield(L, -2, "atime");
+        lua_pushboolean(L, is_dir ? 1 : 0);
+        lua_setfield(L, -2, "is_dir");
+        lua_rawseti(L, -2, ++out_idx);
+    }
+    ::closedir(dp);
     return 1;
 }
 

@@ -120,7 +120,7 @@ db:exec(string.format(
     project_id, now, now))
 peak_cache.init_for_project(project_id)
 
-local cache_peak_path = database.get_peak_cache_dir(project_id) .. "/" .. media_id .. ".peaks"
+local cache_peak_path = database.get_peak_cache_dir() .. "/" .. media_id .. ".peaks"
 os.execute(string.format("mv %q %q", peak_path, cache_peak_path))
 
 local expected_samples = true_bins * true_hdr.base_spp
@@ -141,7 +141,7 @@ assert(f == nil, "rejected peak file must be deleted from disk, not left in plac
 -- Use a fresh media_id to avoid PEAK_REQUEST deduping against the
 -- prior completed job's status.
 local control_media_id = media_id .. "_control"
-local control_peak_path = database.get_peak_cache_dir(project_id)
+local control_peak_path = database.get_peak_cache_dir()
     .. "/" .. control_media_id .. ".peaks"
 os.remove(control_peak_path)
 EMP.PEAK_CANCEL(control_media_id)

@@ -360,6 +360,10 @@ void registerQtBindings(lua_State* L)
     // for fs_utils.file_mtime's old shell-out path.
     lua_pushcfunction(L, lua_qt_file_mtime); lua_setglobal(L, "qt_file_mtime");
 
+    // Single-pass directory scan returning {name,size,atime} per regular
+    // file — the peak-cache LRU sweep's primitive (atime = access recency).
+    lua_pushcfunction(L, lua_qt_dir_scan); lua_setglobal(L, "qt_dir_scan");
+
     // Recursive mkdir via QDir::mkpath — replaces os.execute("mkdir -p")
     // shellouts that fail silently under Finder-launched .app (stripped PATH).
     lua_pushcfunction(L, lua_qt_fs_mkdir_p); lua_setglobal(L, "qt_fs_mkdir_p");

@@ -86,7 +86,7 @@ db:exec(string.format(
     project_id, now, now))
 peak_cache.init_for_project(project_id)
 
-local cache_peak_path = database.get_peak_cache_dir(project_id) .. "/" .. media_id .. ".peaks"
+local cache_peak_path = database.get_peak_cache_dir() .. "/" .. media_id .. ".peaks"
 os.execute(string.format("mv %q %q", peak_path, cache_peak_path))
 
 -- -----------------------------------------------------------------------
@@ -140,7 +140,7 @@ os.execute(string.format("cp %q %q", FIXTURE_B, SCRATCH))
 local new_mtime = assert(fs_utils.file_mtime(SCRATCH),
     "post-overwrite mtime read failed")
 
-local cache_peak_path_b = database.get_peak_cache_dir(project_id)
+local cache_peak_path_b = database.get_peak_cache_dir()
     .. "/test_peak_cache_hash_rescue_b.peaks"
 os.execute(string.format("cp %q %q", cache_peak_path, cache_peak_path_b))
 
