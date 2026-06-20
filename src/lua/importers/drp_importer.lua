@@ -559,6 +559,18 @@ local function parse_project_metadata(project_elem)
         return project
     end
 
+    -- The Resolve project's own stable key: the DbId on the <SM_Project>
+    -- (or <Project>) root. Adopting it as the .jvp project_id means
+    -- re-opening the same .drp reuses one project (tab state, settings,
+    -- history provenance persist) instead of minting a fresh random id.
+    -- Every Resolve-authored export carries it; its absence is a malformed
+    -- archive, not a "maybe" — assert (rule 1.14) rather than invent an id.
+    project.source_project_id = project_elem.attrs and project_elem.attrs.DbId
+    assert(project.source_project_id and project.source_project_id ~= "",
+        string.format("parse_project_metadata: <%s> has no DbId — cannot "
+            .. "derive a stable project id from this .drp",
+            project_elem.tag or "?"))
+
     -- Use find_direct_child for project-level properties to avoid nested elements
     local name_elem = find_direct_child(project_elem, "ProjectName") or find_direct_child(project_elem, "Name")
     if name_elem then

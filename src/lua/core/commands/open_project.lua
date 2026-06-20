@@ -96,7 +96,12 @@ end
 local function create_project_record(parse_result, settings)
     local Project = require("models.project")
     local json    = require("dkjson")
+    -- Adopt the source project's own stable key (Resolve's <SM_Project>
+    -- DbId) as the .jvp project_id, so re-opening the same export reuses one
+    -- project. The DRP importer always supplies it; formats with no stable
+    -- key (PRPROJ today) leave it nil and Project.create mints a fresh UUID.
     local project = Project.create(parse_result.project.name, {
+        id                  = parse_result.project.source_project_id,
         settings            = json.encode(settings),
         fps_mismatch_policy = "resample",
     })
