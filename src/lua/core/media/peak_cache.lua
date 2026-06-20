@@ -618,10 +618,17 @@ end
 -- Remove every on-disk peak file belonging to a media (composite +
 -- per-channel). Caller has already released the in-memory state.
 local function remove_peak_files_for_media(media_id)
-    for _, filename in ipairs(fs_utils.list_dir(cache_dir)) do
-        local stem = filename:match("^(.+)%.peaks$")
-        if stem and media_id_from_job_key(stem) == media_id then
-            os.remove(cache_dir .. "/" .. filename)
+    -- dir_scan (qt_dir_scan), NOT the bare-`ls` shell of fs_utils.list_dir:
+    -- a Finder-launched .app has a stripped PATH, so `ls` resolves to nothing
+    -- and silently returns no entries — invalidate would then leave every
+    -- stale .peaks file on disk. The reclaim sweep already scans via dir_scan;
+    -- this matches it.
+    for _, e in ipairs(fs_utils.dir_scan(cache_dir)) do
+        if not e.is_dir then
+            local stem = e.name:match("^(.+)%.peaks$")
+            if stem and media_id_from_job_key(stem) == media_id then
+                os.remove(cache_dir .. "/" .. e.name)
+            end
         end
     end
 end
