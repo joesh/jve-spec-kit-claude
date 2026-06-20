@@ -1242,6 +1242,16 @@ function M.load_clips(sequence_id)
                                     WHERE mt.id = mr.track_id
                                       AND mt.track_type = t.track_type
                                 )
+                                -- An expanded per-channel audio clip pins ONE
+                                -- master audio track via master_audio_track_id.
+                                -- Without this clause every audio ref of a
+                                -- multi-channel master satisfies the track_type
+                                -- match and GROUP BY/LIMIT picks an arbitrary
+                                -- channel — the wrong waveform. Composite
+                                -- (master_audio_track_id NULL) and video keep
+                                -- the track_type-only match.
+                                AND (c.master_audio_track_id IS NULL
+                                     OR mr.track_id = c.master_audio_track_id)
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.owner_sequence_id = ?
         GROUP BY c.id
@@ -1429,6 +1439,16 @@ function M.load_clip_entry(clip_id)
                                     WHERE mt.id = mr.track_id
                                       AND mt.track_type = t.track_type
                                 )
+                                -- An expanded per-channel audio clip pins ONE
+                                -- master audio track via master_audio_track_id.
+                                -- Without this clause every audio ref of a
+                                -- multi-channel master satisfies the track_type
+                                -- match and GROUP BY/LIMIT picks an arbitrary
+                                -- channel — the wrong waveform. Composite
+                                -- (master_audio_track_id NULL) and video keep
+                                -- the track_type-only match.
+                                AND (c.master_audio_track_id IS NULL
+                                     OR mr.track_id = c.master_audio_track_id)
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.id = ?
         LIMIT 1
