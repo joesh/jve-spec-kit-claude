@@ -112,6 +112,7 @@ rsync -az --delete \
     tests/import_schema.lua \
     tests/synthetic/helpers \
     tests/fixtures/resolve \
+    tests/fixtures/gen_synthetic_tone_wavs.sh \
     tools/resolve-helper \
     "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj" \
     "tests/fixtures/media/anamnesis-trimmed/2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \

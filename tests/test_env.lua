@@ -59,12 +59,53 @@ do
 end
 M.repo_root = repo_root
 
--- UTM guest: the host repo is shared at this AppleVirtIOFS mount. Used as
--- a fall-through for paths the sync pipeline doesn't push (large media
--- fixtures: 588 GB anamnesis rushes, etc). Source code stays sync-based
--- per specs/020-debug-terminal/phase1-test-overhaul.md (virtiofs cache
+-- UTM guest: the host repo is shared into the guest over AppleVirtIOFS.
+-- Used as a fall-through for paths the sync pipeline doesn't push (large
+-- media fixtures: 588 GB anamnesis rushes; small gitignored audio fixtures
+-- with no generator). Source code stays sync-based per
+-- specs/020-debug-terminal/phase1-test-overhaul.md (virtiofs cache
 -- staleness on host edits), so the synced tree wins when both have it.
-local GUEST_REPO_MOUNT = "/Volumes/My Shared Files/jve-spec-kit-claude"
+--
+-- UTM exposes each shared host directory under SHARE_ROOT/<basename>, so the
+-- repo's guest path is SHARE_ROOT/<share>/<repo-path-below-share>. We don't
+-- know which ancestor of the host repo is the shared dir (~, ~/Local, or the
+-- repo itself), and hardcoding it rots the moment the repo or share config
+-- moves (it did: a constant of SHARE_ROOT/jve-spec-kit-claude broke when the
+-- repo moved under ~/Local). Instead derive it: the host repo's absolute path
+-- arrives via JVE_HOST_REPO_ROOT (exported by scripts/_run_in_vm.sh across the
+-- ssh hop); walk that path's suffixes longest-first and take the first that
+-- resolves to the repo under SHARE_ROOT.
+local SHARE_ROOT = "/Volumes/My Shared Files"
+
+-- A path is the repo iff this tracked marker file is present under it.
+local function path_is_repo(candidate)
+    local marker = io.open(candidate .. "/tests/test_env.lua", "r")
+    if marker then marker:close(); return true end
+    return false
+end
+
+local guest_repo_mount  -- memoized; derived on first VM fallback
+
+local function resolve_guest_repo_mount()
+    if guest_repo_mount then return guest_repo_mount end
+    local host_root = os.getenv("JVE_HOST_REPO_ROOT")
+    assert(host_root and host_root ~= "",
+        "test_env: JVE_IN_VM=1 but JVE_HOST_REPO_ROOT is unset — "
+        .. "scripts/_run_in_vm.sh must forward the host repo path across the ssh hop")
+    local parts = {}
+    for seg in host_root:gmatch("[^/]+") do parts[#parts + 1] = seg end
+    for start = 1, #parts do
+        local candidate = SHARE_ROOT .. "/" .. table.concat(parts, "/", start)
+        if path_is_repo(candidate) then
+            guest_repo_mount = candidate
+            return guest_repo_mount
+        end
+    end
+    error(string.format(
+        "test_env: could not locate host repo '%s' under '%s' on the guest "
+        .. "(checked every path suffix). Is the UTM file share configured and mounted?",
+        host_root, SHARE_ROOT))
+end
 
 function M.resolve_repo_path(relative)
     if not relative or relative == "" then return repo_root end
@@ -74,7 +115,7 @@ function M.resolve_repo_path(relative)
         -- Prefer the synced copy when present; mount only when it's not.
         local f = io.open(synced, "r")
         if f then f:close(); return synced end
-        return GUEST_REPO_MOUNT .. "/" .. relative
+        return resolve_guest_repo_mount() .. "/" .. relative
     end
     return synced
 end
@@ -262,6 +303,48 @@ if not _G.qt_fs_mkdir_p then
         local rc = os.execute(string.format("/bin/mkdir -p %q", path))
         if rc == 0 or rc == true then return true end
         return nil, string.format("/bin/mkdir -p exited %s", tostring(rc))
+    end
+end
+
+-- Provide qt_dir_scan for plain-luajit test runs. Production registers the
+-- C++ binding (misc_bindings.cpp::lua_qt_dir_scan): one opendir + per-entry
+-- POSIX stat returning {name,size,atime,is_dir} for files and subdirs. The
+-- headless harness can't link Qt, so it shells out: `ls` for names, then
+-- `stat -f "%z %a %p"` per entry (%p = mode bits, S_IFDIR=0o40000). Same
+-- global contract — a missing dir yields an empty list; entries carry the
+-- same fields. atime is the LRU signal the reclaim policy sorts on; is_dir
+-- lets the legacy-layout sweep find per-project directories.
+if not _G.qt_dir_scan then
+    _G.qt_dir_scan = function(dir)
+        if type(dir) ~= "string" or dir == "" then return {} end
+        local ls = io.popen(string.format("/bin/ls -1 %q 2>/dev/null", dir))
+        if not ls then return {} end
+        local entries = {}
+        for name in ls:lines() do
+            -- macOS stat: %z = size, %a = access time (epoch secs), %p = mode
+            -- (octal incl. type bits). Directory bit is 040000 octal.
+            local sh = io.popen(string.format('stat -f "%%z %%a %%p" %q/%q 2>/dev/null',
+                dir, name))
+            if sh then
+                local line = sh:read("*l")
+                sh:close()
+                local size, atime, mode = (line or ""):match("^(%d+)%s+(%d+)%s+(%d+)$")
+                if size and atime and mode then
+                    -- %p is octal; the file-type nibble is bits 12-15.
+                    -- S_IFDIR is type 4 (0o4xxxx, e.g. dir 40755 → 0x41ED).
+                    local m = tonumber(mode, 8)
+                    local type_nibble = math.floor(m / 4096) % 16
+                    entries[#entries + 1] = {
+                        name = name,
+                        size = tonumber(size),
+                        atime = tonumber(atime),
+                        is_dir = (type_nibble == 4),
+                    }
+                end
+            end
+        end
+        ls:close()
+        return entries
     end
 end
 

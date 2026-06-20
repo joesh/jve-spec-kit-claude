@@ -161,9 +161,25 @@ fi
 if [[ ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_tones_48k.wav" \
    || ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_amp_ramp_48k.wav" ]]; then
   if command -v ffmpeg >/dev/null 2>&1; then
+    GEN_SCRIPT="$ROOT_DIR/tests/fixtures/gen_synthetic_tone_wavs.sh"
     echo "[integration] generating synthetic audio fixtures (gen_synthetic_tone_wavs.sh)..."
-    "$ROOT_DIR/tests/fixtures/gen_synthetic_tone_wavs.sh" >/dev/null 2>&1 \
-      || echo "[integration] WARN: synthetic audio fixture generation failed"
+    # ffmpeg is present, so generation MUST succeed — a failure here (missing
+    # generator script, ffmpeg error) is a real broken-config fault, not a
+    # benign "no audio support" case. Surface the actual error and fail fast
+    # instead of swallowing it: a silent skip leaves the audio/waveform/peak
+    # battery to fail downstream with a misleading "fixture file not found"
+    # cascade (the generator not reaching the UTM guest — absent from
+    # scripts/sync-to-vm.sh — was exactly this trap). The ffmpeg-absent case
+    # below is the only legitimate skip.
+    if [[ ! -x "$GEN_SCRIPT" ]]; then
+      echo "[integration] ERROR: generator missing/not executable: $GEN_SCRIPT" >&2
+      echo "[integration]   (on the UTM guest this means it is absent from scripts/sync-to-vm.sh)" >&2
+      exit 1
+    fi
+    if ! "$GEN_SCRIPT"; then
+      echo "[integration] ERROR: synthetic audio fixture generation FAILED (ffmpeg is present)" >&2
+      exit 1
+    fi
   else
     echo "[integration] WARN: ffmpeg absent — skipping audio-decode battery (test_audio_*)"
   fi
