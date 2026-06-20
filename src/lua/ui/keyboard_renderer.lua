@@ -4,25 +4,26 @@
 local M = {}
 
 local qt = require('qt_bindings')
+local ui_constants = require('core.ui_constants')
 
 -- Premiere Pro color scheme
 local COLORS = {
     -- Key colors
-    KEY_BG = "#2d2d30",              -- Normal key background
-    KEY_BG_MODIFIER = "#3e3e42",     -- Modifier keys (Shift, Ctrl, etc.)
-    KEY_BG_FUNCTION = "#1e1e1e",     -- Function keys (F1-F12)
-    KEY_TEXT = "#e8e8e8",            -- Key label text
-    KEY_BORDER = "#3f3f46",          -- Key border
-    KEY_ASSIGNED = "#094771",        -- Key with shortcut assigned (Premiere blue)
-    KEY_HOVER = "#3e3e42",           -- Key hover state
+    KEY_BG = ui_constants.COLORS.KEY_BG,              -- Normal key background
+    KEY_BG_MODIFIER = ui_constants.COLORS.KEY_BG_MODIFIER,     -- Modifier keys (Shift, Ctrl, etc.)
+    KEY_BG_FUNCTION = ui_constants.COLORS.KEY_BG_FUNCTION,     -- Function keys (F1-F12)
+    KEY_TEXT = ui_constants.COLORS.KEY_TEXT,            -- Key label text
+    KEY_BORDER = ui_constants.COLORS.KEY_BORDER,          -- Key border
+    KEY_ASSIGNED = ui_constants.COLORS.KEY_ASSIGNED,        -- Key with shortcut assigned (Premiere blue)
+    KEY_HOVER = ui_constants.COLORS.KEY_HOVER,           -- Key hover state
 
     -- Layout colors
-    KEYBOARD_BG = "#1e1e1e",         -- Background behind keyboard
-    SECTION_DIVIDER = "#3f3f46",     -- Lines between key sections
+    KEYBOARD_BG = ui_constants.COLORS.KEYBOARD_BG,         -- Background behind keyboard
+    SECTION_DIVIDER = ui_constants.COLORS.KEY_SECTION_DIVIDER,     -- Lines between key sections
 
     -- Accent colors
-    ACCENT_BLUE = "#0078d4",         -- Active/selected keys
-    ACCENT_ORANGE = "#f48771",       -- Conflicts/warnings
+    ACCENT_BLUE = ui_constants.COLORS.KEY_ACCENT_BLUE,         -- Active/selected keys
+    ACCENT_ORANGE = ui_constants.COLORS.KEY_ACCENT_ORANGE,       -- Conflicts/warnings
 }
 
 -- Key size constants (in pixels)

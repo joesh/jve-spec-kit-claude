@@ -408,8 +408,8 @@ function SequenceMonitor:_create_widgets()
     if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_STYLE then
         qt_constants.PROPERTIES.SET_STYLE(content, [[
             QWidget {
-                background: #000000;
-                border: 1px solid #1f1f1f;
+                background: ]] .. ui_constants.COLORS.MONITOR_BG .. [[;
+                border: 1px solid ]] .. ui_constants.COLORS.MONITOR_BORDER .. [[;
             }
         ]])
     end
@@ -1086,7 +1086,7 @@ function SequenceMonitor:_update_grade_status()
     if not self._grade_status then return end
     local text, color = nil, nil
     if self._sync_pending then
-        text, color = "⟳ Syncing grades from Resolve…", "#cfcfcf"
+        text, color = "⟳ Syncing grades from Resolve…", ui_constants.COLORS.TEXT_LABEL_DIM
     else
         local badge = grade_badge.for_reproduction(self._grade_reproduction)
         if badge.visible then text, color = badge.text, badge.color_hex end
@@ -1154,7 +1154,7 @@ end
 local TC_STYLE = string.format([[
     QLabel {
         background: %s;
-        color: #cccccc;
+        color: ]] .. ui_constants.COLORS.TEXT_LABEL_DIM .. [[;
         padding: 2px 6px;
         font-family: "Menlo", "Monaco", monospace;
         font-size: 11px;

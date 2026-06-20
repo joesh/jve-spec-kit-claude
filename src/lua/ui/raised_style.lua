@@ -12,29 +12,30 @@
 -- here are a first cut; expect to dial them in visually.
 --
 -- @file raised_style.lua
+local ui_constants = require("core.ui_constants")
 local M = {}
 
 -- Palette / geometry — tweak these. Colors are dark-theme keycaps.
-M.PANEL_TOP     = "#33373d"   -- gradient top (lit)
-M.PANEL_BOTTOM  = "#23262b"   -- gradient bottom (shadowed)
-M.PANEL_BORDER  = "#3f444b"   -- thin rim
+M.PANEL_TOP     = ui_constants.COLORS.RAISED_PANEL_TOP     -- gradient top (lit)
+M.PANEL_BOTTOM  = ui_constants.COLORS.RAISED_PANEL_BOTTOM  -- gradient bottom (shadowed)
+M.PANEL_BORDER  = ui_constants.COLORS.RAISED_PANEL_BORDER  -- thin rim
 M.PANEL_RADIUS  = 8
 
-M.BUTTON_TOP        = "#3a3f46"
-M.BUTTON_BOTTOM     = "#262a30"
-M.BUTTON_TOP_HOVER  = "#454b53"
-M.BUTTON_BOT_HOVER  = "#2c3138"
-M.BUTTON_TOP_DOWN   = "#202327"  -- pressed: invert (darker top)
-M.BUTTON_BOT_DOWN   = "#2a2e34"
-M.BUTTON_BORDER     = "#4a5057"
-M.BUTTON_TEXT       = "#e7c98a"  -- amber, like the mockup labels
+M.BUTTON_TOP        = ui_constants.COLORS.RAISED_BUTTON_TOP
+M.BUTTON_BOTTOM     = ui_constants.COLORS.RAISED_BUTTON_BOTTOM
+M.BUTTON_TOP_HOVER  = ui_constants.COLORS.RAISED_BUTTON_TOP_HOVER
+M.BUTTON_BOT_HOVER  = ui_constants.COLORS.RAISED_BUTTON_BOT_HOVER
+M.BUTTON_TOP_DOWN   = ui_constants.COLORS.RAISED_BUTTON_TOP_DOWN  -- pressed: invert (darker top)
+M.BUTTON_BOT_DOWN   = ui_constants.COLORS.RAISED_BUTTON_BOT_DOWN
+M.BUTTON_BORDER     = ui_constants.COLORS.RAISED_BUTTON_BORDER
+M.BUTTON_TEXT       = ui_constants.COLORS.RAISED_BUTTON_TEXT  -- amber, like the mockup labels
 M.BUTTON_RADIUS     = 7
 
 -- Shadow — soft, mostly-down, low alpha.
 M.SHADOW_BLUR   = 16
 M.SHADOW_DX     = 0
 M.SHADOW_DY     = 3
-M.SHADOW_COLOR  = "#80000000"  -- #aarrggbb: 50% black
+M.SHADOW_COLOR  = ui_constants.COLORS.RAISED_SHADOW  -- #aarrggbb: 50% black
 
 local function vgrad(top, bottom)
     return string.format(
@@ -59,7 +60,7 @@ function M.button_qss()
         .. " color: %s; padding: 6px 16px; font-weight: bold; }"
         .. "QPushButton:hover { background: %s; }"
         .. "QPushButton:pressed { background: %s; }"
-        .. "QPushButton:disabled { color: #6a6f76; }",
+        .. "QPushButton:disabled { color: " .. ui_constants.COLORS.RAISED_BUTTON_TEXT_DISABLED .. "; }",
         vgrad(M.BUTTON_TOP, M.BUTTON_BOTTOM), M.BUTTON_BORDER, M.BUTTON_RADIUS,
         M.BUTTON_TEXT,
         vgrad(M.BUTTON_TOP_HOVER, M.BUTTON_BOT_HOVER),

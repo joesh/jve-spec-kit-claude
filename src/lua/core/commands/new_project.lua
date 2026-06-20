@@ -35,6 +35,7 @@ local SPEC = {
 -- @return table|nil: {project_path, project_name} or nil if cancelled
 function M.show_dialog(parent_window)
     local qt = require("core.qt_constants")
+    local ui_constants = require("core.ui_constants")
     local templates = project_templates.TEMPLATES
 
     -- Dialog state
@@ -104,7 +105,7 @@ function M.show_dialog(parent_window)
     -- Error label (hidden by default, shown on validation failure)
     -- -----------------------------------------------------------------------
     local error_label = qt.WIDGET.CREATE_LABEL("")
-    qt.PROPERTIES.SET_STYLE(error_label, "color: #ff6666;")
+    qt.PROPERTIES.SET_STYLE(error_label, "color: " .. ui_constants.COLORS.TEXT_ERROR .. ";")
     qt.LAYOUT.ADD_WIDGET(main_layout, error_label)
 
     -- -----------------------------------------------------------------------

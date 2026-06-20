@@ -20,6 +20,8 @@
 --
 -- @file monitor_mark_bar.lua
 
+local ui_constants = require("core.ui_constants")
+
 local M = {}
 
 M.BAR_HEIGHT = 20
@@ -43,11 +45,11 @@ function M.compute_wheel_frame_delta(delta_x, width, viewport_duration)
 end
 
 -- Colors (matching timeline ruler mark rendering)
-local BACKGROUND_COLOR = "#1e1e1e"
-local MARK_RANGE_FILL = "#19dfeeff"   -- translucent cyan overlay
-local MARK_EDGE_COLOR = "#ff6b6b"     -- red handle
-local PLAYHEAD_COLOR = "#ff6b6b"      -- red playhead
-local DURATION_BAR_COLOR = "#2a2a2a"  -- dark strip for clip extent
+local BACKGROUND_COLOR = ui_constants.COLORS.SURFACE_CANVAS
+local MARK_RANGE_FILL = ui_constants.COLORS.MARK_RANGE_FILL   -- translucent cyan overlay
+local MARK_EDGE_COLOR = ui_constants.COLORS.ACCENT_PLAYHEAD     -- red handle
+local PLAYHEAD_COLOR = ui_constants.COLORS.ACCENT_PLAYHEAD      -- red playhead
+local DURATION_BAR_COLOR = ui_constants.COLORS.CONTROL_INACTIVE_BG  -- dark strip for clip extent
 
 local HANDLE_WIDTH = 2
 local PLAYHEAD_LINE_WIDTH = 2

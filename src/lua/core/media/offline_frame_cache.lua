@@ -11,6 +11,7 @@ local path_utils = require("core.path_utils")
 local log = require("core.logger").for_area("video")
 local Signals = require("core.signals")
 local offline_note_mod = require("core.media.offline_note")
+local ui_constants = require("core.ui_constants")
 
 local M = {}
 
@@ -73,11 +74,11 @@ local function candidate_basename(note)
 end
 
 local function line_header(text)
-    return { text = text, height_pct = 5, color = "#ffaa55", bold = true }
+    return { text = text, height_pct = 5, color = ui_constants.COLORS.OFFLINE_HEADLINE, bold = true }
 end
 
 local function line_body(text)
-    return { text = text, height_pct = 4.5, color = "#dddddd", bold = false }
+    return { text = text, height_pct = 4.5, color = ui_constants.COLORS.OFFLINE_BODY, bold = false }
 end
 
 --- Compose "partial coverage" lines from a parsed offline_note and the
@@ -148,10 +149,10 @@ local function build_lines(metadata)
     if partial_lines then
         lines[#lines + 1] = {
             text = "Media Offline",
-            height_pct = 12, color = "#ffffff", bold = true, gap_after_pct = 3,
+            height_pct = 12, color = ui_constants.COLORS.OFFLINE_TITLE, bold = true, gap_after_pct = 3,
         }
         lines[#lines + 1] = {
-            text = filename, height_pct = 5, color = "#dddddd", bold = false,
+            text = filename, height_pct = 5, color = ui_constants.COLORS.OFFLINE_BODY, bold = false,
         }
         for _, ln in ipairs(partial_lines) do lines[#lines + 1] = ln end
         return lines
@@ -164,7 +165,7 @@ local function build_lines(metadata)
 
     lines[#lines + 1] = {
         text = title,
-        height_pct = 12, color = "#ffffff", bold = true, gap_after_pct = 5,
+        height_pct = 12, color = ui_constants.COLORS.OFFLINE_TITLE, bold = true, gap_after_pct = 5,
     }
 
     -- Codec hint (only for codec errors)
@@ -173,16 +174,16 @@ local function build_lines(metadata)
         if hint then
             lines[#lines + 1] = {
                 text = hint,
-                height_pct = 6, color = "#ffcc44", bold = true, gap_after_pct = 2,
+                height_pct = 6, color = ui_constants.COLORS.OFFLINE_WARNING, bold = true, gap_after_pct = 2,
             }
         end
     end
 
     lines[#lines + 1] = {
-        text = filename, height_pct = 5, color = "#dddddd", bold = false,
+        text = filename, height_pct = 5, color = ui_constants.COLORS.OFFLINE_BODY, bold = false,
     }
     lines[#lines + 1] = {
-        text = metadata.media_path, height_pct = 4.5, color = "#bbbbbb", bold = false,
+        text = metadata.media_path, height_pct = 4.5, color = ui_constants.COLORS.OFFLINE_SUBTLE, bold = false,
     }
 
     -- Error info — strip redundant path from error_msg (already its own line).
@@ -191,7 +192,7 @@ local function build_lines(metadata)
             "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
         local msg = tostring(metadata.error_msg):gsub(": ?" .. escaped, "")
         lines[#lines + 1] = {
-            text = msg, height_pct = 4.5, color = "#bbbbbb", bold = false,
+            text = msg, height_pct = 4.5, color = ui_constants.COLORS.OFFLINE_SUBTLE, bold = false,
         }
     end
 

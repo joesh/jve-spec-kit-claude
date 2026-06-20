@@ -26,6 +26,8 @@ local duplicate_track_map = require("core.duplicate_track_map")
 local peak_cache = require("core.media.peak_cache")
 local peak_constants = require("core.media.peak_constants")
 local Signals = require("core.signals")
+local ui_constants = require("core.ui_constants")
+local C = ui_constants.COLORS
 
 -- Throttle waveform diagnostics: once per media_id per project session.
 -- Two distinct conditions, tracked separately so a coverage gap doesn't
@@ -186,7 +188,7 @@ local function get_preview_clip(state_module, preview_clip_cache, preview_entry)
     return nil
 end
 
-local PREVIEW_RECT_COLOR = "#ffff00"
+local PREVIEW_RECT_COLOR = C.PREVIEW_RECT
 
 -- Width of the bars used by stroke_outline_rect. Selection, preview, and
 -- shift-block outlines all share this; tweaking one place changes them all.

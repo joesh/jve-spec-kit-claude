@@ -9,6 +9,7 @@
 -- luacheck: globals qt_set_line_edit_return_pressed_handler qt_set_line_edit_text_changed_handler qt_create_single_shot_timer
 
 local qt = require("core.qt_constants")
+local ui_constants = require("core.ui_constants")
 local query_engine = require("core.query_engine")
 local command_manager = require("core.command_manager")
 local db_module = require("core.database")
@@ -205,7 +206,6 @@ local function create_window()
     local window = qt.WIDGET.CREATE_TOOL_WINDOW()
     qt.WIDGET.SET_WINDOW_FLAGS(window, 0x0000000B)  -- Qt::Tool
     qt.PROPERTIES.SET_TITLE(window, "Find & Filter")
-    local ui_constants = require("core.ui_constants")
     qt_set_widget_stylesheet(window, ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR)  -- luacheck: globals qt_set_widget_stylesheet
 
     -- Restore geometry
@@ -278,10 +278,10 @@ local function create_window()
     qt.LAYOUT.ADD_STRETCH(row3)
     qt.LAYOUT.ADD_LAYOUT(layout, row3)
 
-    local btn_focus = "QPushButton:focus { border: 1px solid #5ac8fa; }"
-    local default_btn_style = "QPushButton { background-color: #0a84ff; color: white; "
+    local btn_focus = "QPushButton:focus { border: 1px solid " .. ui_constants.COLORS.STATE_FOCUS_RING .. "; }"
+    local default_btn_style = "QPushButton { background-color: " .. ui_constants.COLORS.ACCENT_ACTION .. "; color: white; "
         .. "border-radius: 4px; padding: 3px 12px; } "
-        .. "QPushButton:focus { border: 1px solid #5ac8fa; }"
+        .. "QPushButton:focus { border: 1px solid " .. ui_constants.COLORS.STATE_FOCUS_RING .. "; }"
     local normal_btn_style = "QPushButton { padding: 3px 12px; } " .. btn_focus
 
     -- Row 5: Find buttons

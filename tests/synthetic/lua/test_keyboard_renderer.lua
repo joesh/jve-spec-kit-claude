@@ -192,13 +192,17 @@ else
     os.exit(1)
 end
 
--- Test 6: Verify Premiere color scheme
-print("\nTest 6: Verify Premiere color scheme")
+-- Test 6: a normal key paints its themed background. We assert the
+-- design token (ui_constants.COLORS.KEY_BG), never a literal hex — the
+-- value re-tints with the rest of the chrome, so pinning a magic hex
+-- here would test the implementation, not the contract.
+print("\nTest 6: Verify key background is theme-driven")
+local key_bg = require("core.ui_constants").COLORS.KEY_BG
 local test_key = keyboard_renderer.create_key("Test", 48, "normal")
-if test_key.stylesheet and string.match(test_key.stylesheet, "#2d2d30") then
-    print("  ✅ PASS: Premiere dark theme colors applied")
+if test_key.stylesheet and string.find(test_key.stylesheet, key_bg, 1, true) then
+    print("  ✅ PASS: themed key background applied (" .. key_bg .. ")")
 else
-    print("  ❌ FAIL: Expected Premiere color scheme in stylesheet")
+    print("  ❌ FAIL: normal-key stylesheet must use the KEY_BG token " .. key_bg)
     os.exit(1)
 end
 
@@ -207,7 +211,7 @@ print("All tests passed!")
 print("Visual keyboard renderer is ready")
 print("\nKey features:")
 print("  • Full QWERTY layout with function keys")
-print("  • Premiere Pro dark theme (#1e1e1e background, #2d2d30 keys)")
+print("  • Premiere Pro dark theme (cool-tinted, via ui_constants KEY_* tokens)")
 print("  • Key state tracking (assigned shortcuts, hover)")
 print("  • Proper key sizing (Tab, Shift, Space, etc.)")
 print("  • Click handlers for future interaction")

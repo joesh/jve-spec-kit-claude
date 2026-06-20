@@ -18,6 +18,7 @@ local M = {}
 local log = require("core.logger").for_area("media")
 local json = require("dkjson")
 local dir_exists = require("core.fs_utils").dir_exists
+local ui_constants = require("core.ui_constants")
 
 --- Pure: build a human-readable rich-text summary of a relink-results
 --- struct ({relinked, failed, ambiguous}). Buckets, in render order:
@@ -509,7 +510,7 @@ function M.show(media_list, parent_window, opts)
 
     -- Error label (hidden)
     local error_label = qt.WIDGET.CREATE_LABEL("")
-    qt.PROPERTIES.SET_STYLE(error_label, "color: #ff6666;")
+    qt.PROPERTIES.SET_STYLE(error_label, "color: " .. ui_constants.COLORS.TEXT_ERROR .. ";")
     qt.DISPLAY.SET_VISIBLE(error_label, false)
     qt.LAYOUT.ADD_WIDGET(main_layout, error_label)
 
@@ -529,8 +530,8 @@ function M.show(media_list, parent_window, opts)
     local results_summary = qt.WIDGET.CREATE_TEXT_EDIT("")
     qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(results_summary, true)
     qt.PROPERTIES.SET_STYLE(results_summary,
-        "color: #dddddd; font-family: monospace; font-size: 11px; " ..
-        "padding: 6px; background: #1e1e1e; border: 1px solid #333;")
+        "color: " .. ui_constants.COLORS.TEXT_LABEL .. "; font-family: monospace; font-size: 11px; " ..
+        "padding: 6px; background: " .. ui_constants.COLORS.SURFACE_CANVAS .. "; border: 1px solid " .. ui_constants.COLORS.TRACK_BUTTON_BORDER .. ";")
     qt.PROPERTIES.SET_SIZE(results_summary, 660, 180)
     -- Expand to fill the dialog's lower region: the progress log above it is
     -- hidden once the scan completes (see progress.hide() below), so the results

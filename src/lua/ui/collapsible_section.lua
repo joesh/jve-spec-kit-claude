@@ -260,7 +260,7 @@ function CollapsibleSection:createHeader(operation_context)
             border: none;
         }
         QWidget:hover {
-            background-color: #454545;
+            background-color: ]] .. ui_constants.COLORS.SURFACE_HOVER .. [[;
         }
     ]]
     
@@ -321,7 +321,7 @@ function CollapsibleSection:createHeader(operation_context)
     if separator_success and separator_widget then
         pcall(qt_constants.PROPERTIES.SET_STYLE, separator_widget, [[
             QWidget {
-                background-color: #000000;
+                background-color: ]] .. ui_constants.COLORS.BORDER_HAIRLINE .. [[;
                 min-height: 1px;
                 max-height: 1px;
                 margin-right: -45px;
@@ -480,7 +480,7 @@ function CollapsibleSection:createEnabledDot(header_layout, operation_context)
     -- Style the dot (C++ lines 77-80 + updateSectionEnabledDot)
     local dot_style = self.section_enabled and [[
         QLabel {
-            background-color: #ff6b35;
+            background-color: ]] .. ui_constants.COLORS.ACCENT_SECTION .. [[;
             border: none;
             border-radius: 4px;
             max-width: 8px;
@@ -490,7 +490,7 @@ function CollapsibleSection:createEnabledDot(header_layout, operation_context)
         }
     ]] or [[
         QLabel {
-            background-color: #666666;
+            background-color: ]] .. ui_constants.COLORS.SURFACE_DISABLED .. [[;
             border: none;
             border-radius: 4px;
             max-width: 8px;
@@ -630,7 +630,7 @@ function CollapsibleSection:createTitleLabel(header_layout, operation_context)
     -- Style title label (C++ lines 63-68)
     local title_style_success, title_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, self.title_label, [[
         QLabel {
-            color: #ffffff;
+            color: ]] .. ui_constants.COLORS.TEXT_PRIMARY .. [[;
             font-weight: normal;
             font-size: ]] .. ui_constants.FONTS.HEADER_FONT_SIZE .. [[;
             background: transparent;

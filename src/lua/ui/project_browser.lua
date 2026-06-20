@@ -1343,7 +1343,7 @@ function M.create()
     local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
     local next_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x92")  -- →
     qt_constants.PROPERTIES.SET_STYLE(next_btn,
-        "QPushButton { background-color: #0a84ff; color: white; "
+        "QPushButton { background-color: " .. ui_constants.COLORS.ACCENT_ACTION .. "; color: white; "
         .. "min-width: 20px; max-width: 20px; padding: 1px 2px; border-radius: 3px; }")
     qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)

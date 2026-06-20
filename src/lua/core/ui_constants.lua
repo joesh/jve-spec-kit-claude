@@ -34,16 +34,18 @@ local GREY_820 = "#232329"   -- 35,35,41  timeline canvas
 local GREY_790 = "#25252b"   -- 37,37,43  track row (even)
 local GREY_780 = "#26262c"   -- 38,38,44  field, focused
 local GREY_750 = "#28282e"   -- 40,40,46  chrome base (Resolve-measured)
-local GREY_730 = "#2a2a30"   -- 42,42,48  read-only field
+local GREY_730 = "#2a2a30"   -- 42,42,48  read-only field / inactive control fill
 local GREY_720 = "#2b2b31"   -- 43,43,49  raised content surface (inspector body)
-local GREY_700 = "#2d2d33"   -- 45,45,51  unfocused panel border
+local GREY_700 = "#2d2d33"   -- 45,45,51  unfocused panel border / key face
 local GREY_650 = "#333339"   -- 51,51,57  track-header button border
 local GREY_600 = "#3a3a40"   -- 58,58,64  overlay surface (dropdowns, menus)
 local GREY_550 = "#404046"   -- 64,64,70  structural divider
 local GREY_500 = "#45454b"   -- 69,69,75  hover wash
 local GREY_480 = "#4a4a50"   -- 74,74,80  scrollbar thumb
 local GREY_450 = "#55555b"   -- 85,85,91  control outline
+local GREY_420 = "#58585e"   -- 88,88,94  ruler tick
 local GREY_400 = "#66666c"   -- 102,102,108 disabled fill
+local GREY_350 = "#7a7a80"   -- 122,122,128 scroller grab handle
 local COOL_860 = "#222232"   -- 34,34,50  already-cool track-header border
 
 -- Text neutrals (near-white; kept off the grey ramp).
@@ -51,16 +53,31 @@ local INK_000 = "#ffffff"    -- pure white
 local INK_050 = "#f5f5f5"    -- 245  heading
 local INK_120 = "#e6e6e6"    -- 230  editable value text
 local INK_140 = "#dcdcdc"    -- 220  label text
+local INK_240 = "#bcbcc2"    -- 188  secondary data text
 local INK_200 = "#cccccc"    -- 204  dimmer / inactive label text
+local INK_300 = "#b0b0b6"    -- 176  ghost / ruler-label / dim dialog text
 local INK_460 = "#888888"    -- 136  muted / read-only text
 
--- Accent hues (named by hue; role lives in TIER 2).
+-- Pure black — the only non-tinted neutral, reserved for video letterbox
+-- where the surround must be true black, not chrome grey.
+local BLACK = "#000000"
+
+-- Accent hues (named by hue; role lives in TIER 2/3).
 local BLUE         = "#0a84ff"   -- macOS accent
 local BLUE_DEEP    = "#0078d4"   -- focus-border blue
 local BLUE_PRESSED = "#106ebe"   -- pressed/hover action blue
+local BLUE_WAVE    = "#4488aa"   -- waveform-enabled toggle
 local CYAN         = "#5ac8fa"   -- keyboard-focus cyan
 local RED          = "#e64b3d"   -- 230,75,61 selection / error
+local RED_MUTE     = "#cc3333"   -- track mute active
+local CORAL        = "#ff6b6b"   -- playhead / mark handle
+local CORAL_TEXT   = "#ff6666"   -- error text / offline text / edge limit
 local ORANGE       = "#ff6b35"   -- section indicator
+local ORANGE_SEL   = "#ff8c42"   -- warm selection (clip/gap/marquee)
+local AMBER        = "#ccaa00"   -- track solo / lock active
+local TEAL_SRC     = "#5cbacc"   -- source-tab accent (design mockup v4)
+local GREEN_OK     = "#4caf50"   -- success
+local GREEN_EDGE   = "#66ff66"   -- edge-trim available room
 
 -- =============================================================================
 -- TIER 2 — SEMANTIC (intent/role; what call sites use)
@@ -91,12 +108,34 @@ local BORDER_CONTROL  = GREY_450   -- input/dropdown outlines
 local STATE_FOCUS      = BLUE_DEEP     -- focused panel/field border
 local STATE_FOCUS_RING = CYAN          -- keyboard-nav ring
 local STATE_SELECTED   = RED           -- selection border
+local STATE_SELECTED_WARM = ORANGE_SEL -- warm selection fill (clips, gaps, marquee)
 local STATE_ERROR      = RED           -- field-error border (same hue as selection today)
 local STATE_PRESSED    = BLUE_PRESSED  -- pressed/active action control
+local STATE_MUTE       = RED_MUTE      -- track mute active
+local STATE_SOLO       = AMBER         -- track solo active
+local STATE_LOCK       = AMBER         -- track lock active
+local STATE_WAVEFORM   = BLUE_WAVE     -- track waveform-display toggle active
+
+-- TEXT_* (error/accent text).
+local TEXT_ERROR     = CORAL_TEXT  -- inline error / offline-clip text
 
 -- ACCENT_* — brand/action.
-local ACCENT_ACTION  = BLUE     -- primary action ("call to action") button
-local ACCENT_SECTION = ORANGE   -- collapsible-section marker
+local ACCENT_ACTION    = BLUE       -- primary action ("call to action") button
+local ACCENT_SECTION   = ORANGE     -- collapsible-section marker
+local ACCENT_SUCCESS   = GREEN_OK   -- success confirmation
+local ACCENT_SOURCE    = TEAL_SRC   -- source-tab / source-clip teal
+local ACCENT_PLAYHEAD  = CORAL      -- playhead + mark handles
+
+-- CLIP_* — timeline clip data-viz fills (semantic by content, preserved hues).
+local CLIP_VIDEO_FILL    = "#548bb5"  -- video clip body
+local CLIP_AUDIO_FILL    = "#32986b"  -- audio clip body
+local CLIP_DISABLED_FILL = "#3f7fcc"  -- disabled clip body
+local CLIP_DISABLED_TEXT = "#c3d6ff"  -- disabled clip label
+local CLIP_OFFLINE_FILL  = "#8b4444"  -- offline (missing-media) clip body
+local CLIP_MUTED_FILL    = GREY_450   -- muted/disabled audio-video fill
+local MARK_RANGE_FILL    = "#19dfeeff" -- translucent cyan in/out range (ARGB)
+local EDGE_AVAILABLE     = GREEN_EDGE  -- edge-trim has room
+local EDGE_LIMIT         = CORAL_TEXT  -- edge-trim at media limit
 
 -- =============================================================================
 -- TIER 3 — COMPONENT (widget-specific surfaces that aren't a plain role)
@@ -118,6 +157,95 @@ local TRACK_ROW_ODD          = SURFACE_PANEL
 local TIMELINE_CANVAS_BG     = GREY_820
 local UNFOCUSED_PANEL_BORDER = GREY_700
 local HEADER_HOVER_OVERLAY   = "rgba(255, 255, 255, 0.1)"  -- collapsible-header hover wash
+local CONTROL_INACTIVE_BG    = GREY_730   -- toggle/button face when inactive
+local CONTROL_HOVER_BG       = GREY_600   -- toggle/button face on hover
+
+-- Timeline zoom-scroller (Premiere-style horizontal scroller).
+local SCROLLER_TRACK_BG = GREY_750   -- groove behind the thumb
+local SCROLLER_BORDER   = GREY_550   -- groove top rim
+local SCROLLER_THUMB    = GREY_450   -- draggable window thumb
+local SCROLLER_HANDLE   = GREY_350   -- grab zones at thumb ends
+
+-- Timeline scrollbar (custom-painted overview bar).
+local SCROLLBAR_BAR_BG     = GREY_900   -- bar background
+local SCROLLBAR_BAR_THUMB  = GREY_480   -- thumb fill
+local SCROLLBAR_BAR_HANDLE = GREY_400   -- thumb end-handles
+
+-- Timeline ruler.
+local RULER_BG        = SURFACE_CANVAS  -- ruler background
+local RULER_BASELINE  = GREY_600        -- baseline rule
+local RULER_TICK      = GREY_420        -- major/medium/minor ticks
+local RULER_LABEL     = INK_300         -- time labels
+local RULER_GHOST     = INK_300         -- ghost (hover) playhead
+
+-- Sequence monitor (video surround + chrome).
+local MONITOR_BG       = BLACK       -- letterbox surround behind video
+local MONITOR_BORDER   = GREY_840    -- thin rim around the video surface
+
+-- Tab strip (Source = teal, Record = red). Inactive/active backgrounds
+-- carry the tab's hue at low/higher saturation; preserved from mockup v4.
+local TAB_SOURCE_BG_INACTIVE = "#242e31"
+local TAB_SOURCE_BG_ACTIVE   = "#2b4146"
+local TAB_RECORD_BG_INACTIVE = "#312626"
+local TAB_RECORD_BG_ACTIVE   = "#442f2c"
+
+-- Keyboard editor (key tiles + state hues; self-contained data-viz palette).
+local KEY_BG             = GREY_700    -- normal key face
+local KEY_BG_MODIFIER    = GREY_600    -- modifier key face
+local KEY_BG_FUNCTION    = SURFACE_CANVAS -- function-key face
+local KEY_TEXT           = INK_120     -- key label
+local KEY_SUBLABEL_TEXT  = "#a8b4c4"   -- secondary key label (cool)
+local KEY_BORDER         = GREY_550    -- key border
+local KEY_BORDER_LIGHT   = GREY_400    -- lighter modifier border
+local KEY_HOVER          = GREY_600    -- key hover face
+local KEYBOARD_BG        = SURFACE_CANVAS -- backdrop behind the keyboard
+local KEY_SECTION_DIVIDER = GREY_550   -- lines between key sections
+local KEY_ASSIGNED       = "#094771"   -- assigned-shortcut key (Premiere blue)
+local KEY_ACCENT_BLUE    = BLUE_DEEP   -- active/selected key
+local KEY_ACCENT_ORANGE  = "#f48771"   -- conflict/warning key
+local KEY_SELECT_OUTLINE = "#4a9eff"   -- selection outline (cyan-blue)
+local KEY_MOD_PRESSED_BG     = "#2563cc"  -- modifier currently held (blue)
+local KEY_MOD_PRESSED_BORDER = "#3a7adf"
+local KEY_PURPLE_BG      = "#5a3a82"   -- purple state fill
+local KEY_PURPLE_BORDER  = "#7a52a8"
+local KEY_GREEN_BG       = "#2f6b3a"   -- green state fill
+local KEY_GREEN_BORDER   = "#43935a"
+
+-- Light neutral text/border (≈170) used in dialogs, ruler labels, hover rims.
+local TEXT_DIM_LIGHT     = INK_300     -- dim-but-legible label text
+local BORDER_LIGHT       = INK_300     -- light hover/edge border
+
+-- Raised-panel skin (gradient-shaded control surface; mockup amber labels).
+local RAISED_PANEL_TOP     = "#33373d"
+local RAISED_PANEL_BOTTOM  = "#23262b"
+local RAISED_PANEL_BORDER  = "#3f444b"
+local RAISED_BUTTON_TOP        = "#3a3f46"
+local RAISED_BUTTON_BOTTOM     = "#262a30"
+local RAISED_BUTTON_TOP_HOVER  = "#454b53"
+local RAISED_BUTTON_BOT_HOVER  = "#2c3138"
+local RAISED_BUTTON_TOP_DOWN   = "#202327"
+local RAISED_BUTTON_BOT_DOWN   = "#2a2e34"
+local RAISED_BUTTON_BORDER     = "#4a5057"
+local RAISED_BUTTON_TEXT       = "#e7c98a"  -- amber label
+local RAISED_BUTTON_TEXT_DISABLED = "#6a6f76"
+local RAISED_SHADOW            = "#80000000" -- #aarrggbb: 50% black
+
+-- Offline / placeholder media card (text overlay on missing-media frames).
+local OFFLINE_TITLE       = INK_000    -- card title
+local OFFLINE_HEADLINE    = "#ffaa55"  -- "OFFLINE" amber headline
+local OFFLINE_WARNING     = "#ffcc44"  -- warning amber
+local OFFLINE_BODY        = INK_140    -- filename / primary body
+local OFFLINE_SUBTLE      = INK_240    -- path / secondary body
+
+-- Misc accent text used in dialogs / hints.
+local HINT_AMBER          = "#ffb86b"  -- inline hint text
+local ERROR_TEXT_LIGHT    = "#ff8080"  -- lighter error text (keyboard dialog)
+
+-- Grade badge.
+local GRADE_BADGE_RED_ORANGE = "#e05030"
+
+-- Debug / preview overlays.
+local PREVIEW_RECT = "#ffff00"  -- edit-preview rectangle (debug-visible)
 
 -- =============================================================================
 -- FONT CONSTANTS
@@ -151,6 +279,7 @@ ui_constants.COLORS = {
     TEXT_LABEL_DIM = TEXT_LABEL_DIM,
     TEXT_VALUE = TEXT_VALUE,
     TEXT_MUTED = TEXT_MUTED,
+    TEXT_ERROR = TEXT_ERROR,
 
     -- Borders
     BORDER_HAIRLINE = BORDER_HAIRLINE,
@@ -161,12 +290,31 @@ ui_constants.COLORS = {
     STATE_FOCUS = STATE_FOCUS,
     STATE_FOCUS_RING = STATE_FOCUS_RING,
     STATE_SELECTED = STATE_SELECTED,
+    STATE_SELECTED_WARM = STATE_SELECTED_WARM,
     STATE_ERROR = STATE_ERROR,
     STATE_PRESSED = STATE_PRESSED,
+    STATE_MUTE = STATE_MUTE,
+    STATE_SOLO = STATE_SOLO,
+    STATE_LOCK = STATE_LOCK,
+    STATE_WAVEFORM = STATE_WAVEFORM,
 
     -- Accent
     ACCENT_ACTION = ACCENT_ACTION,
     ACCENT_SECTION = ACCENT_SECTION,
+    ACCENT_SUCCESS = ACCENT_SUCCESS,
+    ACCENT_SOURCE = ACCENT_SOURCE,
+    ACCENT_PLAYHEAD = ACCENT_PLAYHEAD,
+
+    -- Timeline clip data-viz
+    CLIP_VIDEO_FILL = CLIP_VIDEO_FILL,
+    CLIP_AUDIO_FILL = CLIP_AUDIO_FILL,
+    CLIP_DISABLED_FILL = CLIP_DISABLED_FILL,
+    CLIP_DISABLED_TEXT = CLIP_DISABLED_TEXT,
+    CLIP_OFFLINE_FILL = CLIP_OFFLINE_FILL,
+    CLIP_MUTED_FILL = CLIP_MUTED_FILL,
+    MARK_RANGE_FILL = MARK_RANGE_FILL,
+    EDGE_AVAILABLE = EDGE_AVAILABLE,
+    EDGE_LIMIT = EDGE_LIMIT,
 
     -- Component surfaces
     INSPECTOR_HEADER_BG = INSPECTOR_HEADER_BG,
@@ -175,6 +323,8 @@ ui_constants.COLORS = {
     FIELD_FOCUS_BG = FIELD_FOCUS_BG,
     FIELD_READONLY_BG = FIELD_READONLY_BG,
     BUTTON_BG = BUTTON_BG,
+    CONTROL_INACTIVE_BG = CONTROL_INACTIVE_BG,
+    CONTROL_HOVER_BG = CONTROL_HOVER_BG,
     SCROLLBAR_THUMB = SCROLLBAR_THUMB,
     SCROLLBAR_TRACK_BG = SCROLLBAR_TRACK_BG,
     LIST_HEADER_BG = LIST_HEADER_BG,
@@ -186,6 +336,93 @@ ui_constants.COLORS = {
     TIMELINE_CANVAS_BG = TIMELINE_CANVAS_BG,
     UNFOCUSED_PANEL_BORDER = UNFOCUSED_PANEL_BORDER,
     HEADER_HOVER_OVERLAY = HEADER_HOVER_OVERLAY,
+
+    -- Timeline zoom-scroller
+    SCROLLER_TRACK_BG = SCROLLER_TRACK_BG,
+    SCROLLER_BORDER = SCROLLER_BORDER,
+    SCROLLER_THUMB = SCROLLER_THUMB,
+    SCROLLER_HANDLE = SCROLLER_HANDLE,
+
+    -- Timeline scrollbar
+    SCROLLBAR_BAR_BG = SCROLLBAR_BAR_BG,
+    SCROLLBAR_BAR_THUMB = SCROLLBAR_BAR_THUMB,
+    SCROLLBAR_BAR_HANDLE = SCROLLBAR_BAR_HANDLE,
+
+    -- Timeline ruler
+    RULER_BG = RULER_BG,
+    RULER_BASELINE = RULER_BASELINE,
+    RULER_TICK = RULER_TICK,
+    RULER_LABEL = RULER_LABEL,
+    RULER_GHOST = RULER_GHOST,
+
+    -- Sequence monitor
+    MONITOR_BG = MONITOR_BG,
+    MONITOR_BORDER = MONITOR_BORDER,
+
+    -- Tab strip
+    TAB_SOURCE_BG_INACTIVE = TAB_SOURCE_BG_INACTIVE,
+    TAB_SOURCE_BG_ACTIVE = TAB_SOURCE_BG_ACTIVE,
+    TAB_RECORD_BG_INACTIVE = TAB_RECORD_BG_INACTIVE,
+    TAB_RECORD_BG_ACTIVE = TAB_RECORD_BG_ACTIVE,
+
+    -- Keyboard editor
+    KEY_BG = KEY_BG,
+    KEY_BG_MODIFIER = KEY_BG_MODIFIER,
+    KEY_BG_FUNCTION = KEY_BG_FUNCTION,
+    KEY_TEXT = KEY_TEXT,
+    KEY_SUBLABEL_TEXT = KEY_SUBLABEL_TEXT,
+    KEY_BORDER = KEY_BORDER,
+    KEY_BORDER_LIGHT = KEY_BORDER_LIGHT,
+    KEY_HOVER = KEY_HOVER,
+    KEYBOARD_BG = KEYBOARD_BG,
+    KEY_SECTION_DIVIDER = KEY_SECTION_DIVIDER,
+    KEY_ASSIGNED = KEY_ASSIGNED,
+    KEY_ACCENT_BLUE = KEY_ACCENT_BLUE,
+    KEY_ACCENT_ORANGE = KEY_ACCENT_ORANGE,
+    KEY_SELECT_OUTLINE = KEY_SELECT_OUTLINE,
+    KEY_MOD_PRESSED_BG = KEY_MOD_PRESSED_BG,
+    KEY_MOD_PRESSED_BORDER = KEY_MOD_PRESSED_BORDER,
+    KEY_PURPLE_BG = KEY_PURPLE_BG,
+    KEY_PURPLE_BORDER = KEY_PURPLE_BORDER,
+    KEY_GREEN_BG = KEY_GREEN_BG,
+    KEY_GREEN_BORDER = KEY_GREEN_BORDER,
+
+    -- Light neutral text / border
+    TEXT_DIM_LIGHT = TEXT_DIM_LIGHT,
+    BORDER_LIGHT = BORDER_LIGHT,
+
+    -- Raised-panel skin
+    RAISED_PANEL_TOP = RAISED_PANEL_TOP,
+    RAISED_PANEL_BOTTOM = RAISED_PANEL_BOTTOM,
+    RAISED_PANEL_BORDER = RAISED_PANEL_BORDER,
+    RAISED_BUTTON_TOP = RAISED_BUTTON_TOP,
+    RAISED_BUTTON_BOTTOM = RAISED_BUTTON_BOTTOM,
+    RAISED_BUTTON_TOP_HOVER = RAISED_BUTTON_TOP_HOVER,
+    RAISED_BUTTON_BOT_HOVER = RAISED_BUTTON_BOT_HOVER,
+    RAISED_BUTTON_TOP_DOWN = RAISED_BUTTON_TOP_DOWN,
+    RAISED_BUTTON_BOT_DOWN = RAISED_BUTTON_BOT_DOWN,
+    RAISED_BUTTON_BORDER = RAISED_BUTTON_BORDER,
+    RAISED_BUTTON_TEXT = RAISED_BUTTON_TEXT,
+    RAISED_BUTTON_TEXT_DISABLED = RAISED_BUTTON_TEXT_DISABLED,
+    RAISED_SHADOW = RAISED_SHADOW,
+
+    -- Offline / placeholder media card
+    OFFLINE_TITLE = OFFLINE_TITLE,
+    OFFLINE_HEADLINE = OFFLINE_HEADLINE,
+    OFFLINE_WARNING = OFFLINE_WARNING,
+    OFFLINE_BODY = OFFLINE_BODY,
+    OFFLINE_SUBTLE = OFFLINE_SUBTLE,
+
+    -- Dialog hints / accent text
+    HINT_AMBER = HINT_AMBER,
+    ERROR_TEXT_LIGHT = ERROR_TEXT_LIGHT,
+
+    -- Grade badge
+    GRADE_BADGE_RED_ORANGE = GRADE_BADGE_RED_ORANGE,
+
+    -- Debug / preview overlays
+    PREVIEW_RECT = PREVIEW_RECT,
+    SURFACE_BLACK = BLACK,
 }
 
 -- =============================================================================

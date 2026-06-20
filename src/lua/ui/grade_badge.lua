@@ -17,10 +17,11 @@
 --- renderer's `timeline.add_rect`/`color_utils.dim_hex` take hex, and a Qt
 --- stylesheet accepts `#RRGGBB` directly.
 
+local ui_constants = require("core.ui_constants")
 local M = {}
 
 -- Red-orange = "not shown at all" — the one flagged state.
-local RED_ORANGE = "#E05030"
+local RED_ORANGE = ui_constants.COLORS.GRADE_BADGE_RED_ORANGE
 
 -- `text` is a full, plain-language sentence (no codes/abbreviations) — it
 -- reads as the monitor caption AND the timeline hover tooltip. Phrased for an
@@ -83,3 +84,4 @@ function M.tooltip_for_reproduction(reproduction)
 end
 
 return M
+

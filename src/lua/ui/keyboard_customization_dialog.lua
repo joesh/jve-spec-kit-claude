@@ -26,6 +26,7 @@ local M = {}
 local qt_constants = require('core.qt_constants')
 local registry = require('core.keyboard_shortcut_registry')
 local keyboard_picture = require('ui.keyboard_picture')
+local ui_constants = require('core.ui_constants')
 
 local WIDGET = qt_constants.WIDGET
 local LAYOUT = qt_constants.LAYOUT
@@ -87,7 +88,7 @@ local shortcuts_item_id_to_sc = {}
 
 local function set_status(message, is_error)
     if not status_label then return end
-    local color = is_error and "#ff8080" or "#a8a8a8"
+    local color = is_error and ui_constants.COLORS.ERROR_TEXT_LIGHT or ui_constants.COLORS.TEXT_DIM_LIGHT
     PROP.SET_STYLE(status_label,
         string.format("QLabel { color: %s; font-size: 11px; }", color))
     PROP.SET_TEXT(status_label, message or "")
@@ -208,7 +209,7 @@ local function on_capture_changed()
         PROP.SET_TEXT(conflict_label,
             string.format("⚠ Currently assigned to: %s — Assign will overwrite.", cmd.name))
         PROP.SET_STYLE(conflict_label,
-            "QLabel { color: #ffb86b; font-size: 11px; }")
+            string.format("QLabel { color: %s; font-size: 11px; }", ui_constants.COLORS.HINT_AMBER))
     else
         pending_conflict_id = nil
         PROP.SET_TEXT(conflict_label, "")

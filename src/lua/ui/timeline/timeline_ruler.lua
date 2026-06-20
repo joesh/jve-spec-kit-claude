@@ -9,17 +9,19 @@ local profile_scope = require("core.profile_scope")
 local command_manager = require("core.command_manager")
 local log = require("core.logger").for_area("timeline")
 local perf_log = require("core.logger").for_area("ui.scroll_perf")
+local ui_constants = require("core.ui_constants")
+local C = ui_constants.COLORS
 
 M.RULER_HEIGHT = 32
 local MIN_LABEL_SPACING = 20
 local AVERAGE_CHAR_WIDTH = 7.0
 
-local BACKGROUND_COLOR = "#1e1e1e"
-local BASELINE_COLOR = "#3b3b3b"
-local MAJOR_TICK_COLOR = "#585858"
-local MEDIUM_TICK_COLOR = "#585858"
-local MINOR_TICK_COLOR = "#585858"
-local LABEL_COLOR = "#b2b2b2"
+local BACKGROUND_COLOR = C.RULER_BG
+local BASELINE_COLOR   = C.RULER_BASELINE
+local MAJOR_TICK_COLOR = C.RULER_TICK
+local MEDIUM_TICK_COLOR = C.RULER_TICK
+local MINOR_TICK_COLOR = C.RULER_TICK
+local LABEL_COLOR      = C.RULER_LABEL
 
 local BASELINE_HEIGHT = 1
 local MAJOR_TICK_HEIGHT = 10
@@ -154,7 +156,7 @@ function M.create(widget, state_module)
             local gx = state_module.time_to_pixel(gf, width)
             local DASH = 4
             local GAP  = 4
-            local GHOST_COLOR = "#aaaaaa"
+            local GHOST_COLOR = C.RULER_GHOST
             local y = 0
             while y < M.RULER_HEIGHT do
                 local dash_h = math.min(DASH, M.RULER_HEIGHT - y)
@@ -301,7 +303,7 @@ function M.create(widget, state_module)
             local handle_height = 8   -- height from top to tip
             local handle_y = 0
             local tip_y = handle_y + handle_height
-            local playhead_color = "#ff6b6b"
+            local playhead_color = C.ACCENT_PLAYHEAD
 
             -- Draw filled triangle (points: top-left, top-right, bottom-tip)
             timeline.add_triangle(ruler.widget,

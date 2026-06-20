@@ -6,6 +6,8 @@
 -- - Stretching thumb edges = zoom
 local profile_scope = require("core.profile_scope")
 local perf_log = require("core.logger").for_area("ui.scroll_perf")
+local ui_constants = require("core.ui_constants")
+local C = ui_constants.COLORS
 
 local M = {}
 
@@ -53,7 +55,7 @@ function M.create(widget, state_module)
         timeline.clear_commands(scrollbar.widget)
 
         -- Background
-        timeline.add_rect(scrollbar.widget, 0, 0, width, M.SCROLLBAR_HEIGHT, "#1a1a1a")
+        timeline.add_rect(scrollbar.widget, 0, 0, width, M.SCROLLBAR_HEIGHT, C.SCROLLBAR_BAR_BG)
 
         -- Get viewport and total duration
         local viewport_start = state_module.get_viewport_start_time()
@@ -108,11 +110,11 @@ function M.create(widget, state_module)
         draw_mark_overlay()
 
         -- Thumb
-        timeline.add_rect(scrollbar.widget, thumb_x, 2, thumb_width, M.SCROLLBAR_HEIGHT - 4, "#4a4a4a")
+        timeline.add_rect(scrollbar.widget, thumb_x, 2, thumb_width, M.SCROLLBAR_HEIGHT - 4, C.SCROLLBAR_BAR_THUMB)
 
         -- Thumb edges (for resize handles)
-        timeline.add_line(scrollbar.widget, thumb_x, 2, thumb_x, M.SCROLLBAR_HEIGHT - 2, "#666666", 2)
-        timeline.add_line(scrollbar.widget, thumb_x + thumb_width, 2, thumb_x + thumb_width, M.SCROLLBAR_HEIGHT - 2, "#666666", 2)
+        timeline.add_line(scrollbar.widget, thumb_x, 2, thumb_x, M.SCROLLBAR_HEIGHT - 2, C.SCROLLBAR_BAR_HANDLE, 2)
+        timeline.add_line(scrollbar.widget, thumb_x + thumb_width, 2, thumb_x + thumb_width, M.SCROLLBAR_HEIGHT - 2, C.SCROLLBAR_BAR_HANDLE, 2)
 
         -- Trigger Qt repaint
         timeline.update(scrollbar.widget)

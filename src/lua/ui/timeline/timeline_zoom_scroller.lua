@@ -19,13 +19,15 @@
 local M = {}
 local command_manager = require("core.command_manager")
 local profile_scope = require("core.profile_scope")
+local ui_constants = require("core.ui_constants")
+local C = ui_constants.COLORS
 
 M.SCROLLER_HEIGHT = 14
 
-local TRACK_COLOR  = "#282828"
-local BORDER_COLOR = "#404040"
-local THUMB_COLOR  = "#555555"
-local HANDLE_COLOR = "#7a7a7a"
+local TRACK_COLOR  = C.SCROLLER_TRACK_BG
+local BORDER_COLOR = C.SCROLLER_BORDER
+local THUMB_COLOR  = C.SCROLLER_THUMB
+local HANDLE_COLOR = C.SCROLLER_HANDLE
 
 local HANDLE_W = 8     -- grab zone at each thumb end (px)
 local MIN_THUMB_W = 24 -- visual floor so the thumb stays grabbable

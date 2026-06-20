@@ -4,6 +4,7 @@ local json_test_loader = require("bug_reporter.json_test_loader")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
 local log = require("core.logger").for_area("ui")
 local qt = require("bug_reporter.qt_compat")
+local ui_constants = require("core.ui_constants")
 
 local SubmissionDialog = {}
 
@@ -114,7 +115,7 @@ local function build_button_row(video_path)
 
     local submit_btn = qt.CREATE_BUTTON("Submit Bug Report")
     qt.SET_WIDGET_STYLE(submit_btn,
-        "background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
+        "background-color: " .. ui_constants.COLORS.ACCENT_SUCCESS .. "; color: white; font-weight: bold; padding: 8px;")
 
     local cancel_btn = qt.CREATE_BUTTON("Cancel")
 
