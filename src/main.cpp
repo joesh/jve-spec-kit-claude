@@ -261,29 +261,29 @@ int main(int argc, char *argv[])
     // Apply professional dark theme
     app.setStyle(QStyleFactory::create("Fusion"));
     QPalette darkPalette;
-    darkPalette.setColor(QPalette::Window, QColor(30, 30, 30));
+    darkPalette.setColor(QPalette::Window, QColor(30, 30, 36));  // cool-tinted (B=R+6) to match Resolve chrome
     darkPalette.setColor(QPalette::WindowText, Qt::white);
-    darkPalette.setColor(QPalette::Base, QColor(25, 25, 25));
-    darkPalette.setColor(QPalette::AlternateBase, QColor(35, 35, 35));
+    darkPalette.setColor(QPalette::Base, QColor(25, 25, 31));  // cool-tinted (B=R+6)
+    darkPalette.setColor(QPalette::AlternateBase, QColor(36, 36, 42));  // #24242A — Resolve's alternating list-row (cool, B=R+6), not neutral grey
     // Tooltip tracks the active theme — it's a colour in darkPalette, so it
     // follows the dark-mode setting like every other role here. Dark box +
     // white text (both were white before — invisible white-on-white, every
     // tooltip rendered blank). When a light theme lands, give it its own
     // palette with a light ToolTipBase / dark ToolTipText.
-    darkPalette.setColor(QPalette::ToolTipBase, QColor(20, 20, 20));
+    darkPalette.setColor(QPalette::ToolTipBase, QColor(20, 20, 26));  // cool-tinted (B=R+6)
     darkPalette.setColor(QPalette::ToolTipText, Qt::white);
     darkPalette.setColor(QPalette::Text, Qt::white);
-    darkPalette.setColor(QPalette::Button, QColor(35, 35, 35));
+    darkPalette.setColor(QPalette::Button, QColor(35, 35, 41));  // cool-tinted (B=R+6)
     darkPalette.setColor(QPalette::ButtonText, Qt::white);
     darkPalette.setColor(QPalette::BrightText, Qt::red);
     darkPalette.setColor(QPalette::Link, QColor(42, 130, 218));
-    darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
+    darkPalette.setColor(QPalette::Highlight, QColor(23, 24, 26));  // #17181A — Resolve's selected-row near-black (cool, B=R+3), not accent-blue
     darkPalette.setColor(QPalette::HighlightedText, Qt::white);
     // Disabled state must be visually distinct on dark backgrounds
     darkPalette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(70, 70, 70));
     darkPalette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(70, 70, 70));
     darkPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(70, 70, 70));
-    darkPalette.setColor(QPalette::Disabled, QPalette::Button, QColor(28, 28, 28));
+    darkPalette.setColor(QPalette::Disabled, QPalette::Button, QColor(28, 28, 34));  // cool-tinted (B=R+6)
     app.setPalette(darkPalette);
 
     // Stylesheet reinforces disabled button appearance (Fusion palette alone

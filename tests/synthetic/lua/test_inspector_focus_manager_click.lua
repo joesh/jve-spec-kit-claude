@@ -32,7 +32,8 @@ _G.qt_set_widget_property = function() end
 -- Replace ui_constants color lookup we don't care about.
 package.loaded["core.ui_constants"] = {
     COLORS = {
-        FOCUS_BORDER_COLOR = "#0078d4",
+        STATE_FOCUS = "#0078d4",
+        SURFACE_CHROME = "#28282e",
     },
 }
 

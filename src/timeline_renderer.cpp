@@ -154,8 +154,9 @@ void TimelineRenderer::paintEvent(QPaintEvent* /* event */)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
 
-    // Fill background
-    painter.fillRect(rect(), QColor(35, 35, 35));
+    // Fill background — cool-tinted timeline canvas (#232329, B=R+6), matches
+    // ui_constants TIMELINE_CANVAS_BG so the C++ base agrees with the Lua chrome.
+    painter.fillRect(rect(), QColor(35, 35, 41));
 
     // Execute all drawing commands from Lua
     executeDrawingCommands(painter);

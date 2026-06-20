@@ -1,62 +1,123 @@
 --- UI System Constants
--- Centralized constants with proper naming conventions and theme abstraction
+-- Three-tier theme tokens (design-system convention; see docs/ui-theme-tokens.md):
+--   TIER 1 PALETTE   — raw values, named by APPEARANCE (a lightness rank or hue).
+--                      The only place hex literals live. Module-local; never
+--                      exported, never read by call sites. A future
+--                      interface-lightness slider remaps these by recomputing
+--                      each GREY_<rank> from its rank — which is why the names
+--                      are ranks, not pixel values (see todo-ui-lightness-slider).
+--   TIER 2 SEMANTIC  — named by INTENT/ROLE (SURFACE_*, TEXT_*, BORDER_*,
+--                      STATE_*, ACCENT_*). What almost every call site uses.
+--   TIER 3 COMPONENT — named by WIDGET, only where a surface is genuinely
+--                      special-cased and not a plain semantic role.
+-- Call sites reference TIER 2/3 — never TIER 1. Re-tint edits TIER 1 values in
+-- place; names and call sites never move.
 local ui_constants = {}
 
 -- =============================================================================
--- THEME LAYER: DaVinci Resolve Color Palette (RGB sampled values)
+-- TIER 1 — PALETTE (primitives; named by appearance; the only hex literals)
 -- =============================================================================
--- Core DaVinci Resolve colors - these are the source theme values
-local RESOLVE_PANEL_BACKGROUND_COLOR = "#28282e"    -- 40,40,46 (panel background; blue-tinted, measured from Resolve)
-local RESOLVE_FIELD_BACKGROUND_COLOR = "#1f1f1f"    -- 31,31,31 (field background)
-local RESOLVE_FIELD_BORDER_COLOR = "#090909"        -- 9,9,9 (field border)
-local RESOLVE_FIELD_TEXT_COLOR = "#e6e6e6"          -- 230,230,230 (editable text)
-local RESOLVE_LABEL_TEXT_COLOR = "#dcdcdc"          -- 220,220,220 (labels)
-local RESOLVE_HEADER_TEXT_COLOR = "#f5f5f5"         -- 245,245,245 (categories/headers)
-local RESOLVE_WHITE_TEXT_COLOR = "#ffffff"          -- Pure white for headers
-local RESOLVE_FOCUS_BORDER_COLOR = "#0078d4"        -- Blue focus border
-local RESOLVE_SCROLL_BACKGROUND_COLOR = "#282828"   -- Scroll area background
-local RESOLVE_SCROLL_BORDER_COLOR = "#404040"       -- Scroll area border
-local RESOLVE_HOVER_BACKGROUND_COLOR = "#454545"    -- Hover state background
-local RESOLVE_SECTION_INDICATOR_COLOR = "#ff6b35"   -- Orange section indicator
-local RESOLVE_DISABLED_BACKGROUND_COLOR = "#666666" -- Disabled state background
-local RESOLVE_SELECTION_BORDER_COLOR = "#e64b3d"    -- 230,75,61 (selection border)
-local RESOLVE_FIELD_FOCUS_BACKGROUND_COLOR = "#262626"    -- Focus background for fields
-local RESOLVE_DROPDOWN_BACKGROUND_COLOR = "#3a3a3a"       -- Dropdown background 
-local RESOLVE_DROPDOWN_BORDER_COLOR = "#555555"           -- Dropdown border
-local RESOLVE_BUTTON_HOVER_COLOR = "#106ebe"              -- Button hover state
-local RESOLVE_READONLY_BACKGROUND_COLOR = "#2a2a2a"       -- Read-only field background
-local RESOLVE_READONLY_BORDER_COLOR = "#555555"           -- Read-only field border
-local RESOLVE_GENERAL_LABEL_COLOR = "#cccccc"             -- General label color
+-- Neutral ramp. The number is a relative-lightness RANK (950 = darkest), NOT a
+-- pixel value — it stays stable when a re-tint / lightness-slider shifts the
+-- bytes. Values are blue-tinted greys measured from DaVinci Resolve (B ≈ R+6).
+-- Every distinct source value is preserved as its own rung; several rungs in
+-- the 860–700 band sit within 1–2 levels of each other.
+-- Cool-tinted to match Resolve chrome: B = R+6, G = R (the tint measured off
+-- #28282E/#24242A). Re-tint pass 2026-06-20 — values shifted, ranks unchanged.
+local GREY_950 = "#09090f"   -- 9,9,15    deepest hairline
+local GREY_900 = "#1a1a20"   -- 26,26,32  deepest inset surface (scrollbar track)
+local GREY_860 = "#1d1d23"   -- 29,29,35  timeline track-header
+local GREY_850 = "#1e1e24"   -- 30,30,36  structural canvas
+local GREY_840 = "#1f1f25"   -- 31,31,37  editable field well
+local GREY_830 = "#212126"   -- 33,33,38  cool list-header / breadcrumb (Resolve-measured)
+local GREY_820 = "#232329"   -- 35,35,41  timeline canvas
+local GREY_790 = "#25252b"   -- 37,37,43  track row (even)
+local GREY_780 = "#26262c"   -- 38,38,44  field, focused
+local GREY_750 = "#28282e"   -- 40,40,46  chrome base (Resolve-measured)
+local GREY_730 = "#2a2a30"   -- 42,42,48  read-only field
+local GREY_720 = "#2b2b31"   -- 43,43,49  raised content surface (inspector body)
+local GREY_700 = "#2d2d33"   -- 45,45,51  unfocused panel border
+local GREY_650 = "#333339"   -- 51,51,57  track-header button border
+local GREY_600 = "#3a3a40"   -- 58,58,64  overlay surface (dropdowns, menus)
+local GREY_550 = "#404046"   -- 64,64,70  structural divider
+local GREY_500 = "#45454b"   -- 69,69,75  hover wash
+local GREY_480 = "#4a4a50"   -- 74,74,80  scrollbar thumb
+local GREY_450 = "#55555b"   -- 85,85,91  control outline
+local GREY_400 = "#66666c"   -- 102,102,108 disabled fill
+local COOL_860 = "#222232"   -- 34,34,50  already-cool track-header border
+
+-- Text neutrals (near-white; kept off the grey ramp).
+local INK_000 = "#ffffff"    -- pure white
+local INK_050 = "#f5f5f5"    -- 245  heading
+local INK_120 = "#e6e6e6"    -- 230  editable value text
+local INK_140 = "#dcdcdc"    -- 220  label text
+local INK_200 = "#cccccc"    -- 204  dimmer / inactive label text
+local INK_460 = "#888888"    -- 136  muted / read-only text
+
+-- Accent hues (named by hue; role lives in TIER 2).
+local BLUE         = "#0a84ff"   -- macOS accent
+local BLUE_DEEP    = "#0078d4"   -- focus-border blue
+local BLUE_PRESSED = "#106ebe"   -- pressed/hover action blue
+local CYAN         = "#5ac8fa"   -- keyboard-focus cyan
+local RED          = "#e64b3d"   -- 230,75,61 selection / error
+local ORANGE       = "#ff6b35"   -- section indicator
 
 -- =============================================================================
--- ABSTRACTION LAYER: Semantic Color Names (maps to current theme)
+-- TIER 2 — SEMANTIC (intent/role; what call sites use)
 -- =============================================================================
--- These are the names used throughout the codebase - they map to the current theme
-local PANEL_BACKGROUND_COLOR = RESOLVE_PANEL_BACKGROUND_COLOR
-local FIELD_BACKGROUND_COLOR = RESOLVE_FIELD_BACKGROUND_COLOR
-local FIELD_BORDER_COLOR = RESOLVE_FIELD_BORDER_COLOR
-local FIELD_TEXT_COLOR = RESOLVE_FIELD_TEXT_COLOR
-local LABEL_TEXT_COLOR = RESOLVE_LABEL_TEXT_COLOR
-local HEADER_TEXT_COLOR = RESOLVE_HEADER_TEXT_COLOR
-local WHITE_TEXT_COLOR = RESOLVE_WHITE_TEXT_COLOR
-local FOCUS_BORDER_COLOR = RESOLVE_FOCUS_BORDER_COLOR
-local SCROLL_BACKGROUND_COLOR = RESOLVE_SCROLL_BACKGROUND_COLOR
-local SCROLL_BORDER_COLOR = RESOLVE_SCROLL_BORDER_COLOR
-local HOVER_BACKGROUND_COLOR = RESOLVE_HOVER_BACKGROUND_COLOR
-local SECTION_INDICATOR_COLOR = RESOLVE_SECTION_INDICATOR_COLOR
-local DISABLED_BACKGROUND_COLOR = RESOLVE_DISABLED_BACKGROUND_COLOR
-local SELECTION_BORDER_COLOR = RESOLVE_SELECTION_BORDER_COLOR
-local FIELD_FOCUS_BACKGROUND_COLOR = RESOLVE_FIELD_FOCUS_BACKGROUND_COLOR
-local DROPDOWN_BACKGROUND_COLOR = RESOLVE_DROPDOWN_BACKGROUND_COLOR
-local DROPDOWN_BORDER_COLOR = RESOLVE_DROPDOWN_BORDER_COLOR
-local BUTTON_HOVER_COLOR = RESOLVE_BUTTON_HOVER_COLOR
-local READONLY_BACKGROUND_COLOR = RESOLVE_READONLY_BACKGROUND_COLOR
-local READONLY_BORDER_COLOR = RESOLVE_READONLY_BORDER_COLOR
-local GENERAL_LABEL_COLOR = RESOLVE_GENERAL_LABEL_COLOR
+-- SURFACE_* — backgrounds, ordered by elevation (deeper = recessed).
+local SURFACE_WELL     = GREY_900   -- deepest inset (scrollbar track, input wells)
+local SURFACE_CANVAS   = GREY_850   -- editing surfaces (timeline, ruler, monitor)
+local SURFACE_CHROME   = GREY_750   -- app/panel chrome (the signature surface)
+local SURFACE_PANEL    = GREY_720   -- content panel raised on chrome (inspector body)
+local SURFACE_OVERLAY  = GREY_600   -- popovers, dropdowns, menus, section headers
+local SURFACE_HOVER    = GREY_500   -- hover wash
+local SURFACE_DISABLED = GREY_400   -- disabled fill
 
--- Additional semantic colors
-local COLLAPSIBLE_HEADER_HOVER_BACKGROUND_COLOR = "rgba(255, 255, 255, 0.1)"
-local BUTTON_BACKGROUND_COLOR = SCROLL_BORDER_COLOR  -- Reuse scroll border for button background
+-- TEXT_*
+local TEXT_PRIMARY   = INK_000
+local TEXT_HEADING   = INK_050
+local TEXT_LABEL     = INK_140
+local TEXT_LABEL_DIM = INK_200   -- inactive/secondary label
+local TEXT_VALUE     = INK_120   -- text inside an editable field
+local TEXT_MUTED     = INK_460   -- read-only / disabled text
+
+-- BORDER_*
+local BORDER_HAIRLINE = GREY_950   -- thin field outlines
+local BORDER_DIVIDER  = GREY_550   -- visible structural dividers
+local BORDER_CONTROL  = GREY_450   -- input/dropdown outlines
+
+-- STATE_* — interactive feedback.
+local STATE_FOCUS      = BLUE_DEEP     -- focused panel/field border
+local STATE_FOCUS_RING = CYAN          -- keyboard-nav ring
+local STATE_SELECTED   = RED           -- selection border
+local STATE_ERROR      = RED           -- field-error border (same hue as selection today)
+local STATE_PRESSED    = BLUE_PRESSED  -- pressed/active action control
+
+-- ACCENT_* — brand/action.
+local ACCENT_ACTION  = BLUE     -- primary action ("call to action") button
+local ACCENT_SECTION = ORANGE   -- collapsible-section marker
+
+-- =============================================================================
+-- TIER 3 — COMPONENT (widget-specific surfaces that aren't a plain role)
+-- =============================================================================
+local INSPECTOR_HEADER_BG    = SURFACE_OVERLAY
+local INSPECTOR_CONTENT_BG   = SURFACE_PANEL
+local FIELD_WELL_BG          = GREY_840   -- editable line-edit / spin well
+local FIELD_FOCUS_BG         = GREY_780
+local FIELD_READONLY_BG      = GREY_730
+local BUTTON_BG              = GREY_550   -- push-button face (== divider grey)
+local SCROLLBAR_THUMB        = GREY_480
+local SCROLLBAR_TRACK_BG     = SURFACE_WELL
+local LIST_HEADER_BG         = GREY_830   -- list/tree column-header + breadcrumb
+local TRACK_HEADER_BG        = GREY_860
+local TRACK_HEADER_BORDER    = COOL_860
+local TRACK_BUTTON_BORDER    = GREY_650
+local TRACK_ROW_EVEN         = GREY_790
+local TRACK_ROW_ODD          = SURFACE_PANEL
+local TIMELINE_CANVAS_BG     = GREY_820
+local UNFOCUSED_PANEL_BORDER = GREY_700
+local HEADER_HOVER_OVERLAY   = "rgba(255, 255, 255, 0.1)"  -- collapsible-header hover wash
 
 -- =============================================================================
 -- FONT CONSTANTS
@@ -71,53 +132,60 @@ local TIMECODE_FONT_SIZE = "20px"
 local DEBUG_COLORS_ENABLED = false  -- Set to false to disable debug colors
 
 -- =============================================================================
--- EXPORTED COLOR CONSTANTS
+-- EXPORTED COLOR CONSTANTS (TIER 2 + TIER 3 only — never TIER 1)
 -- =============================================================================
 ui_constants.COLORS = {
-    -- Panel and background colors
-    PANEL_BACKGROUND_COLOR = PANEL_BACKGROUND_COLOR,
-    SCROLL_BACKGROUND_COLOR = SCROLL_BACKGROUND_COLOR,
-    
-    -- Field colors
-    FIELD_BACKGROUND_COLOR = FIELD_BACKGROUND_COLOR,
-    FIELD_BORDER_COLOR = FIELD_BORDER_COLOR,
-    FIELD_TEXT_COLOR = FIELD_TEXT_COLOR,
-    FIELD_FOCUS_BACKGROUND_COLOR = FIELD_FOCUS_BACKGROUND_COLOR,
-    
-    -- Text colors
-    WHITE_TEXT_COLOR = WHITE_TEXT_COLOR,
-    LABEL_TEXT_COLOR = LABEL_TEXT_COLOR,
-    HEADER_TEXT_COLOR = HEADER_TEXT_COLOR,
-    GENERAL_LABEL_COLOR = GENERAL_LABEL_COLOR,
-    
-    -- Interactive colors
-    FOCUS_BORDER_COLOR = FOCUS_BORDER_COLOR,
-    SELECTION_BORDER_COLOR = SELECTION_BORDER_COLOR,
-    HOVER_BACKGROUND_COLOR = HOVER_BACKGROUND_COLOR,
-    
-    -- UI element colors
-    SCROLL_BORDER_COLOR = SCROLL_BORDER_COLOR,
-    SECTION_INDICATOR_COLOR = SECTION_INDICATOR_COLOR,
-    DISABLED_BACKGROUND_COLOR = DISABLED_BACKGROUND_COLOR,
-    
-    -- Form control colors
-    DROPDOWN_BACKGROUND_COLOR = DROPDOWN_BACKGROUND_COLOR,
-    DROPDOWN_BORDER_COLOR = DROPDOWN_BORDER_COLOR,
-    BUTTON_BACKGROUND_COLOR = BUTTON_BACKGROUND_COLOR,
-    BUTTON_HOVER_COLOR = BUTTON_HOVER_COLOR,
-    READONLY_BACKGROUND_COLOR = READONLY_BACKGROUND_COLOR,
-    READONLY_BORDER_COLOR = READONLY_BORDER_COLOR,
-    
-    -- Header specific colors
-    COLLAPSIBLE_HEADER_HOVER_BACKGROUND_COLOR = COLLAPSIBLE_HEADER_HOVER_BACKGROUND_COLOR,
+    -- Surfaces (by elevation)
+    SURFACE_WELL = SURFACE_WELL,
+    SURFACE_CANVAS = SURFACE_CANVAS,
+    SURFACE_CHROME = SURFACE_CHROME,
+    SURFACE_PANEL = SURFACE_PANEL,
+    SURFACE_OVERLAY = SURFACE_OVERLAY,
+    SURFACE_HOVER = SURFACE_HOVER,
+    SURFACE_DISABLED = SURFACE_DISABLED,
 
-    -- Inspector-specific (feature 012). Apply/Reset buttons use Qt
-    -- native styling (see mount.lua comment), so no button-color
-    -- constants here.
-    INSPECTOR_HEADER_BG           = "#3a3a3a",
-    INSPECTOR_CONTENT_BG          = "#2b2b2b",
-    FIELD_ERROR_BORDER            = "#e64b3d",
-    FIELD_READ_ONLY_TEXT          = "#888888",
+    -- Text
+    TEXT_PRIMARY = TEXT_PRIMARY,
+    TEXT_HEADING = TEXT_HEADING,
+    TEXT_LABEL = TEXT_LABEL,
+    TEXT_LABEL_DIM = TEXT_LABEL_DIM,
+    TEXT_VALUE = TEXT_VALUE,
+    TEXT_MUTED = TEXT_MUTED,
+
+    -- Borders
+    BORDER_HAIRLINE = BORDER_HAIRLINE,
+    BORDER_DIVIDER = BORDER_DIVIDER,
+    BORDER_CONTROL = BORDER_CONTROL,
+
+    -- Interactive state
+    STATE_FOCUS = STATE_FOCUS,
+    STATE_FOCUS_RING = STATE_FOCUS_RING,
+    STATE_SELECTED = STATE_SELECTED,
+    STATE_ERROR = STATE_ERROR,
+    STATE_PRESSED = STATE_PRESSED,
+
+    -- Accent
+    ACCENT_ACTION = ACCENT_ACTION,
+    ACCENT_SECTION = ACCENT_SECTION,
+
+    -- Component surfaces
+    INSPECTOR_HEADER_BG = INSPECTOR_HEADER_BG,
+    INSPECTOR_CONTENT_BG = INSPECTOR_CONTENT_BG,
+    FIELD_WELL_BG = FIELD_WELL_BG,
+    FIELD_FOCUS_BG = FIELD_FOCUS_BG,
+    FIELD_READONLY_BG = FIELD_READONLY_BG,
+    BUTTON_BG = BUTTON_BG,
+    SCROLLBAR_THUMB = SCROLLBAR_THUMB,
+    SCROLLBAR_TRACK_BG = SCROLLBAR_TRACK_BG,
+    LIST_HEADER_BG = LIST_HEADER_BG,
+    TRACK_HEADER_BG = TRACK_HEADER_BG,
+    TRACK_HEADER_BORDER = TRACK_HEADER_BORDER,
+    TRACK_BUTTON_BORDER = TRACK_BUTTON_BORDER,
+    TRACK_ROW_EVEN = TRACK_ROW_EVEN,
+    TRACK_ROW_ODD = TRACK_ROW_ODD,
+    TIMELINE_CANVAS_BG = TIMELINE_CANVAS_BG,
+    UNFOCUSED_PANEL_BORDER = UNFOCUSED_PANEL_BORDER,
+    HEADER_HOVER_OVERLAY = HEADER_HOVER_OVERLAY,
 }
 
 -- =============================================================================
@@ -134,7 +202,7 @@ ui_constants.FONTS = {
 -- =============================================================================
 ui_constants.LAYOUT = {
     MAIN_SPACING = 0,  -- C++ line 87: layout->setSpacing(0)
-    CONTENT_SPACING = 2,  -- C++ line 101: layout->setSpacing(2) 
+    CONTENT_SPACING = 2,  -- C++ line 101: layout->setSpacing(2)
     SECTION_SPACING = 3,  -- C++ line 276: layout->setSpacing(3)
     MAIN_MARGIN_LEFT = 4, -- C++ line 86/100: setContentsMargins(4, 4, 4, 4)
     MAIN_MARGIN_TOP = 4,
@@ -181,55 +249,55 @@ ui_constants.WINDOW = {
 -- =============================================================================
 ui_constants.STYLES = {
     -- Basic widget styles
-    SCROLL_AREA = "QScrollArea { background: " .. PANEL_BACKGROUND_COLOR .. "; border: none; }",
-    CONTENT_WIDGET = "QWidget { background: " .. PANEL_BACKGROUND_COLOR .. "; }",
-    
+    SCROLL_AREA = "QScrollArea { background: " .. SURFACE_CHROME .. "; border: none; }",
+    CONTENT_WIDGET = "QWidget { background: " .. SURFACE_CHROME .. "; }",
+
     -- Header and label styles
-    SECTION_HEADER = "QLabel { color: " .. WHITE_TEXT_COLOR .. "; font-weight: bold; font-size: " .. HEADER_FONT_SIZE .. "; padding: 6px 8px; margin-top: 16px; background: none; border: none; }",
-    FIELD_LABEL = "QLabel { color: " .. GENERAL_LABEL_COLOR .. "; font-size: " .. DEFAULT_FONT_SIZE .. "; font-weight: normal; background: transparent; text-align: right; min-width: 100px; max-width: 100px; }",
-    
+    SECTION_HEADER = "QLabel { color: " .. TEXT_PRIMARY .. "; font-weight: bold; font-size: " .. HEADER_FONT_SIZE .. "; padding: 6px 8px; margin-top: 16px; background: none; border: none; }",
+    FIELD_LABEL = "QLabel { color: " .. TEXT_LABEL_DIM .. "; font-size: " .. DEFAULT_FONT_SIZE .. "; font-weight: normal; background: transparent; text-align: right; min-width: 100px; max-width: 100px; }",
+
     -- Form field styles
-    STRING_FIELD = "QLineEdit { background: " .. BUTTON_BACKGROUND_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",
-    DOUBLE_FIELD = "QDoubleSpinBox { background: " .. BUTTON_BACKGROUND_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",
-    ENUM_FIELD = "QComboBox { background: " .. BUTTON_BACKGROUND_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; max-height: 22px; }",
-    STRING_FIELD_READONLY = "QLineEdit { background: " .. READONLY_BACKGROUND_COLOR .. "; border: 1px solid " .. READONLY_BORDER_COLOR .. "; color: " .. GENERAL_LABEL_COLOR .. "; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",
+    STRING_FIELD = "QLineEdit { background: " .. BUTTON_BG .. "; border: 1px solid " .. BORDER_CONTROL .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",
+    DOUBLE_FIELD = "QDoubleSpinBox { background: " .. BUTTON_BG .. "; border: 1px solid " .. BORDER_CONTROL .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",
+    ENUM_FIELD = "QComboBox { background: " .. BUTTON_BG .. "; border: 1px solid " .. BORDER_CONTROL .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; max-height: 22px; }",
+    STRING_FIELD_READONLY = "QLineEdit { background: " .. FIELD_READONLY_BG .. "; border: 1px solid " .. BORDER_CONTROL .. "; color: " .. TEXT_LABEL_DIM .. "; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",
     STRING_FIELD_PLACEHOLDER = "Enter value...",
 
     -- Main window styling
     MAIN_WINDOW_TITLE_BAR = table.concat({
         -- Window and container backgrounds (no blanket QWidget rule — that kills native rendering)
-        "QMainWindow { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; }",
-        "QSplitter { background-color: " .. PANEL_BACKGROUND_COLOR .. "; }",
+        "QMainWindow { background-color: " .. SURFACE_CHROME .. "; color: " .. TEXT_PRIMARY .. "; }",
+        "QSplitter { background-color: " .. SURFACE_CHROME .. "; }",
         -- Orientation-specific: a horizontal splitter's handle is a vertical
         -- bar (its WIDTH is the divider thickness); a vertical splitter's handle
         -- is a horizontal bar (its HEIGHT is the thickness). The generic
         -- ::handle rule with both width+height set the wrong axis per
         -- orientation and left a too-thin grab target. See WINDOW.SPLITTER_HANDLE_GRAB_PX.
-        "QSplitter::handle:horizontal { background-color: " .. SCROLL_BORDER_COLOR .. "; width: " .. ui_constants.WINDOW.SPLITTER_HANDLE_GRAB_PX .. "px; }",
-        "QSplitter::handle:vertical { background-color: " .. SCROLL_BORDER_COLOR .. "; height: " .. ui_constants.WINDOW.SPLITTER_HANDLE_GRAB_PX .. "px; }",
+        "QSplitter::handle:horizontal { background-color: " .. BORDER_DIVIDER .. "; width: " .. ui_constants.WINDOW.SPLITTER_HANDLE_GRAB_PX .. "px; }",
+        "QSplitter::handle:vertical { background-color: " .. BORDER_DIVIDER .. "; height: " .. ui_constants.WINDOW.SPLITTER_HANDLE_GRAB_PX .. "px; }",
         -- Text controls
-        "QLabel { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; padding: 8px; }",
-        "QLineEdit { background-color: " .. BUTTON_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; padding: 4px; }",
-        "QLineEdit:focus { border: 1px solid #5ac8fa; }",
+        "QLabel { background-color: " .. SURFACE_CHROME .. "; color: " .. TEXT_PRIMARY .. "; border: 1px solid " .. BORDER_DIVIDER .. "; padding: 8px; }",
+        "QLineEdit { background-color: " .. BUTTON_BG .. "; color: " .. TEXT_PRIMARY .. "; border: 1px solid " .. BORDER_CONTROL .. "; padding: 4px; }",
+        "QLineEdit:focus { border: 1px solid " .. STATE_FOCUS_RING .. "; }",
         -- Tree
-        "QTreeWidget { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; }",
+        "QTreeWidget { background-color: " .. SURFACE_CHROME .. "; color: " .. TEXT_PRIMARY .. "; border: 1px solid " .. BORDER_DIVIDER .. "; }",
         -- Buttons
-        "QPushButton { background-color: " .. BUTTON_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; border-radius: 3px; padding: 3px 8px; }",
-        "QPushButton:focus { border: 1px solid #5ac8fa; }",
-        "QPushButton:hover { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }",
+        "QPushButton { background-color: " .. BUTTON_BG .. "; color: " .. TEXT_PRIMARY .. "; border: 1px solid " .. BORDER_CONTROL .. "; border-radius: 3px; padding: 3px 8px; }",
+        "QPushButton:focus { border: 1px solid " .. STATE_FOCUS_RING .. "; }",
+        "QPushButton:hover { background-color: " .. SURFACE_HOVER .. "; }",
         -- Combobox: no stylesheet — Fusion dark palette handles rendering + highlight correctly.
         -- Menus
-        "QMenuBar { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: none; }",
-        "QMenuBar::item { background: transparent; color: " .. WHITE_TEXT_COLOR .. "; padding: 6px 12px; }",
-        "QMenuBar::item:selected { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }",
-        "QMenu { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; }",
-        "QMenu::item:selected { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }",
+        "QMenuBar { background-color: " .. SURFACE_CHROME .. "; color: " .. TEXT_PRIMARY .. "; border: none; }",
+        "QMenuBar::item { background: transparent; color: " .. TEXT_PRIMARY .. "; padding: 6px 12px; }",
+        "QMenuBar::item:selected { background-color: " .. SURFACE_HOVER .. "; }",
+        "QMenu { background-color: " .. SURFACE_CHROME .. "; color: " .. TEXT_PRIMARY .. "; border: 1px solid " .. BORDER_DIVIDER .. "; }",
+        "QMenu::item:selected { background-color: " .. SURFACE_HOVER .. "; }",
         -- Scroll bars
-        "QScrollBar:vertical { background-color: " .. PANEL_BACKGROUND_COLOR .. "; width: 8px; }",
-        "QScrollBar::handle:vertical { background-color: " .. DROPDOWN_BORDER_COLOR .. "; border-radius: 4px; min-height: 20px; }",
+        "QScrollBar:vertical { background-color: " .. SURFACE_CHROME .. "; width: 8px; }",
+        "QScrollBar::handle:vertical { background-color: " .. BORDER_CONTROL .. "; border-radius: 4px; min-height: 20px; }",
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }",
     }, "\n"),
-    
+
     -- Debug system
     DEBUG_COLORS_ENABLED = DEBUG_COLORS_ENABLED,
 }
@@ -249,7 +317,7 @@ ui_constants.RETURN_NAMES = {
 -- Widget types for error reporting
 ui_constants.WIDGET_TYPES = {
     SCROLL_AREA = "scroll_area",
-    CONTENT_WIDGET = "content_widget", 
+    CONTENT_WIDGET = "content_widget",
     LAYOUT = "layout",
     INSPECTOR_PANEL = "inspector_panel"
 }
@@ -288,7 +356,7 @@ ui_constants.PARAM_KEYS = {
 -- Error context keys
 ui_constants.ERROR_CONTEXT = {
     OPERATION = "operation",
-    COMPONENT = "component", 
+    COMPONENT = "component",
     WIDGET_TYPE = "widget_type",
     STEP = "step",
     PURPOSE = "purpose"
@@ -314,7 +382,7 @@ ui_constants.LOGGING = {
     DEFAULT_LEVEL = "INFO",
     COMPONENT_NAMES = {
         TIMELINE = "timeline",
-        METADATA = "metadata", 
+        METADATA = "metadata",
         UI = "ui",
         INSPECTOR = "inspector",
         WIDGETS = "widgets",

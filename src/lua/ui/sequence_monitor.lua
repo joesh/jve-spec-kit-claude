@@ -33,7 +33,7 @@ local ui_constants = require("core.ui_constants")
 -- Resolve's blue-tinted panel grey (#28282d, 40,40,45) — NOT a neutral grey.
 -- All monitor chrome (title bar, timecode bar, grade status) uses this so it
 -- matches Resolve side-by-side; neutral #2b2b2b reads visibly warmer.
-local CHROME_BG = ui_constants.COLORS.PANEL_BACKGROUND_COLOR
+local CHROME_BG = ui_constants.COLORS.SURFACE_CHROME
 
 local SequenceMonitor = {}
 SequenceMonitor.__index = SequenceMonitor

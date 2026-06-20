@@ -134,10 +134,13 @@ function CollapsibleSection:create()
         log.warn("[collapsible_section] Failed to set main widget size policy: %s", log_detailed_error(main_size_policy_error))
     end
 
-    -- Apply proper section styling (with optional debug colors)
+    -- Apply proper section styling (with optional debug colors). The
+    -- section surface is the inspector body color — sourced from the
+    -- theme token so it tints with the rest of the chrome, never a
+    -- pasted hex (see docs/ui-theme-tokens.md).
     local main_style = [[
         QWidget {
-            background-color: #2b2b2b;
+            background-color: ]] .. ui_constants.COLORS.INSPECTOR_CONTENT_BG .. [[;
             margin: 0px;
             padding: 0px;
         }
@@ -563,7 +566,7 @@ function CollapsibleSection:createDisclosureTriangle(header_layout, operation_co
         QLabel {
             background: transparent;
             border: none;
-            color: ]] .. ui_constants.COLORS.LABEL_TEXT_COLOR .. [[;
+            color: ]] .. ui_constants.COLORS.TEXT_LABEL .. [[;
             font-size: ]] .. ui_constants.FONTS.DEFAULT_FONT_SIZE .. [[;
             min-width: 16px;
             max-width: 16px;

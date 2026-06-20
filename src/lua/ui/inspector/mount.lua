@@ -32,11 +32,21 @@ local function style_header_label()
             font-size: %s;
             font-weight: bold;
         }
-    ]], C.INSPECTOR_HEADER_BG, C.WHITE_TEXT_COLOR, F.HEADER_FONT_SIZE)
+    ]], C.INSPECTOR_HEADER_BG, C.TEXT_PRIMARY, F.HEADER_FONT_SIZE)
 end
 
 local function style_content_widget()
     return string.format([[ QWidget { background: %s; } ]], C.INSPECTOR_CONTENT_BG)
+end
+
+-- The outer panel surface. Owns the base color that shows in the gaps
+-- between the search row / header / scroll area, so it must match the
+-- scroll content (INSPECTOR_CONTENT_BG) for a seamless flat panel like
+-- Resolve's. ID-scoped so it styles only the container, not its children.
+-- No border (Joe: lose it). The C++ binding deliberately bakes no color.
+local function style_container()
+    return string.format(
+        [[ QWidget#LuaInspectorContainer { background: %s; } ]], C.INSPECTOR_CONTENT_BG)
 end
 
 local function style_error_banner()
@@ -49,8 +59,8 @@ local function style_error_banner()
             border-top: 1px solid %s;
             border-bottom: 1px solid %s;
         }
-    ]], C.INSPECTOR_HEADER_BG, C.FIELD_ERROR_BORDER, F.DEFAULT_FONT_SIZE,
-        C.FIELD_ERROR_BORDER, C.FIELD_ERROR_BORDER)
+    ]], C.INSPECTOR_HEADER_BG, C.STATE_ERROR, F.DEFAULT_FONT_SIZE,
+        C.STATE_ERROR, C.STATE_ERROR)
 end
 
 local function get_sequence()
@@ -62,6 +72,7 @@ local function get_sequence()
 end
 
 local function build_root_layout(container)
+    qt_constants.PROPERTIES.SET_STYLE(container, style_container())
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
     assert(layout, "inspector.mount: CREATE_VBOX returned nil")
     qt_constants.LAYOUT.SET_ON_WIDGET(container, layout)

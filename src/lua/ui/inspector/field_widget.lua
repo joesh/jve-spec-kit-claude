@@ -128,9 +128,9 @@ M._format_value = format_value  -- exposed for unit tests
 -- ----------------------------------------------------------------------
 
 local function line_edit_style(read_only, error_state)
-    local bg = read_only and C.READONLY_BACKGROUND_COLOR or C.FIELD_BACKGROUND_COLOR
-    local fg = read_only and C.FIELD_READ_ONLY_TEXT     or C.FIELD_TEXT_COLOR
-    local border = error_state and C.FIELD_ERROR_BORDER or C.FIELD_BORDER_COLOR
+    local bg = read_only and C.FIELD_READONLY_BG or C.FIELD_WELL_BG
+    local fg = read_only and C.TEXT_MUTED         or C.TEXT_VALUE
+    local border = error_state and C.STATE_ERROR  or C.BORDER_HAIRLINE
     return string.format([[
         QLineEdit {
             background: %s;
@@ -144,7 +144,7 @@ local function line_edit_style(read_only, error_state)
             border: 1px solid %s;
             background: %s;
         }
-    ]], bg, fg, border, F.DEFAULT_FONT_SIZE, C.FOCUS_BORDER_COLOR, C.FIELD_FOCUS_BACKGROUND_COLOR)
+    ]], bg, fg, border, F.DEFAULT_FONT_SIZE, C.STATE_FOCUS, C.FIELD_FOCUS_BG)
 end
 
 local function label_style()
@@ -155,7 +155,7 @@ local function label_style()
             padding: 4px 6px 2px 4px;
             min-width: 120px;
         }
-    ]], C.LABEL_TEXT_COLOR, F.DEFAULT_FONT_SIZE)
+    ]], C.TEXT_LABEL, F.DEFAULT_FONT_SIZE)
 end
 
 -- ----------------------------------------------------------------------

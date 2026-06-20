@@ -26,16 +26,16 @@ local focused_panel_id = nil
 local focus_change_callbacks = {}
 
 -- Focus indicator colors
-local FOCUS_COLOR = assert(ui_constants.COLORS.FOCUS_BORDER_COLOR, "focus_manager: ui_constants.COLORS.FOCUS_BORDER_COLOR is not defined")
+local FOCUS_COLOR = assert(ui_constants.COLORS.STATE_FOCUS, "focus_manager: ui_constants.COLORS.STATE_FOCUS is not defined")
 
 -- Unfocused header uses Resolve's blue-tinted panel grey (#28282d, 40,40,45),
 -- NOT a neutral grey: Resolve's chrome is cool-tinted (B ≈ R+5), and a neutral
 -- #2a2a2a reads visibly different side-by-side. Match the shared constant.
 local COLORS = {
     focused_header = FOCUS_COLOR,
-    unfocused_header = ui_constants.COLORS.PANEL_BACKGROUND_COLOR,
+    unfocused_header = ui_constants.COLORS.SURFACE_CHROME,
     focused_border = FOCUS_COLOR,
-    unfocused_border = "#2d2d2d",  -- subtle dark border, always drawn
+    unfocused_border = ui_constants.COLORS.UNFOCUSED_PANEL_BORDER,  -- subtle dark border, always drawn
 }
 
 local BORDER_WIDTH = 2

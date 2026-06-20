@@ -20,8 +20,8 @@ require("test_env")
 local focus_manager  = require("ui.focus_manager")
 local ui_constants   = require("core.ui_constants")
 
-local FOCUS_COLOR   = ui_constants.COLORS.FOCUS_BORDER_COLOR
-local UNFOCUS_COLOR = "#2d2d2d"  -- matches focus_manager's COLORS.unfocused_border
+local FOCUS_COLOR   = ui_constants.COLORS.STATE_FOCUS
+local UNFOCUS_COLOR = ui_constants.COLORS.UNFOCUSED_PANEL_BORDER
 
 local function make_panel(name)
     local w = qt_constants.WIDGET.CREATE()

@@ -1082,8 +1082,8 @@ function M.create()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_layout, 6)
     qt_constants.PROPERTIES.SET_STYLE(tab_container, string.format(
         [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
-        color("PANEL_BACKGROUND_COLOR"),
-        color("SCROLL_BORDER_COLOR")
+        color("SURFACE_CHROME"),
+        color("BORDER_DIVIDER")
     ))
 
     local tab_label = qt_constants.WIDGET.CREATE_LABEL("Untitled Project")
@@ -1097,7 +1097,7 @@ function M.create()
             border: none;
             border-bottom: 2px solid %s;
         }
-    ]], color("WHITE_TEXT_COLOR"), color("SELECTION_BORDER_COLOR")))
+    ]], color("TEXT_PRIMARY"), color("STATE_SELECTED")))
     qt_constants.LAYOUT.ADD_WIDGET(tab_layout, tab_label)
     qt_constants.LAYOUT.ADD_STRETCH(tab_layout, 1)
     qt_constants.LAYOUT.ADD_WIDGET(layout, tab_container)
@@ -1116,20 +1116,33 @@ function M.create()
     -- CSS: item colors, header — no branch rules (native Qt disclosure triangles)
     -- Minimal tree styling — let Fusion dark palette handle selection, focus, hover.
     -- Only set font size and header appearance.
+    -- Resolve dims unselected list text and brightens the selected row; the
+    -- header/breadcrumb sits on a darker cool tone than the rows.
     local tree_style = string.format([[
         QTreeWidget {
             font-size: %s;
         }
+        QTreeWidget::item {
+            color: %s;
+        }
+        QTreeWidget::item:selected {
+            color: %s;
+        }
         QHeaderView::section {
-            background: #2b2b2b;
-            color: #888;
+            background: %s;
+            color: %s;
             padding: 4px;
             border: none;
-            border-right: 1px solid #1a1a1a;
+            border-right: 1px solid %s;
             font-size: %s;
             font-weight: normal;
         }
     ]], ui_constants.FONTS.DEFAULT_FONT_SIZE,
+        ui_constants.COLORS.TEXT_MUTED,
+        ui_constants.COLORS.TEXT_PRIMARY,
+        ui_constants.COLORS.LIST_HEADER_BG,
+        ui_constants.COLORS.TEXT_MUTED,
+        ui_constants.COLORS.SURFACE_WELL,
         ui_constants.FONTS.DEFAULT_FONT_SIZE)
     qt_constants.PROPERTIES.SET_STYLE(tree, tree_style)
 

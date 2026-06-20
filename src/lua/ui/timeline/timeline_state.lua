@@ -54,6 +54,7 @@ local Signals = require("core.signals")
 local TimelineTabStrip = require("ui.timeline.timeline_tab_strip")
 local strip_holder     = require("ui.timeline.state.strip_holder")
 local log = require("core.logger").for_area("ui")
+local C = require("core.ui_constants").COLORS
 
 -- Replace the strip with a fresh, empty one and publish it to the holder.
 -- Used at module init and on every project boundary (pre-swap detach and
@@ -68,11 +69,13 @@ reset_tab_strip()
 -- Shared Data & Constants
 M.dimensions = data.dimensions
 M.colors = {
-    background = "#232323",
-    track_odd = "#2b2b2b",
-    track_even = "#252525",
-    video_track_header = "#1d1d1f",
-    audio_track_header = "#1d1d1f",
+    -- Chrome surfaces flow from the shared theme tokens (cool-tinted ramp);
+    -- clip/mark/playhead colors below are timeline-domain and stay local.
+    background = C.TIMELINE_CANVAS_BG,
+    track_odd = C.TRACK_ROW_ODD,
+    track_even = C.TRACK_ROW_EVEN,
+    video_track_header = C.TRACK_HEADER_BG,
+    audio_track_header = C.TRACK_HEADER_BG,
     clip = "#548bb5",
     clip_video = "#548bb5",
     clip_audio = "#32986b",
@@ -84,14 +87,14 @@ M.colors = {
     clip_video_offline = "#8b4444",
     clip_audio_offline = "#8b4444",
     clip_offline_text = "#ff6666",
-    clip_boundary = "#232323",
+    clip_boundary = C.TIMELINE_CANVAS_BG,
     gap_selected_fill = "#ff8c42",
     gap_selected_outline = "#ff8c42",
     mark_range_fill = "#19dfeeff",
     mark_range_edge = "#ff6b6b",
     playhead = "#ff6b6b",
-    text = "#cccccc",
-    grid_line = "#3a3a3a",
+    text = C.TEXT_LABEL_DIM,
+    grid_line = C.SURFACE_OVERLAY,
     selection_box = "#ff8c42",
     edge_selected_available = "#66ff66",
     edge_selected_limit = "#ff6666",
