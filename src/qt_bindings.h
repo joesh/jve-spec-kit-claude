@@ -81,6 +81,7 @@ int lua_set_window_title(lua_State* L);
 int lua_set_size(lua_State* L);
 int lua_set_geometry(lua_State* L);
 int lua_set_style_sheet(lua_State* L);
+int lua_set_drop_shadow(lua_State* L);
 int lua_set_window_appearance(lua_State* L);
 
 // Display functions

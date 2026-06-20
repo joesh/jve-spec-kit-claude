@@ -176,6 +176,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_geometry); lua_setfield(L, -2, "SET_GEOMETRY");
     lua_pushcfunction(L, lua_get_geometry); lua_setfield(L, -2, "GET_GEOMETRY");
     lua_pushcfunction(L, lua_set_widget_stylesheet); lua_setfield(L, -2, "SET_STYLE");
+    lua_pushcfunction(L, lua_set_drop_shadow); lua_setfield(L, -2, "SET_DROP_SHADOW");
     lua_pushcfunction(L, lua_set_window_appearance); lua_setfield(L, -2, "SET_WINDOW_APPEARANCE");
     lua_pushcfunction(L, lua_set_widget_cursor); lua_setfield(L, -2, "SET_CURSOR");
     lua_setfield(L, -2, "PROPERTIES");

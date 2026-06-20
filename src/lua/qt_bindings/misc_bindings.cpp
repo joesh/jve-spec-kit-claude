@@ -20,6 +20,7 @@
 #include <QPixmap>
 #include <QPolygon>
 #include <QColor>
+#include <QGraphicsDropShadowEffect>
 #include <QPen>
 #include <QPainterPath>
 #include <QPainterPathStroker>
@@ -537,6 +538,31 @@ int lua_set_widget_stylesheet(lua_State* L) {
     const char* stylesheet = luaL_checkstring(L, 2);
     if (!widget) return luaL_error(L, "qt_set_widget_stylesheet: widget required");
     widget->setStyleSheet(QString::fromUtf8(stylesheet));
+    return 0;
+}
+
+// Apply a soft drop shadow to a widget. Qt stylesheets have no box-shadow;
+// the raised/3D look needs QGraphicsDropShadowEffect set per-widget. One
+// graphics effect per widget — re-applying replaces the prior effect.
+//   qt_set_drop_shadow(widget, blur, dx, dy, color)
+// blur = blur radius (px), dx/dy = offset (px), color = "#rrggbb"/"#aarrggbb".
+int lua_set_drop_shadow(lua_State* L) {
+    QWidget* widget = get_widget<QWidget>(L, 1);
+    if (!widget) return luaL_error(L, "qt_set_drop_shadow: widget required");
+    double blur = luaL_checknumber(L, 2);
+    double dx = luaL_checknumber(L, 3);
+    double dy = luaL_checknumber(L, 4);
+    const char* color_str = luaL_checkstring(L, 5);
+    QColor color(QString::fromUtf8(color_str));
+    if (!color.isValid()) {
+        return luaL_error(L, "qt_set_drop_shadow: invalid color '%s'", color_str);
+    }
+    QGraphicsDropShadowEffect* effect = new QGraphicsDropShadowEffect(widget);
+    effect->setBlurRadius(blur);
+    effect->setXOffset(dx);
+    effect->setYOffset(dy);
+    effect->setColor(color);
+    widget->setGraphicsEffect(effect);  // widget takes ownership; replaces prior effect
     return 0;
 }
 
