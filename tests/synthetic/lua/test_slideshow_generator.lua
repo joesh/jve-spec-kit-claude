@@ -61,17 +61,34 @@ local test_dir = "/tmp/jve_slideshow_test"
 local screenshot_dir = test_dir .. "/screenshots"
 os.execute("mkdir -p " .. screenshot_dir)
 
--- Create 10 dummy PNG files using ImageMagick convert (or just touch if not available)
-local has_convert = os.execute("which convert >/dev/null 2>&1") == 0
+-- Probe whether ImageMagick `convert` can actually PRODUCE a PNG — not just
+-- whether the binary exists. Some builds (e.g. homebrew imagemagick without a
+-- fontconfig delegate) have the binary on PATH yet cannot render text; gating
+-- on `which convert` would then run the real test and hard-fail on a missing
+-- capability. We only need solid-color frames below (the slideshow generator
+-- stitches PNGs and never reads their content), so probe exactly that path.
+local function convert_can_make_png()
+    local probe = test_dir .. "/.probe.png"
+    os.remove(probe)
+    os.execute(string.format("convert -size 8x8 xc:white %q >/dev/null 2>&1", probe))
+    local f = io.open(probe, "r")
+    if not f then return false end
+    f:close()
+    os.remove(probe)
+    return true
+end
+local has_convert = convert_can_make_png()
 
 for i = 1, 10 do
     local filename = string.format("%s/screenshot_%03d.png", screenshot_dir, i)
     if has_convert then
-        -- Create actual PNG with text showing the frame number
+        -- A distinct solid-color frame per index. No text → no font dependency;
+        -- the slideshow generator only stitches the PNGs, it never reads them,
+        -- so the cosmetic frame number is unnecessary and would couple this test
+        -- to ImageMagick's font rendering for no coverage gain.
         local cmd = string.format(
-            "convert -size 320x240 -background white -fill black " ..
-            "-gravity center -pointsize 72 label:'%d' '%s' 2>/dev/null",
-            i, filename
+            "convert -size 320x240 xc:'rgb(%d,100,150)' %q 2>/dev/null",
+            (i * 25) % 256, filename
         )
         os.execute(cmd)
     else
