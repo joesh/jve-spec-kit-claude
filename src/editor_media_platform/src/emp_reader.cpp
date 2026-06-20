@@ -9,6 +9,7 @@
 #include "impl/pcm_chunk_impl.h"
 #include <atomic>
 #include <cassert>
+#include "../../assert_handler.h"  // JVE_ASSERT (fires in Release; plain assert is stripped by -DNDEBUG)
 #include <vector>
 #include <memory>
 #include <chrono>
@@ -969,7 +970,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     // composite by the >= 0 branches below (covers both the BRAW and FFmpeg
     // paths). The upper bound (channel >= source channel count) stays a
     // recoverable Error per backend, since it can arise from a real request.
-    assert(source_channel >= -1 &&
+    JVE_ASSERT(source_channel >= -1,
         "DecodeAudioRangeUS: source_channel must be -1 (composite) or a channel index");
 
     // Validate

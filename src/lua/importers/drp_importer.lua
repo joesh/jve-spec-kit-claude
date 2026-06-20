@@ -433,11 +433,14 @@ local function count_embedded_audio_channels(clip_elem)
             end
         end
     end
-    -- A partial decode (some TracksBA blobs decoded, others did not) yields an
-    -- undercount that would silently drop channels. Surface it (2.32) rather
-    -- than returning a quietly-low number; total==0 is handled by the caller's
-    -- element-count fallback, so only the mixed case warns here.
-    if decoded_ok > 0 and decoded_ok < with_tracks then
+    -- Any TracksBA blob that fails to decode loses its channels. Surface it
+    -- (2.32) rather than returning a quietly-low count. Both failure shapes warn:
+    --   * partial (0 < decoded_ok < with_tracks) — undercount; A/V clips fall
+    --     through to the caller's element-count estimate, audio-only clips drop.
+    --   * total (decoded_ok == 0, with_tracks > 0) — returns nil; an audio-only
+    --     clip is then NOT covered by the caller's fallback (that branch gates on
+    --     clip_type ~= "audio") and is dropped, so this is its only diagnostic.
+    if with_tracks > 0 and decoded_ok < with_tracks then
         log.warn("count_embedded_audio_channels: only %d of %d BtAudioInfo "
             .. "TracksBA blobs decoded — channel count (%d) may be low",
             decoded_ok, with_tracks, total)
