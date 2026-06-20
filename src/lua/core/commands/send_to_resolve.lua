@@ -121,34 +121,47 @@ function M.execute(args, db, _command)
                 notify(args, nil, code, message)
                 return
             end
-            -- Async-tail asserts (response shape, ledger upsert) crash by
-            -- design — bridge_completion.lua's executor pcall only catches
-            -- sync-phase asserts. The contract lives in bridge_completion's
-            -- docstring; mirror it here so a reader of this file sees the
-            -- rule without grep.
-            local mapping = response.result.mapping
-            local unrelinked = response.result.unrelinked
-            local unkeyed_resolve_items = response.result.unkeyed_resolve_items
-            assert(type(mapping) == "table",
-                "SendToResolve: helper response missing result.mapping")
-            assert(type(unrelinked) == "table",
-                "SendToResolve: helper response missing result.unrelinked")
-            assert(type(unkeyed_resolve_items) == "table",
-                "SendToResolve: helper response missing "
-                .. "result.unkeyed_resolve_items")
-            for _, row in ipairs(mapping) do
-                assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
-                    "SendToResolve: mapping row missing jve_guid")
-                assert(type(row.resolve_item_id) == "string"
-                    and row.resolve_item_id ~= "",
-                    "SendToResolve: mapping row missing resolve_item_id")
-                identity_ledger.upsert(row.jve_guid, {
-                    resolve_item_id = row.resolve_item_id,
-                }, db)
+            -- The apply body asserts internal invariants (response shape,
+            -- ledger upsert). The C++ socket boundary delivering this
+            -- response SWALLOWS any Lua error raised here (logs+pops+
+            -- continues, never re-raises — see bridge_completion.lua's
+            -- contract and src/jve_lua_callback.h), so an un-caught assert
+            -- would never reach notify(): send_to_resolve_completed would
+            -- never fire and a caller awaiting on_complete would strand
+            -- (rule 2.32 silent failure). pcall the apply body and route a
+            -- caught fault through the ONE terminal path as a loud failure
+            -- — apply_failed, distinct from resolve_api_error (rule 2.21).
+            local ok, err = pcall(function()
+                local mapping = response.result.mapping
+                local unrelinked = response.result.unrelinked
+                local unkeyed_resolve_items =
+                    response.result.unkeyed_resolve_items
+                assert(type(mapping) == "table",
+                    "SendToResolve: helper response missing result.mapping")
+                assert(type(unrelinked) == "table",
+                    "SendToResolve: helper response missing result.unrelinked")
+                assert(type(unkeyed_resolve_items) == "table",
+                    "SendToResolve: helper response missing "
+                    .. "result.unkeyed_resolve_items")
+                for _, row in ipairs(mapping) do
+                    assert(type(row.jve_guid) == "string"
+                        and row.jve_guid ~= "",
+                        "SendToResolve: mapping row missing jve_guid")
+                    assert(type(row.resolve_item_id) == "string"
+                        and row.resolve_item_id ~= "",
+                        "SendToResolve: mapping row missing resolve_item_id")
+                    identity_ledger.upsert(row.jve_guid, {
+                        resolve_item_id = row.resolve_item_id,
+                    }, db)
+                end
+                log.event("SendToResolve: mapped %d clips, %d unrelinked, "
+                    .. "%d unkeyed Resolve items",
+                    #mapping, #unrelinked, #unkeyed_resolve_items)
+            end)
+            if not ok then
+                notify(args, nil, "apply_failed", tostring(err))
+                return
             end
-            log.event("SendToResolve: mapped %d clips, %d unrelinked, "
-                .. "%d unkeyed Resolve items",
-                #mapping, #unrelinked, #unkeyed_resolve_items)
             notify(args, response, nil, nil)
         end)
     end)

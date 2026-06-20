@@ -1033,33 +1033,45 @@ function M.execute(args, db, _command)
                 end
                 discovery.log_discovery_warnings(
                     report, "SyncEditsFromResolve")
-                -- Wire→classifier translation at the boundary between
-                -- the helper response and JVE-side processing. M.apply
-                -- consumes classifier shape (per-item JVE track_id).
-                local translated = M.translate_wire_response(
-                    report.read_timeline_result, args.sequence_id)
-                -- Async-tail asserts crash by design — see the contract
-                -- documented in bridge_completion.lua (executor's pcall
-                -- only catches sync-phase asserts before client:request
-                -- returns; this callback runs after that pcall has
-                -- popped). Masking an internal invariant violation as
-                -- resolve_api_error would conflate origin (rule 2.21)
-                -- and downgrade rule 1.14.
-                local result = M.apply(translated, args.sequence_id,
-                    args.project_id, db, args.user_choices)
-                -- What auto-discovery just (un)linked — surfaced
-                -- alongside the edit buckets (FR-011c report-not-skip).
-                result.discovery = {
-                    matched        = report.matched,
-                    already_linked = report.already_linked,
-                    unmatched      = report.unmatched,
-                    ambiguous      = report.ambiguous,
-                    audio_skipped  = report.audio_skipped,
-                    rate_mismatch  = report.rate_mismatch,
-                    stamped        = report.stamped,
-                    stamp_skipped  = report.stamp_skipped,
-                    stamp_failures = report.stamp_failures,
-                }
+                -- The apply body asserts internal invariants (wire shape,
+                -- per-item track_id, ledger consistency). The C++ socket
+                -- boundary delivering this response SWALLOWS any Lua error
+                -- raised here (logs+pops+continues, never re-raises — see
+                -- bridge_completion.lua's contract and
+                -- src/jve_lua_callback.h), so an un-caught assert would
+                -- never reach notify(): sync_edits_from_resolve_completed
+                -- would never fire and any in-progress indicator / awaited
+                -- on_complete would strand (rule 2.32 silent failure).
+                -- pcall the apply body and route a caught fault through the
+                -- ONE terminal path as a loud failure — apply_failed,
+                -- distinct from resolve_api_error (rule 2.21).
+                local ok, result = pcall(function()
+                    -- Wire→classifier translation at the boundary between
+                    -- the helper response and JVE-side processing. M.apply
+                    -- consumes classifier shape (per-item JVE track_id).
+                    local translated = M.translate_wire_response(
+                        report.read_timeline_result, args.sequence_id)
+                    local r = M.apply(translated, args.sequence_id,
+                        args.project_id, db, args.user_choices)
+                    -- What auto-discovery just (un)linked — surfaced
+                    -- alongside the edit buckets (FR-011c report-not-skip).
+                    r.discovery = {
+                        matched        = report.matched,
+                        already_linked = report.already_linked,
+                        unmatched      = report.unmatched,
+                        ambiguous      = report.ambiguous,
+                        audio_skipped  = report.audio_skipped,
+                        rate_mismatch  = report.rate_mismatch,
+                        stamped        = report.stamped,
+                        stamp_skipped  = report.stamp_skipped,
+                        stamp_failures = report.stamp_failures,
+                    }
+                    return r
+                end)
+                if not ok then
+                    notify(args, nil, "apply_failed", tostring(result))
+                    return
+                end
                 notify(args, result, nil, nil)
             end)
     end)
