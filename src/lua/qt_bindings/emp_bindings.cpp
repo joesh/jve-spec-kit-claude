@@ -2261,6 +2261,10 @@ static int lua_emp_peak_request(lua_State* L) {
     const char* media_path = luaL_checkstring(L, 2);
     const char* output_path = luaL_checkstring(L, 3);
     int source_channel = static_cast<int>(luaL_checkinteger(L, 4));
+    if (source_channel < -1) {
+        return luaL_error(L, "EMP.PEAK_REQUEST: source_channel must be -1 (composite fold) "
+            "or >= 0 (extract channel), got %d", source_channel);
+    }
     get_peak_generator()->RequestPeaks(media_id, media_path, output_path, source_channel);
     return 0;
 }
