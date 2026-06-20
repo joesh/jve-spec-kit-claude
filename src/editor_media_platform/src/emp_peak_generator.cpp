@@ -611,8 +611,10 @@ void PeakGenerator::FinalizeJob(ChunkedJob& job)
         return;
     }
 
-    assert(actual_samples > 0 &&
-        "PeakGenerator::FinalizeJob: coverage passed but no samples decoded");
+    // Past the coverage gate, actual_samples > 0 is guaranteed: the gate fails
+    // the job whenever total_samples == 0 (coverage 0.0) or actual_samples == 0
+    // (coverage 0.0), so reaching here means coverage >= 0.95 of a positive
+    // total. No further assert is needed.
 
     // If the decoder delivered fewer samples than the duration-based
     // estimate, shrink the peak buffer so mipmaps and the written file

@@ -421,15 +421,26 @@ end
 -- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
 -- @return number|nil: total channels, or nil when no embedded TracksBA decoded
 local function count_embedded_audio_channels(clip_elem)
-    local total = 0
+    local total, with_tracks, decoded_ok = 0, 0, 0
     for _, bai in ipairs(find_all_elements(clip_elem, "BtAudioInfo")) do
         local tracks_elem = find_direct_child(bai, "TracksBA")
         if tracks_elem then
+            with_tracks = with_tracks + 1
             local decoded = decode_bt_audio_duration(get_text(tracks_elem))
             if decoded and decoded.num_channels and decoded.num_channels > 0 then
+                decoded_ok = decoded_ok + 1
                 total = total + decoded.num_channels
             end
         end
+    end
+    -- A partial decode (some TracksBA blobs decoded, others did not) yields an
+    -- undercount that would silently drop channels. Surface it (2.32) rather
+    -- than returning a quietly-low number; total==0 is handled by the caller's
+    -- element-count fallback, so only the mixed case warns here.
+    if decoded_ok > 0 and decoded_ok < with_tracks then
+        log.warn("count_embedded_audio_channels: only %d of %d BtAudioInfo "
+            .. "TracksBA blobs decoded — channel count (%d) may be low",
+            decoded_ok, with_tracks, total)
     end
     if total == 0 then return nil end
     return total
@@ -2065,8 +2076,12 @@ local function apply_pmc_metadata(entry, pmc)
         -- deliberately fall through to leave audio_channels unset — per the
         -- imported-data-degrades-gracefully rule 1.12 they import as
         -- zero-duration and are dropped by try_import_media_item rather than
-        -- carrying a guessed channel count.)
+        -- carrying a guessed channel count.) Surface the estimate (2.32) — it is
+        -- a guessed count, not a decoded one.
         entry.audio_channels = #pmc.own_bt_audio_info_ids
+        log.warn("apply_pmc_metadata: TracksBA did not decode for A/V clip '%s' "
+            .. "(%s) — estimating audio_channels=%d from BtAudioInfo element count",
+            tostring(pmc.name), tostring(pmc.id), entry.audio_channels)
     end
 end
 M._apply_pmc_metadata = apply_pmc_metadata  -- exported for tests

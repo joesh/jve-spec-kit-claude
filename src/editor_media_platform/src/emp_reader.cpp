@@ -963,6 +963,15 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     // See ffmpeg_resample.h.
     constexpr int RESAMPLER_OUTPUT_CHANNELS = 2;
 
+    // source_channel is -1 (composite) or a non-negative channel index by
+    // construction (media_refs.source_channel). A value < -1 is a caller bug,
+    // not a data condition — fail loud here so it can't be silently treated as
+    // composite by the >= 0 branches below (covers both the BRAW and FFmpeg
+    // paths). The upper bound (channel >= source channel count) stays a
+    // recoverable Error per backend, since it can arise from a real request.
+    assert(source_channel >= -1 &&
+        "DecodeAudioRangeUS: source_channel must be -1 (composite) or a channel index");
+
     // Validate
     if (!m_media_file->info().has_audio) {
         return Error::unsupported("MediaFile has no audio stream");
