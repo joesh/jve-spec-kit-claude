@@ -410,6 +410,31 @@ local function extract_file_tc_seconds(clip_elem)
     return result.start_time_seconds  -- nil if StartTime field absent from TLV
 end
 
+--- Sum the embedded-audio channel count across a pool item's own BtAudioInfo.
+-- A camera file (BRAW/MOV) packs all its channels into a SINGLE interleaved
+-- BtAudioInfo whose TracksBA.NumChannels carries the real count (e.g. 2), so
+-- counting BtAudioInfo *elements* would undercount stereo to 1. A discrete-mono
+-- file (N BtAudioInfo × 1 channel) sums to N. Both are the same sum — the
+-- authoritative count, read from the blob Resolve wrote. The BtAudioInfo here
+-- are this item's own embedded audio (under EmbeddedAudioVec); a synced clip's
+-- EXTERNAL audio lives on a separate pool item and is not nested here.
+-- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
+-- @return number|nil: total channels, or nil when no embedded TracksBA decoded
+local function count_embedded_audio_channels(clip_elem)
+    local total = 0
+    for _, bai in ipairs(find_all_elements(clip_elem, "BtAudioInfo")) do
+        local tracks_elem = find_direct_child(bai, "TracksBA")
+        if tracks_elem then
+            local decoded = decode_bt_audio_duration(get_text(tracks_elem))
+            if decoded and decoded.num_channels and decoded.num_channels > 0 then
+                total = total + decoded.num_channels
+            end
+        end
+    end
+    if total == 0 then return nil end
+    return total
+end
+
 --- Parse Resolve timecode string to integer frames
 -- Resolve uses rational notation: "900/30" = frame 900 at 30fps
 -- @param timecode_str string: Timecode string (e.g., "900/30")
@@ -835,6 +860,9 @@ local function parse_master_clip_element(clip_elem, folder_id)
                 = bai.attrs.DbId
         end
     end
+
+    -- The file's true embedded-audio channel count, decoded from the blob.
+    master_clip.embedded_audio_channels = count_embedded_audio_channels(clip_elem)
 
     -- Synced-clip linkage (video pool items only).
     --
@@ -2022,21 +2050,22 @@ local function apply_pmc_metadata(entry, pmc)
         entry.has_video = true
     end
 
-    -- audio-only: one BtAudioInfo in XML regardless of ch count; TracksBA.NumChannels is authoritative. A/V: one BtAudioInfo per channel, so count is right.
-    if pmc.clip_type == "audio" then
-        -- channel count comes from the decoded TracksBA blob. A pool audio clip
-        -- whose blob did not decode (encrypted / truncated) has no audio_duration;
-        -- per the imported-data-degrades-gracefully rule (1.12) it imports as
-        -- zero-duration (then dropped by try_import_media_item) rather than
-        -- crashing the whole import — so guard rather than assert. (On the
-        -- synced-audio path the blob is always decoded, so this still fills.)
-        if pmc.audio_duration then
-            local n = pmc.audio_duration.num_channels
-            if n and n > 0 then
-                entry.audio_channels = n
-            end
-        end
-    elseif pmc.own_bt_audio_info_ids and #pmc.own_bt_audio_info_ids > 0 then
+    -- Channel count = the file's embedded-audio channels, decoded from the
+    -- TracksBA blob (summed across embedded BtAudioInfo — see
+    -- parse_master_clip_element). This is authoritative for BOTH audio-only
+    -- masters AND A/V clips' embedded scratch: a single interleaved BRAW/MOV
+    -- stream is ONE BtAudioInfo carrying the true count (e.g. 2), so the old
+    -- "count BtAudioInfo elements" path undercounted stereo camera files to 1.
+    if pmc.embedded_audio_channels and pmc.embedded_audio_channels > 0 then
+        entry.audio_channels = pmc.embedded_audio_channels
+    elseif pmc.clip_type ~= "audio"
+            and pmc.own_bt_audio_info_ids and #pmc.own_bt_audio_info_ids > 0 then
+        -- Blob did not decode (encrypted / truncated) and this is an A/V clip:
+        -- the element count is the only remaining estimate. (Audio-only masters
+        -- deliberately fall through to leave audio_channels unset — per the
+        -- imported-data-degrades-gracefully rule 1.12 they import as
+        -- zero-duration and are dropped by try_import_media_item rather than
+        -- carrying a guessed channel count.)
         entry.audio_channels = #pmc.own_bt_audio_info_ids
     end
 end

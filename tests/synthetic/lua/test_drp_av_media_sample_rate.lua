@@ -20,10 +20,15 @@ print("=== test_drp_av_media_sample_rate.lua ===")
 -- Representative pmcs (drawn from real production DRP shapes):
 --   av      — A/V file: has both num_frames and audio_duration
 --   av_hz   — A/V file at 44.1kHz, to rule out hard-coded 48000 assumptions
---   av_4ch  — A/V file with 4 embedded audio channels (own_bt_audio_info_ids count)
+--   av_4ch  — A/V file whose audio channels did NOT decode (blob absent) — the
+--             #own_bt_audio_info_ids count is the decode-failure fallback
 --   vo      — video-only file: num_frames, no audio_duration
---   ao      — audio-only file (Sm2MpAudioClip): audio_duration with num_channels
---   ao_nch  — audio-only file: audio_duration but num_channels absent (older DRP)
+--   ao      — audio-only file (Sm2MpAudioClip): embedded_audio_channels decoded
+--   ao_nch  — audio-only file: audio_duration but channels did not decode
+--
+-- `embedded_audio_channels` is what parse_master_clip_element stamps from the
+-- summed TracksBA.NumChannels (drp_importer.count_embedded_audio_channels) — the
+-- file's TRUE channel count, authoritative for both audio-only and A/V clips.
 local pmcs = {
     av = {
         num_frames   = 6000,  -- 4 minutes at 25fps
@@ -40,6 +45,8 @@ local pmcs = {
         num_frames   = 3600,
         frame_rate   = 24,
         audio_duration = { samples = 8640000, sample_rate = 48000 },
+        -- channels did not decode (no embedded_audio_channels) → fall back to
+        -- the element count for an A/V clip.
         own_bt_audio_info_ids = { "a1", "a2", "a3", "a4" },
     },
     vo = {
@@ -49,10 +56,11 @@ local pmcs = {
     ao = {
         clip_type      = "audio",
         audio_duration = { samples = 480000, sample_rate = 48000, num_channels = 3 },
+        embedded_audio_channels = 3,  -- decoded from TracksBA.NumChannels
     },
     ao_nch = {
         clip_type      = "audio",
-        audio_duration = { samples = 240000, sample_rate = 48000 },  -- no num_channels
+        audio_duration = { samples = 240000, sample_rate = 48000 },  -- channels did not decode
     },
 }
 
@@ -110,26 +118,29 @@ assert(ao.frame_rate == 48000, string.format(
 print("  ✓ Audio-only: sample rate recorded, duration in samples")
 
 -- ─────────────────────────────────────────────────────────────────────
--- audio_channels: audio-only clips use TracksBA.NumChannels; A/V clips use #own_bt_audio_info_ids.
+-- audio_channels = the file's decoded embedded channel count
+-- (embedded_audio_channels). When the channels did not decode, an A/V clip
+-- falls back to the #own_bt_audio_info_ids element count; an audio-only clip is
+-- left nil (no guessed default).
 -- ─────────────────────────────────────────────────────────────────────
 
--- A/V with no own_bt_audio_info_ids: audio_channels nil
+-- A/V with neither decoded channels nor own_bt_audio_info_ids: audio_channels nil
 assert(av.audio_channels == nil,
-    string.format("A/V no btai: audio_channels must be nil, got %s", tostring(av.audio_channels)))
-print("  ✓ A/V file (no own_bt_audio_info_ids): audio_channels nil")
+    string.format("A/V no channels: audio_channels must be nil, got %s", tostring(av.audio_channels)))
+print("  ✓ A/V file (no channels, no btai): audio_channels nil")
 
--- A/V 4-channel: own_bt_audio_info_ids count drives audio_channels for video clips
+-- A/V whose channels did not decode: #own_bt_audio_info_ids count is the fallback
 local av4 = apply(pmcs.av_4ch)
 assert(av4.audio_channels == 4, string.format(
-    "A/V 4ch: audio_channels must be 4 (from #own_bt_audio_info_ids), got %s",
+    "A/V undecoded: audio_channels must be 4 (fallback to #own_bt_audio_info_ids), got %s",
     tostring(av4.audio_channels)))
-print("  ✓ A/V 4-channel: audio_channels=4 from own_bt_audio_info_ids count")
+print("  ✓ A/V undecoded channels: audio_channels=4 from own_bt_audio_info_ids fallback")
 
--- Audio-only 3-channel: TracksBA.NumChannels drives audio_channels for audio clips
+-- Audio-only 3-channel: the decoded embedded_audio_channels drives audio_channels
 assert(ao.audio_channels == 3, string.format(
-    "audio-only 3ch: audio_channels must be 3 (from TracksBA.NumChannels), got %s",
+    "audio-only 3ch: audio_channels must be 3 (from embedded_audio_channels), got %s",
     tostring(ao.audio_channels)))
-print("  ✓ Audio-only 3-channel: audio_channels=3 from TracksBA.NumChannels")
+print("  ✓ Audio-only 3-channel: audio_channels=3 from embedded_audio_channels")
 
 -- Audio-only without NumChannels: audio_channels left nil (no silent default)
 local ao_nch = apply(pmcs.ao_nch)
