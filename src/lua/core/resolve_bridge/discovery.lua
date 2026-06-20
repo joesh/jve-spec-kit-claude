@@ -858,58 +858,89 @@ function M.discover_and_link(client, sequence_id, db, on_done)
         if idr == nil then on_done(nil, code1, msg1); return end
         client:request("read_timeline", {}, function(rtr, code2, msg2)
             if rtr == nil then on_done(nil, code2, msg2); return end
-            local mismatch = rate_mismatch_reason(
-                seq, sequence_id, rtr.result.timeline_integer_rate)
-            local existing_by_clip, pre_claimed, already_linked =
-                split_existing_links(sequence_id, db, rtr.result.items)
-            local clips_to_match = {}
-            for _, c in ipairs(jve_clips) do
-                if existing_by_clip[c.id] == nil then
-                    clips_to_match[#clips_to_match + 1] = c
+            -- This callback runs on the C++ socket boundary, which
+            -- SWALLOWS any Lua error raised here (logs+pops+continues,
+            -- never re-raises — see bridge_completion.lua's contract and
+            -- src/jve_lua_callback.h). The match/persist apply body below
+            -- asserts internal invariants (split_existing_links, M.match,
+            -- persist_matches → identity_ledger.upsert, change_token.build),
+            -- so an un-caught assert would never reach on_done and BOTH
+            -- SyncGradesFromResolve and SyncEditsFromResolve would hang
+            -- with their "Syncing…" indicator stranded (rule 2.32) —
+            -- discovery runs first in each. pcall the synchronous apply
+            -- body and route a caught fault through on_done's failure arm
+            -- (apply_failed); the async stamp + on_done(success) run
+            -- OUTSIDE the pcall so on_done fires exactly once (empty
+            -- `unanchored` calls done synchronously).
+            local ok, built = pcall(function()
+                local mismatch = rate_mismatch_reason(
+                    seq, sequence_id, rtr.result.timeline_integer_rate)
+                local existing_by_clip, pre_claimed, already_linked =
+                    split_existing_links(sequence_id, db, rtr.result.items)
+                local clips_to_match = {}
+                for _, c in ipairs(jve_clips) do
+                    if existing_by_clip[c.id] == nil then
+                        clips_to_match[#clips_to_match + 1] = c
+                    end
                 end
+                -- The direct-id and marker channels are rate-independent,
+                -- so they always run on the full item list; only the
+                -- position channel is skipped on a TC-rate mismatch
+                -- (record_start is rate-relative). Never silently
+                -- position-match across rates.
+                local matched = M.match(clips_to_match, idr.result.items,
+                    rtr.result.items, pre_claimed, mismatch ~= nil)
+                local matched_log = {}
+                -- id_matched: clip.id == resolve_item_id is the durable
+                -- anchor itself, so it is persisted to the ledger but NOT
+                -- stamped. The no-anchor matches (content + position) get
+                -- a marker stamped below for FR-012 durability.
+                persist_matches(matched.id_matched, db,
+                    "direct_id", matched_log)
+                persist_matches(matched.marker_matched, db,
+                    "marker", matched_log)
+                persist_matches(matched.content_matched, db,
+                    "content_match", matched_log)
+                persist_matches(matched.pos_matched, db,
+                    "position_match", matched_log)
+                log.event("discovery: %d already linked, %d newly matched "
+                    .. "(%d id, %d marker, %d content, %d position), %d "
+                    .. "unmatched, %d ambiguous%s",
+                    already_linked, #matched_log,
+                    table_len(matched.id_matched),
+                    table_len(matched.marker_matched),
+                    table_len(matched.content_matched),
+                    table_len(matched.pos_matched),
+                    #matched.unmatched, #matched.ambiguous,
+                    mismatch and " [position channel skipped: rate mismatch]"
+                        or "")
+                local token = change_token.build(seq.project_id,
+                    sequence_id, seq.mutation_generation)
+                -- Content + position matches are both anchored to
+                -- WHERE/WHAT a clip is, not to a per-clip marker, so both
+                -- get stamped.
+                local unanchored = {}
+                for cid, rid in pairs(matched.content_matched) do
+                    unanchored[cid] = rid
+                end
+                for cid, rid in pairs(matched.pos_matched) do
+                    unanchored[cid] = rid
+                end
+                return {
+                    mismatch       = mismatch,
+                    already_linked = already_linked,
+                    matched        = matched,
+                    matched_log    = matched_log,
+                    token          = token,
+                    unanchored     = unanchored,
+                }
+            end)
+            if not ok then
+                on_done(nil, "apply_failed", tostring(built))
+                return
             end
-            -- The direct-id and marker channels are rate-independent, so
-            -- they always run on the full item list; only the position
-            -- channel is skipped on a TC-rate mismatch (record_start is
-            -- rate-relative). Never silently position-match across rates.
-            local matched = M.match(clips_to_match, idr.result.items,
-                rtr.result.items, pre_claimed, mismatch ~= nil)
-            local matched_log = {}
-            -- id_matched: clip.id == resolve_item_id is the durable anchor
-            -- itself, so it is persisted to the ledger but NOT stamped.
-            -- The no-anchor matches (content + position) get a marker
-            -- stamped below for FR-012 durability.
-            persist_matches(matched.id_matched, db,
-                "direct_id", matched_log)
-            persist_matches(matched.marker_matched, db,
-                "marker", matched_log)
-            persist_matches(matched.content_matched, db,
-                "content_match", matched_log)
-            persist_matches(matched.pos_matched, db,
-                "position_match", matched_log)
-            log.event("discovery: %d already linked, %d newly matched "
-                .. "(%d id, %d marker, %d content, %d position), %d "
-                .. "unmatched, %d ambiguous%s",
-                already_linked, #matched_log,
-                table_len(matched.id_matched),
-                table_len(matched.marker_matched),
-                table_len(matched.content_matched),
-                table_len(matched.pos_matched),
-                #matched.unmatched, #matched.ambiguous,
-                mismatch and " [position channel skipped: rate mismatch]"
-                    or "")
-            local token = change_token.build(seq.project_id,
-                sequence_id, seq.mutation_generation)
-            -- Content + position matches are both anchored to WHERE/WHAT a
-            -- clip is, not to a per-clip marker, so both get stamped.
-            local unanchored = {}
-            for cid, rid in pairs(matched.content_matched) do
-                unanchored[cid] = rid
-            end
-            for cid, rid in pairs(matched.pos_matched) do
-                unanchored[cid] = rid
-            end
-            stamp_unanchored_matches(client, token, unanchored,
+            local matched = built.matched
+            stamp_unanchored_matches(client, built.token, built.unanchored,
                 function(stamped, skipped, failures)
                     if #stamped + #skipped + #failures > 0 then
                         log.event("discovery: stamped %d marker(s), "
@@ -917,8 +948,8 @@ function M.discover_and_link(client, sequence_id, db, on_done)
                             #stamped, #skipped, #failures)
                     end
                     on_done({
-                        matched              = matched_log,
-                        already_linked       = already_linked,
+                        matched              = built.matched_log,
+                        already_linked       = built.already_linked,
                         id_matched           = matched.id_matched,
                         marker_matched       = matched.marker_matched,
                         content_matched      = matched.content_matched,
@@ -926,7 +957,7 @@ function M.discover_and_link(client, sequence_id, db, on_done)
                         unmatched            = matched.unmatched,
                         ambiguous            = matched.ambiguous,
                         audio_skipped        = audio_skipped,
-                        rate_mismatch        = mismatch,
+                        rate_mismatch        = built.mismatch,
                         stamped              = stamped,
                         stamp_skipped        = skipped,
                         stamp_failures       = failures,
