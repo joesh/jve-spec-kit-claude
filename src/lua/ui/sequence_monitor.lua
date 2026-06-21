@@ -193,13 +193,18 @@ function SequenceMonitor:_wire_signals()
         end
     end)
 
-    -- Seek when SetPlayhead command targets this sequence.
-    -- Skip if playhead hasn't moved — flush_state_to_db re-persists the current
-    -- position which emits playhead_changed; seeking on that would stop playback.
+    -- React (pull) when the model's playhead moves for this sequence — whether
+    -- the move came from a SetPlayhead command, a timeline-ruler drag, or this
+    -- monitor's own scrub routed through core.playhead.set. This is a VIEW-only
+    -- reaction (engine seek + cursor); it must NOT write the model back, or a
+    -- model-driven move would echo into a second write.
+    -- Skip if the playhead hasn't moved — flush_state_to_db re-persists the
+    -- current position which emits playhead_changed; seeking on that would stop
+    -- playback.
     self._playhead_changed_id = Signals.connect("playhead_changed", function(sequence_id, frame)
         if self.sequence_id == sequence_id and type(frame) == "number"
            and frame ~= self.playhead then
-            self:seek_to_frame(frame)
+            self:_apply_playhead_to_view(frame)
         end
     end)
 
@@ -679,17 +684,34 @@ function SequenceMonitor:seek_to_frame(frame)
         "SequenceMonitor(%s):seek_to_frame: no sequence loaded",
         self.view_id))
 
+    -- A timeline (record) sequence shares ONE playhead with the timeline view:
+    -- it lives in the sequence model. Route the move through core.playhead.set
+    -- so it persists and emits playhead_changed; every view (this monitor's own
+    -- listener, the timeline cache) then pulls the new frame. This is the same
+    -- canonical path the timeline ruler uses (SetPlayhead → core.playhead.set).
+    -- A masterclip (source-viewer) playhead is private to the clip and persists
+    -- via the surgical debounced path below.
+    if self.sequence and not self.sequence:is_master() then
+        require("core.playhead").set(self.sequence_id, frame)
+        return
+    end
+
+    self:_apply_playhead_to_view(frame)
+    self:_schedule_persist()
+end
+
+-- View-only reaction to a playhead position: seek the engine and move the
+-- cursor. NEVER writes the model — callers that own the model write (scrub on
+-- a record sequence, external commands) emit playhead_changed, which lands
+-- here. engine:seek uses set_position_silent (no callback), so update the
+-- cursor manually.
+function SequenceMonitor:_apply_playhead_to_view(frame)
     if self.engine:is_playing() then
         self.engine:stop()
     end
     self.engine:seek(frame)
-
-    -- engine:seek uses set_position_silent (no callback), update manually
     self.playhead = math.max(self.start_frame, math.floor(frame))
     self:_ensure_playhead_visible()
-    if self.sequence and self.sequence:is_master() then
-        self:_schedule_persist()
-    end
     self:_notify()
 end
 
@@ -800,12 +822,18 @@ function SequenceMonitor:set_playhead(frame)
     local pos = math.max(self.start_frame, math.floor(frame))
     if pos == self.playhead then return end
 
+    -- Active (timeline) sequence: the playhead is the model's, shared with the
+    -- timeline view — write through core.playhead.set (same as seek_to_frame).
+    -- Masterclip playhead is private and persists via the debounced path.
+    if self.sequence and not self.sequence:is_master() then
+        require("core.playhead").set(self.sequence_id, pos)
+        return
+    end
+
     self.playhead = pos
     self:_ensure_playhead_visible()
     self:_notify()
-    if self.sequence and self.sequence:is_master() then
-        self:_schedule_persist()
-    end
+    self:_schedule_persist()
 end
 
 --------------------------------------------------------------------------------

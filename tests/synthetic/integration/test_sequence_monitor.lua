@@ -17,7 +17,9 @@
 --          title label contains "Timeline: <name>".
 --   DR-4  Masterclip playhead persists to sequences.playhead_frame; a new
 --          monitor loading the same master reads it back verbatim.
---   DR-5  Timeline sequence playhead does NOT write to sequences.playhead_frame.
+--   DR-5  Timeline sequence playhead IS the model's playhead: moving it in the
+--          monitor writes through to sequences.playhead_frame synchronously
+--          (single source of truth, shared with the timeline view).
 --   DR-6  set_playhead clamps: negative → start_frame floor; fractional →
 --          floor(). No upper clamp — NLE convention lets playhead sit beyond
 --          content end (park past-last-frame is valid).
@@ -249,28 +251,31 @@ do
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
--- DR-5  Timeline sequence playhead does NOT write to DB
+-- DR-5  Timeline sequence playhead IS the model's playhead — moving it in the
+--       monitor writes through to the sequence row (single source of truth),
+--       synchronously, so the timeline view reflects it. A timeline (record)
+--       sequence shares ONE playhead with the timeline; the monitor is a view
+--       of that shared playhead, not a private cursor. (Contrast DR-4: a
+--       masterclip playhead is private and persists via a debounced surgical
+--       update.)
 -- ════════════════════════════════════════════════════════════════════════════
-print("\n-- (DR-5) timeline playhead NOT persisted --")
+print("\n-- (DR-5) timeline playhead writes through to the model --")
 do
-    local before = Sequence.load("tl1").playhead_position
     local mon = new_monitor("timeline_monitor")
     mon:load_sequence("tl1")
     mon:set_playhead(25)
 
-    -- Poll briefly; if persist fires it will change the row.
-    -- In production, SequenceMonitor only debounces+persists for is_master().
-    -- We wait a short window and assert the row does NOT change.
-    os.execute("sleep 0.5")
-    qt_constants.CONTROL.PROCESS_EVENTS()
-
+    -- Written synchronously through core.playhead.set (same canonical path the
+    -- timeline ruler uses) — no debounce timer to wait on.
     local after = Sequence.load("tl1").playhead_position
-    assert(after == before, string.format(
-        "timeline sequence.playhead_position must stay %d (not written); "
-        .. "DB shows %d", before, after))
+    assert(after == 25, string.format(
+        "timeline sequence.playhead_position must be written through to 25 "
+        .. "(single source of truth); DB shows %d", after))
 
     mon:destroy()
-    print(string.format("  PASS: timeline playhead not persisted (DB stayed at %d)", before))
+    -- Restore for later tests that assume tl1 starts elsewhere.
+    local seq = Sequence.load("tl1"); seq.playhead_position = 0; seq:save()
+    print("  PASS: timeline playhead written through to the model (25)")
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
