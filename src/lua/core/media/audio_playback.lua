@@ -382,6 +382,11 @@ function M.refresh_mix_volumes(mix_params)
     log.event("refresh_mix_volumes: %d track(s)", #mix_params)
 end
 
+-- NOTE: dropping the already-mixed downstream tail on a solo/mute change lives
+-- in C++ (PlaybackController::FlushAudioForMixChange) — the C++ clock is the
+-- transport authority in the 017 two-engine model, so the flush must reanchor
+-- off it, not off this module's stale anchor.
+
 -- NOTE: PCM buffer management moved to C++ AudioPump in Phase 3.
 -- C++ AudioPump owns the TMB→SSE→AOP pipeline with adaptive sleep
 -- (2-15ms). The Lua-side decode_mix_and_send_to_sse / render_and_write_to_device

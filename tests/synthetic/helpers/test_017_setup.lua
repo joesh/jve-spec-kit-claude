@@ -36,6 +36,8 @@ function M.install_qt_stub(call_log)
             SET_SHUTTLE_MODE = function() end,
             PLAY_BURST = function() end,
             RELOAD_ALL_CLIPS = function() end,
+            SET_EFFECTIVE_VIDEO_TRACKS = function() end,
+            FLUSH_AUDIO_FOR_MIX_CHANGE = function() end,
         },
         EMP = {
             TMB_CREATE = function() return "stub_tmb" end,

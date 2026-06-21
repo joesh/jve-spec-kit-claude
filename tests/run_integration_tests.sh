@@ -272,6 +272,8 @@ for t in \
   test_edit_history_window_project_switch.lua \
   test_edit_source_popup_invariants.lua \
   test_playback_engine_filter.lua \
+  test_mix_change_flush_gating.lua \
+  test_mix_change_keeps_playing.lua \
   test_playback_routes_to_displayed_tab.lua \
   test_mark_routing.lua \
   test_browser_activation_routes_through_commands.lua \

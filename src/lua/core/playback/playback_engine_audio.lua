@@ -285,6 +285,22 @@ function PlaybackEngine:_refresh_audio_mix()
 end
 
 --- Extract clip ID set from audio entries (for change detection).
+--- Flush the audio pipeline so a mute/solo change is heard immediately.
+-- _refresh_audio_mix updates the mix coefficients (and clears TMB's mix cache),
+-- but ~2.6s of already-mixed PCM is queued downstream (SSE + AOP). Drop it so
+-- the new mix takes effect at the playhead. Scoped to mute/solo toggles by the
+-- caller — fader drags must NOT call this (they'd click on every delta).
+function PlaybackEngine:_flush_audio_pipeline_for_mix_change()
+    if not (audio_playback and audio_playback.is_owner(self)) then return end
+    -- The C++ PlaybackController owns the live transport clock (017 two-engine
+    -- model); the flush must run there, off the authoritative clock position.
+    -- Doing it Lua-side off the stale audio anchor sent audio to a bogus
+    -- position and raced the AudioPump's SSE render on the pump thread.
+    assert(self._playback_controller,
+        "PlaybackEngine:_flush_audio_pipeline_for_mix_change: audio owner has no playback controller")
+    qt_constants.PLAYBACK.FLUSH_AUDIO_FOR_MIX_CHANGE(self._playback_controller)
+end
+
 -- @return table: {[clip_id] = true, ...}
 function PlaybackEngine:_extract_clip_ids(entries)
     local ids = {}
@@ -347,6 +363,18 @@ function PlaybackEngine:_push_all_audio_mix_params()
     local edit_time_us = helpers.calc_time_us_from_frame(
         math.floor(self:get_position()), self.fps_num, self.fps_den)
     audio_playback.apply_mix(self._tmb, mix_params, edit_time_us)
+end
+
+--- True when any AUDIO track in the loaded sequence is soloed. Lets the mute
+--- path skip the mix-change flush: with a solo active, solo trumps mute, so
+--- toggling any track's mute changes nothing audible — no tail to drop.
+function PlaybackEngine:_any_audio_track_soloed()
+    assert(self.sequence, "PlaybackEngine:_any_audio_track_soloed: no sequence loaded")
+    local Track = require("models.track")
+    for _, track in ipairs(Track.find_by_sequence(self.sequence.id, "AUDIO")) do
+        if track.soloed then return true end
+    end
+    return false
 end
 
 --- Init audio session using stored sample rate (no media_cache dependency).

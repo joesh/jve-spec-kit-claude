@@ -43,6 +43,16 @@ function PlaybackEngine:_on_track_preference_changed_signal(track_id, property, 
         end
     elseif track.track_type == "AUDIO" then
         self:_refresh_audio_mix()
+        -- Mute/solo is a discrete toggle: drop the ~2.6s of already-mixed PCM
+        -- queued downstream so the change is heard at the playhead, not after the
+        -- stale tail drains. (Volume/pan go through track_mix_changed and must
+        -- NOT flush — they'd click on every fader delta.)
+        -- Skip the flush when a solo is active and only a mute toggled: solo
+        -- trumps mute, so the audible output is unchanged — flushing would click
+        -- for nothing. A solo toggle always changes the audible set → flush.
+        if not (property == "muted" and self:_any_audio_track_soloed()) then
+            self:_flush_audio_pipeline_for_mix_change()
+        end
     else
         assert(false, string.format(
             "PlaybackEngine:_on_track_preference_changed_signal: unknown track_type %q for track %s",

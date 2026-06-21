@@ -35,8 +35,8 @@ assert(not dim.should_dim(audio(false, false), false), "unmuted non-soloed no so
 assert(    dim.should_dim(audio(false, false), true),  "non-soloed in solo context → dim")
 assert(not dim.should_dim(audio(true,  false), true),  "soloed in solo context → not dim")
 
--- soloed AND muted → still dim (mute wins)
-assert(dim.should_dim(audio(true, true), true), "soloed+muted → dim (mute wins)")
+-- soloed AND muted → NOT dim (solo trumps mute: the track is heard, so it is lit)
+assert(not dim.should_dim(audio(true, true), true), "soloed+muted → not dim (solo trumps mute)")
 
 -- ── A/V isolation — the key invariant ────────────────────────────────────────
 

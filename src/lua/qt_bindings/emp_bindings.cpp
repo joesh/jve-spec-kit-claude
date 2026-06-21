@@ -2009,6 +2009,28 @@ static int lua_playback_reload_all_clips(lua_State* L) {
     return 0;
 }
 
+// PLAYBACK.SET_EFFECTIVE_VIDEO_TRACKS(controller, {index, index, ...})
+// The video tracks that composite into the output (mute/solo resolved by Lua).
+// Composite-time only — prefetch keeps all tracks decoded so unmute is instant.
+static int lua_playback_set_effective_video_tracks(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    int n = static_cast<int>(lua_objlen(L, 2));
+    std::vector<int> indices;
+    indices.reserve(static_cast<size_t>(n));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L,
+                "SET_EFFECTIVE_VIDEO_TRACKS: element %d is not a number", i);
+        }
+        indices.push_back(static_cast<int>(lua_tointeger(L, -1)));
+        lua_pop(L, 1);
+    }
+    controller->setEffectiveVideoTracks(indices);
+    return 0;
+}
+
 // PLAYBACK.ACTIVATE_AUDIO(controller, aop, sse, sample_rate, channels)
 static int lua_playback_activate_audio(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
@@ -2054,6 +2076,15 @@ static int lua_playback_set_speed(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
     float speed = static_cast<float>(luaL_checknumber(L, 2));
     controller->SetSpeed(speed);
+    return 0;
+}
+
+// PLAYBACK.FLUSH_AUDIO_FOR_MIX_CHANGE(controller)
+// Drop the stale already-mixed PCM downstream of TMB so a solo/mute change is
+// heard at the playhead. No-op when not playing with audio.
+static int lua_playback_flush_audio_for_mix_change(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    controller->FlushAudioForMixChange();
     return 0;
 }
 
@@ -2878,6 +2909,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SET_CLIP_PROVIDER");
     lua_pushcfunction(L, lua_playback_reload_all_clips);
     lua_setfield(L, -2, "RELOAD_ALL_CLIPS");
+    lua_pushcfunction(L, lua_playback_set_effective_video_tracks);
+    lua_setfield(L, -2, "SET_EFFECTIVE_VIDEO_TRACKS");
     lua_pushcfunction(L, lua_playback_set_clip_transition_callback);
     lua_setfield(L, -2, "SET_CLIP_TRANSITION_CALLBACK");
     lua_pushcfunction(L, lua_playback_activate_audio);
@@ -2889,6 +2922,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SET_LOG_TAG");
     lua_pushcfunction(L, lua_playback_set_speed);
     lua_setfield(L, -2, "SET_SPEED");
+    lua_pushcfunction(L, lua_playback_flush_audio_for_mix_change);
+    lua_setfield(L, -2, "FLUSH_AUDIO_FOR_MIX_CHANGE");
     lua_pushcfunction(L, lua_playback_play_burst);
     lua_setfield(L, -2, "PLAY_BURST");
     lua_pushcfunction(L, lua_playback_has_audio);

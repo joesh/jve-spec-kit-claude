@@ -636,6 +636,14 @@ function PlaybackEngine:_refresh_video_track_states()
     end
     self._video_track_states = states
     self._effective_video_track_indices = Renderer.compute_effective_video_indices(states)
+    -- Push the visible-track set to the C++ compositor so mute/solo takes effect
+    -- during playback (deliverFrame composites from this; prefetch keeps every
+    -- track decoded so unmute is instant). Park mode re-renders via the Lua
+    -- renderer separately. Mirrors the Lua renderer's effective-index list.
+    if self._playback_controller then
+        qt_constants.PLAYBACK.SET_EFFECTIVE_VIDEO_TRACKS(
+            self._playback_controller, self._effective_video_track_indices)
+    end
 end
 
 --- Close TMB instance if active.

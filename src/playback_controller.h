@@ -31,6 +31,32 @@ enum class QualityMode;
 }
 
 // ============================================================================
+// Video-track visibility filter (mute/solo) — pure, header-only so it is unit
+// testable without the Objective-C++ controller.
+// ============================================================================
+//
+// `candidate_tracks` is the TMB's set of video tracks that have clips, already
+// ordered top-to-bottom for compositing. `effective` is the visible set resolved
+// by Lua (mute/solo applied). Returns the candidates that are visible, order
+// preserved. When `effective_valid` is false (Lua hasn't pushed a set yet, e.g.
+// at boot) every candidate is visible. An empty valid `effective` set means all
+// video tracks are muted → nothing composites.
+inline std::vector<int> filterVisibleVideoTracks(
+        const std::vector<int>& candidate_tracks,
+        const std::vector<int>& effective,
+        bool effective_valid) {
+    if (!effective_valid) return candidate_tracks;
+    std::vector<int> visible;
+    visible.reserve(candidate_tracks.size());
+    for (int idx : candidate_tracks) {
+        for (int e : effective) {
+            if (e == idx) { visible.push_back(idx); break; }
+        }
+    }
+    return visible;
+}
+
+// ============================================================================
 // Playback diagnostics — zero-I/O ring buffers for per-tick capture
 // ============================================================================
 
@@ -268,6 +294,12 @@ public:
                        int32_t sample_rate, int32_t channels);
     void DeactivateAudio();
     void SetSpeed(float signed_speed);  // mid-playback speed change with reanchor
+    // Drop the already-mixed PCM queued downstream of TMB (SSE lookahead + AOP
+    // ring, ~2.6s) so a solo/mute change is heard at the playhead instead of
+    // after that stale tail drains. TMB::SetAudioMixParams already cleared the
+    // mix cache; this reanchors at the current clock position (same speed) to
+    // refill. No-op when not playing with audio. Brief audible discontinuity.
+    void FlushAudioForMixChange();
     void PlayBurst(int64_t frame_idx, int direction, int duration_ms);
     bool HasAudio() const;
 
@@ -299,6 +331,13 @@ public:
 
     // Clip prefetch: clear TMB + reset + re-prefetch after timeline edits.
     void reloadAllClips();
+
+    // Video mute/solo: the set of video track indices that composite into the
+    // output, resolved by Lua (renderer.compute_effective_video_indices). Only
+    // the COMPOSITE step (deliverFrame) honors this — prefetch/decode keeps all
+    // tracks warm so unmuting is instant (no re-decode). Push on every mute/solo
+    // change. An empty set means "no video tracks visible" (everything muted).
+    void setEffectiveVideoTracks(const std::vector<int>& indices);
 
     // State queries (thread-safe)
     int64_t CurrentFrame() const;
@@ -339,6 +378,10 @@ private:
     void waitForVideoCache(int64_t pos, int timeout_ms);
     void prefillBackwardCache(int64_t pos);
     void prefillAudio(int64_t pos, int direction, float speed);
+    // Canonical audio flush-and-resume primitive: drop queued PCM, reanchor at
+    // time_us/speed, refill the ring, and RESTART the output device. Shared by
+    // prefillAudio, SetSpeed, and FlushAudioForMixChange.
+    void prefillAudioAtTime(int64_t time_us, int direction, float abs_speed);
 
     // Pre-roll timing constants
     static constexpr int PREROLL_POLL_MS = 5;        // cache poll interval
@@ -471,6 +514,14 @@ private:
     ClipTransitionCallback m_clip_transition_callback;
     std::mutex m_callback_mutex;
 
+    // Effective (visible) video tracks for compositing — written from the main
+    // thread (setEffectiveVideoTracks), read on the tick thread (deliverFrame).
+    // m_effective_video_tracks_valid is false until Lua first pushes the set;
+    // while false deliverFrame composites every track (boot-time default).
+    std::vector<int> m_effective_video_tracks;
+    bool m_effective_video_tracks_valid{false};
+    std::mutex m_effective_video_mutex;
+
     // Position report interval (100ms coalescing)
     static constexpr int64_t REPORT_INTERVAL_MS = 100;
 };
@@ -491,6 +542,7 @@ public:
     void Park(int64_t) {}
     void Seek(int64_t) {}
 
+    void FlushAudioForMixChange() {}
     void ActivateAudio(aop::AudioOutput*, sse::ScrubStretchEngine*, int32_t, int32_t) {}
     void DeactivateAudio() {}
     void SetSpeed(float) {}
@@ -514,6 +566,7 @@ public:
     void SetClipTransitionCallback(ClipTransitionCallback) {}
 
     void reloadAllClips() {}
+    void setEffectiveVideoTracks(const std::vector<int>&) {}
 
     int64_t CurrentFrame() const { return 0; }
     bool IsPlaying() const { return false; }

@@ -756,36 +756,66 @@ void PlaybackController::waitForVideoCache(int64_t pos, int timeout_ms) {
     // Timeout is not fatal: it means REFILL workers are slow, not that playback can't start.
 }
 
+// Auto-select audio quality mode from abs(speed). Single source of truth for
+// every audio (re)prefill path — Play, mid-play speed change, and mix-change
+// flush. NOT the pump: a (re)prefill must not invent a fallback mode if the
+// pump is momentarily absent.
+//   >4x        → Q3_DECIMATE (sample-skipping)
+//   1x-4x      → Q1 (editor, pitch-corrected)
+//   0.25x-1x   → Q3_DECIMATE (varispeed, natural pitch drop)
+//   <0.25x     → Q2 (extreme slomo, pitch-corrected)
+static int qualityModeForSpeed(float abs_speed) {
+    if (abs_speed > 4.0f) return 3;    // Q3_DECIMATE
+    if (abs_speed >= 1.0f) return 1;   // Q1
+    if (abs_speed >= 0.25f) return 3;  // Q3_DECIMATE (varispeed)
+    return 2;                          // Q2
+}
+
 void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
-    JVE_ASSERT(m_aop,
-        "PlaybackController::prefillAudio: AOP is null");
-    JVE_ASSERT(m_sse,
-        "PlaybackController::prefillAudio: SSE is null");
-    JVE_ASSERT(m_tmb,
-        "PlaybackController::prefillAudio: TMB is null");
     JVE_ASSERT(m_fps_num > 0,
         "PlaybackController::prefillAudio: fps_num must be positive");
-    JVE_ASSERT(m_audio_sample_rate > 0,
-        "PlaybackController::prefillAudio: audio_sample_rate must be positive");
-    JVE_ASSERT(m_audio_channels > 0,
-        "PlaybackController::prefillAudio: audio_channels must be positive");
-
-    // Compute quality mode from speed
-    float abs_speed = speed;
-    int quality_mode;
-    if (abs_speed > 4.0f) {
-        quality_mode = 3;  // Q3_DECIMATE
-    } else if (abs_speed >= 1.0f) {
-        quality_mode = 1;  // Q1
-    } else if (abs_speed >= 0.25f) {
-        quality_mode = 3;  // Q3_DECIMATE (varispeed)
-    } else {
-        quality_mode = 2;  // Q2
-    }
-
-    // Reanchor clock at current position
     int64_t time_us = (pos * 1000000LL * m_fps_den) / m_fps_num;
-    float signed_speed = direction * speed;
+    prefillAudioAtTime(time_us, direction, speed);
+}
+
+// THE canonical audio flush-and-resume primitive. Drops everything queued
+// downstream (AOP ring + SSE lookahead), reanchors the clock at time_us/speed,
+// refills the ring with freshly mixed PCM, and RESTARTS the output device.
+// Shared by prefillAudio (cold start from Play), SetSpeed (mid-play speed
+// change), and FlushAudioForMixChange (mute/solo changed the audible mix).
+// AudioOutput::Flush() STOPS the QAudioSink, so the trailing m_aop->Start()
+// below is mandatory — without it the device never resumes, its frame counter
+// freezes, and the audio-anchored clock stalls (slow-motion playhead).
+void PlaybackController::prefillAudioAtTime(int64_t time_us, int direction, float abs_speed) {
+    JVE_ASSERT(m_aop,
+        "PlaybackController::prefillAudioAtTime: AOP is null");
+    JVE_ASSERT(m_sse,
+        "PlaybackController::prefillAudioAtTime: SSE is null");
+    JVE_ASSERT(m_tmb,
+        "PlaybackController::prefillAudioAtTime: TMB is null");
+    JVE_ASSERT(m_fps_num > 0,
+        "PlaybackController::prefillAudioAtTime: fps_num must be positive");
+    JVE_ASSERT(m_audio_sample_rate > 0,
+        "PlaybackController::prefillAudioAtTime: audio_sample_rate must be positive");
+    JVE_ASSERT(m_audio_channels > 0,
+        "PlaybackController::prefillAudioAtTime: audio_channels must be positive");
+
+    int quality_mode = qualityModeForSpeed(abs_speed);
+    float signed_speed = direction * abs_speed;
+
+    // Restarting the device freezes the audio clock until CoreAudio begins
+    // pulling from the (about-to-be-refilled) ring. For forward play, slave
+    // video position to the audio clock through that spin-up so it can't
+    // free-run ahead — otherwise resume/speed-change/mix-flush each show a
+    // ~200ms drift spike. The recovery gate in advancePosition releases the
+    // hold once aop_playhead advances (audio actually flowing). The buf==0
+    // stall trigger can't cover this: the prefill below leaves buf>0 before the
+    // device pulls a single frame.
+    if (direction > 0) {
+        m_audio_master_position = true;
+        m_consecutive_audio_dry = 0;
+        m_consecutive_audio_healthy = 0;
+    }
 
     JVE_LOG_DETAIL(Audio, "Play: pre-flush buf=%lld aop_playing=%d",
                   (long long)m_aop->BufferedFrames(),
@@ -931,7 +961,10 @@ void PlaybackController::Play(int direction, float speed) {
     m_clip_transitions.clear();
     m_diag_tick_index = 0;
 
-    // Reset audio stall detection state
+    // Reset audio stall detection state. The startup audio-master hold (video
+    // slaved to the audio clock until the device begins consuming) is engaged in
+    // prefillAudioAtTime — the single restart primitive shared by Play, SetSpeed,
+    // and the mix-change flush — so every device restart holds video uniformly.
     m_audio_master_position = false;
     m_consecutive_audio_dry = 0;
     m_consecutive_audio_healthy = 0;
@@ -1155,47 +1188,40 @@ void PlaybackController::SetSpeed(float signed_speed) {
     int dir = (signed_speed >= 0) ? 1 : -1;
     m_direction.store(dir, std::memory_order_relaxed);
 
-    // Auto-select quality mode from abs(speed)
-    // >4x        → Q3_DECIMATE (sample-skipping)
-    // 1x-4x      → Q1 (editor, pitch-corrected)
-    // 0.25x-1x   → Q3_DECIMATE (varispeed, natural pitch drop)
-    // <0.25x     → Q2 (extreme slomo, pitch-corrected)
-    int quality_mode;
-    if (abs_speed > 4.0f) {
-        quality_mode = 3;  // Q3_DECIMATE
-    } else if (abs_speed >= 1.0f) {
-        quality_mode = 1;  // Q1
-    } else if (abs_speed >= 0.25f) {
-        quality_mode = 3;  // Q3_DECIMATE (varispeed)
-    } else {
-        quality_mode = 2;  // Q2
-    }
-
-    // If playing with audio, reanchor and update pump
+    // While playing with audio, reanchor + refill + restart the device at the
+    // live position under the new speed. prefillAudioAtTime is the single path
+    // that correctly restarts the QAudioSink that Flush() stops.
     if (m_playing.load(std::memory_order_relaxed) &&
         m_has_audio.load(std::memory_order_relaxed) && m_aop && m_sse) {
-
-        // Capture current position, reanchor clock
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t current_time_us = m_clock.CurrentTimeUS(aop_playhead);
-
-        // Flush SSE for speed change
-        m_aop->Flush();
-        m_sse->Reset();
-        if (m_audio_pump) m_audio_pump->ResetPushState();
-        m_fractional_frames = 0.0;
-
-        // Reanchor at new speed
-        int64_t new_epoch = m_aop->PlayheadTimeUS();
-        m_clock.Reanchor(current_time_us, signed_speed, new_epoch);
-        m_sse->SetTarget(current_time_us, signed_speed, static_cast<sse::QualityMode>(quality_mode));
-
-        if (m_audio_pump) {
-            m_audio_pump->SetQualityMode(quality_mode);
-        }
+        prefillAudioAtTime(current_time_us, dir, abs_speed);
     }
 
-    JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d", signed_speed, quality_mode);
+    JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d", signed_speed, qualityModeForSpeed(abs_speed));
+}
+
+void PlaybackController::FlushAudioForMixChange() {
+    // Only meaningful while audibly playing — nothing is queued otherwise.
+    if (!(m_playing.load(std::memory_order_relaxed) &&
+          m_has_audio.load(std::memory_order_relaxed) && m_aop && m_sse)) {
+        return;
+    }
+
+    // Same position, same speed — just swap the stale already-mixed tail for the
+    // new mix (SetAudioMixParams already cleared TMB's mix cache). The live
+    // position comes from the C++ clock (the authority in the two-engine model;
+    // the Lua audio anchor is stale during playback). prefillAudioAtTime does
+    // the full flush-and-RESTART so the device resumes instead of freezing.
+    int64_t aop_playhead = m_aop->PlayheadTimeUS();
+    int64_t current_time_us = m_clock.CurrentTimeUS(aop_playhead);
+    int dir = m_direction.load(std::memory_order_relaxed);
+    float abs_speed = m_speed.load(std::memory_order_relaxed);
+
+    prefillAudioAtTime(current_time_us, dir, abs_speed);
+
+    JVE_LOG_EVENT(Audio, "FlushAudioForMixChange: t=%.3fs",
+                  current_time_us / 1000000.0);
 }
 
 void PlaybackController::PlayBurst(int64_t frame_idx, int direction, int duration_ms) {
@@ -1351,6 +1377,17 @@ void PlaybackController::reloadAllClips() {
     m_tmb->ClearAllClips();
     resetPrefetchFrontiers();
     prefetchClips();
+}
+
+void PlaybackController::setEffectiveVideoTracks(const std::vector<int>& indices) {
+    // Store only — no cache flush, so every track stays decoded in TMB and
+    // unmuting is instant. During playback the next tick's deliverFrame
+    // composites from the new set; in park mode Lua re-renders the frame via
+    // the renderer (which uses its own effective-index list). deliverFrame
+    // (tick thread) reads this under the same mutex.
+    std::lock_guard<std::mutex> lock(m_effective_video_mutex);
+    m_effective_video_tracks = indices;
+    m_effective_video_tracks_valid = true;
 }
 
 // ============================================================================
@@ -1604,9 +1641,15 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
             ++m_consecutive_audio_healthy;
         }
 
-        // Recovery: audio buffer healthy
+        // Recovery: audio buffer healthy AND the audio clock is actually
+        // advancing. Gating on aop_playhead>0 (the device has consumed at least
+        // one frame) keeps the startup hold engaged through device spin-up —
+        // buf>0 alone is true the instant prefillAudio fills the ring, before
+        // CoreAudio pulls a single frame, so without this gate the hold would
+        // release while the audio clock is still frozen and video would drift.
         if (m_audio_master_position &&
-            m_consecutive_audio_healthy >= AUDIO_HEALTHY_CONSECUTIVE) {
+            m_consecutive_audio_healthy >= AUDIO_HEALTHY_CONSECUTIVE &&
+            aop_playhead > 0) {
             m_audio_master_position = false;
             m_fractional_frames = 0.0;
             JVE_LOG_EVENT(Ticks, "audio-master OFF: drift=%.3fs buf=%lld", drift_s, (long long)buf);
@@ -1739,6 +1782,17 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     if (video_tracks.empty()) {
         return;
     }
+
+    // Restrict to the effective (visible) track set — muted/non-soloed tracks
+    // are excluded from compositing only; they stay decoded in TMB so unmuting
+    // is instant. Until Lua first pushes a set, every track composites.
+    {
+        std::lock_guard<std::mutex> lock(m_effective_video_mutex);
+        video_tracks = filterVisibleVideoTracks(
+            video_tracks, m_effective_video_tracks, m_effective_video_tracks_valid);
+    }
+    // If every video track is muted, video_tracks is now empty: the loop below
+    // finds nothing and the gap branch shows black.
 
     // Query tracks top-to-bottom. Topmost clip always occludes — if V2 has a
     // clip at this frame, V1 is never visible regardless of cache state.

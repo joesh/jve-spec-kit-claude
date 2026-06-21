@@ -601,6 +601,30 @@ set_target_properties(test_playback_clock PROPERTIES
 )
 add_test(NAME test_playback_clock COMMAND test_playback_clock)
 
+# Video-track visibility filter (mute/solo composite) — pure header function
+add_executable(test_video_track_filter
+    tests/synthetic/unit/test_video_track_filter.cpp
+)
+target_link_libraries(test_video_track_filter
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_video_track_filter PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_video_track_filter PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_video_track_filter PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_video_track_filter COMMAND test_video_track_filter)
+
 # TMB (TimelineMediaBuffer) test
 add_executable(test_tmb
     tests/synthetic/unit/test_timeline_media_buffer.cpp
