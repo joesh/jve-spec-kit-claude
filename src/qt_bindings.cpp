@@ -385,7 +385,6 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_widget_cursor); lua_setglobal(L, "qt_set_widget_cursor");
     lua_pushcfunction(L, lua_set_window_appearance); lua_setglobal(L, "qt_set_window_appearance");
     lua_pushcfunction(L, lua_create_single_shot_timer); lua_setglobal(L, "qt_create_single_shot_timer");
-    lua_pushcfunction(L, lua_set_scroll_area_alignment); lua_setglobal(L, "qt_set_scroll_area_alignment");
     lua_pushcfunction(L, lua_set_focus_policy); lua_setglobal(L, "qt_set_focus_policy");
     lua_pushcfunction(L, lua_set_focus); lua_setglobal(L, "qt_set_focus");
     lua_pushcfunction(L, lua_get_focus_widget); lua_setglobal(L, "qt_get_focus_widget");

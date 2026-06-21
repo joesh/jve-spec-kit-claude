@@ -92,7 +92,7 @@ local selection_color = color("STATE_SELECTED")
 local inactive_text_color = color("TEXT_LABEL_DIM")
 local active_text_color = selection_color
 local hover_text_color = color("TEXT_PRIMARY")
-local source_tab_color = "#5cbacc"  -- --src accent from design mockup v4
+local source_tab_color = color("ACCENT_SOURCE")
 
 -- Tab styling per spec FR-002: source vs record distinction is always-on
 -- (determined by tab type, not just active state). Caller must pass an
@@ -455,10 +455,10 @@ end
 -- (Joe 2026-05-13). Lightness profile preserved; saturation halved by
 -- mixing 50/50 with the panel neutral so the strip reads as "blue tab +
 -- red tabs" without screaming. Source = teal, record = selection-red.
-local SOURCE_TAB_BG_INACTIVE = "#242e31"   -- dim teal when source tab not displayed
-local SOURCE_TAB_BG_ACTIVE   = "#2b4146"   -- brighter teal when source tab displayed
-local RECORD_TAB_BG_INACTIVE = "#312626"   -- dim red when record tab not displayed
-local RECORD_TAB_BG_ACTIVE   = "#442f2c"   -- brighter red when record tab displayed
+local SOURCE_TAB_BG_INACTIVE = color("TAB_SOURCE_BG_INACTIVE")
+local SOURCE_TAB_BG_ACTIVE   = color("TAB_SOURCE_BG_ACTIVE")
+local RECORD_TAB_BG_INACTIVE = color("TAB_RECORD_BG_INACTIVE")
+local RECORD_TAB_BG_ACTIVE   = color("TAB_RECORD_BG_ACTIVE")
 
 -- "Selected"/highlighted in the tab strip = the DISPLAYED tab (the one
 -- whose content the timeline view renders). NOT the active record tab —
@@ -938,7 +938,9 @@ ensure_tab_for_strip_tab = function(strip_tab)
         qt_constants.LAYOUT.INSERT_WIDGET(tab_bar_tabs_layout, container, 0)
         table.insert(tab_order, 1, strip_tab.id)
     else
-        qt_constants.LAYOUT.ADD_WIDGET(tab_bar_tabs_layout, container)
+        -- Insert before the trailing stretch (last layout item) so the new tab
+        -- stays in the left-packed run, not pushed right of the slack spacer.
+        qt_constants.LAYOUT.INSERT_WIDGET(tab_bar_tabs_layout, container, #tab_order)
         table.insert(tab_order, strip_tab.id)
     end
 
@@ -1125,41 +1127,42 @@ local function build_track_header_stylesheet(background_color)
     return string.format([[
         QWidget {
             background: %s;
-            border-left: 1px solid #222232;
-            border-right: 1px solid #222232;
+            border-left: 1px solid %s;
+            border-right: 1px solid %s;
             border-top: 0px;
             border-bottom: 0px;
         }
-    ]], background_color)
+    ]], background_color, color("TRACK_HEADER_BORDER"), color("TRACK_HEADER_BORDER"))
 end
 
 local function build_track_header_label_stylesheet()
-    return [[
+    return string.format([[
         QLabel {
             background: transparent;
-            color: #cccccc;
+            color: %s;
             padding: 0 2px;
         }
-    ]]
+    ]], color("TEXT_LABEL_DIM"))
 end
 
 local function build_track_header_btn_stylesheet(active, active_color)
     if active and active_color then
         return string.format([[
             QPushButton {
-                background: %s; color: #ffffff;
-                border: 1px solid #333333;
+                background: %s; color: %s;
+                border: 1px solid %s;
                 padding: 1px 3px; font-size: 10px; font-weight: bold;
             }
-        ]], active_color)
+        ]], active_color, color("TEXT_PRIMARY"), color("TRACK_BUTTON_BORDER"))
     end
-    return [[
+    return string.format([[
         QPushButton {
-            background: #2a2a2a; color: #888888;
-            border: 1px solid #333333; padding: 1px 3px; font-size: 10px;
+            background: %s; color: %s;
+            border: 1px solid %s; padding: 1px 3px; font-size: 10px;
         }
-        QPushButton:hover { background: #3a3a3a; color: #cccccc; }
-    ]]
+        QPushButton:hover { background: %s; color: %s; }
+    ]], color("CONTROL_INACTIVE_BG"), color("TEXT_MUTED"),
+        color("TRACK_BUTTON_BORDER"), color("CONTROL_HOVER_BG"), color("TEXT_LABEL_DIM"))
 end
 
 -- Track header column widths (px) — set once at widget creation via SET_MIN/MAX_WIDTH.
@@ -1181,18 +1184,19 @@ local function build_sm_btn_stylesheet(active, active_color)
     if active and active_color then
         return string.format([[
             QPushButton {
-                background: %s; color: #ffffff;
-                border: 1px solid #333333; padding: 0px; font-size: 9px; font-weight: bold;
+                background: %s; color: %s;
+                border: 1px solid %s; padding: 0px; font-size: 9px; font-weight: bold;
             }
-        ]], active_color)
+        ]], active_color, color("TEXT_PRIMARY"), color("TRACK_BUTTON_BORDER"))
     end
-    return [[
+    return string.format([[
         QPushButton {
-            background: #2a2a2a; color: #888888;
-            border: 1px solid #333333; padding: 0px; font-size: 9px;
+            background: %s; color: %s;
+            border: 1px solid %s; padding: 0px; font-size: 9px;
         }
-        QPushButton:hover { background: #3a3a3a; color: #cccccc; }
-    ]]
+        QPushButton:hover { background: %s; color: %s; }
+    ]], color("CONTROL_INACTIVE_BG"), color("TEXT_MUTED"),
+        color("TRACK_BUTTON_BORDER"), color("CONTROL_HOVER_BG"), color("TEXT_LABEL_DIM"))
 end
 
 -- Empty src-id slot: geometry held by Qt widget-level HDR.SRC width set at creation.
@@ -1205,11 +1209,11 @@ local function build_id_btn_stylesheet(filled, accent)
     if filled then
         return string.format([[
             QPushButton {
-                background: %s; color: #ffffff;
+                background: %s; color: %s;
                 border: 1px solid %s; padding: 0px 2px;
                 font-size: 11px; font-weight: bold;
             }
-        ]], accent, accent)
+        ]], accent, color("TEXT_PRIMARY"), accent)
     end
     return string.format([[
         QPushButton {
@@ -1217,8 +1221,8 @@ local function build_id_btn_stylesheet(filled, accent)
             border: 1px solid %s; padding: 0px 2px;
             font-size: 11px; font-weight: bold;
         }
-        QPushButton:hover { color: #ffffff; border-color: #aaaaaa; }
-    ]], accent, accent)
+        QPushButton:hover { color: %s; border-color: %s; }
+    ]], accent, accent, color("TEXT_PRIMARY"), color("BORDER_LIGHT"))
 end
 
 local function build_sync_mode_btn_stylesheet(mode)
@@ -1232,11 +1236,13 @@ local function build_sync_mode_btn_stylesheet(mode)
     assert(font_size, "build_sync_mode_btn_stylesheet: unknown sync mode " .. tostring(mode))
     return string.format([[
         QPushButton {
-            background: #2a2a2a; color: #cccccc;
-            border: 1px solid #333333; padding: 0px; font-size: %dpx;
+            background: %s; color: %s;
+            border: 1px solid %s; padding: 0px; font-size: %dpx;
         }
-        QPushButton:hover { background: #3a3a3a; color: #ffffff; }
-    ]], font_size)
+        QPushButton:hover { background: %s; color: %s; }
+    ]], color("CONTROL_INACTIVE_BG"), color("TEXT_LABEL_DIM"),
+        color("TRACK_BUTTON_BORDER"), font_size,
+        color("CONTROL_HOVER_BG"), color("TEXT_PRIMARY"))
 end
 
 local track_btn_handler_seq = 0
@@ -1327,16 +1333,16 @@ local function add_sm_stack_to_layout(header_layout, track, track_id)
     local mute_btn = qt_constants.WIDGET.CREATE_BUTTON("M")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(mute_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(mute_btn, HDR.SM)
-    qt_constants.PROPERTIES.SET_STYLE(mute_btn, build_sm_btn_stylesheet(track.muted, "#cc3333"))
+    qt_constants.PROPERTIES.SET_STYLE(mute_btn, build_sm_btn_stylesheet(track.muted, color("STATE_MUTE")))
     qt_constants.LAYOUT.ADD_WIDGET(sm_layout, mute_btn)
-    wire_toggle_preference(mute_btn, track_id, "muted", "#cc3333")
+    wire_toggle_preference(mute_btn, track_id, "muted", color("STATE_MUTE"))
 
     local solo_btn = qt_constants.WIDGET.CREATE_BUTTON("S")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(solo_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(solo_btn, HDR.SM)
-    qt_constants.PROPERTIES.SET_STYLE(solo_btn, build_sm_btn_stylesheet(track.soloed, "#ccaa00"))
+    qt_constants.PROPERTIES.SET_STYLE(solo_btn, build_sm_btn_stylesheet(track.soloed, color("STATE_SOLO")))
     qt_constants.LAYOUT.ADD_WIDGET(sm_layout, solo_btn)
-    wire_toggle_preference(solo_btn, track_id, "soloed", "#ccaa00")
+    wire_toggle_preference(solo_btn, track_id, "soloed", color("STATE_SOLO"))
 
     qt_constants.LAYOUT.ADD_WIDGET(header_layout, sm_container)
     return mute_btn, solo_btn
@@ -1524,8 +1530,9 @@ end
 -- src_btn label: rendered by the rerender_all_src_btns sweep based on the
 -- effective source's tracks at current shape (§F2). Per-row, wire_patch_buttons
 -- only REGISTERS the widget for the sweep and installs interaction handlers.
--- rec_btn label: this record track's own name (text set at creation); style
--- toggles per track.autoselect.
+-- rec_btn label: this record track's stable routing id (V1/A1…, set at
+-- creation from track_type+track_index, independent of the user's rename);
+-- style toggles per track.autoselect.
 local function wire_patch_buttons(src_btn, rec_btn, sequence_id, rec_track_id, rec_track_index, track_type)
     assert(sequence_id and sequence_id ~= "",
         "wire_patch_buttons: sequence_id required (rec_track_index=" .. tostring(rec_track_index) .. ")")
@@ -1647,15 +1654,15 @@ local function refresh_track_button_styles()
         else
             if refs.mute_btn then
                 qt_constants.PROPERTIES.SET_STYLE(refs.mute_btn,
-                    build_sm_btn_stylesheet(t.muted, "#cc3333"))
+                    build_sm_btn_stylesheet(t.muted, color("STATE_MUTE")))
             end
             if refs.solo_btn then
                 qt_constants.PROPERTIES.SET_STYLE(refs.solo_btn,
-                    build_sm_btn_stylesheet(t.soloed, "#ccaa00"))
+                    build_sm_btn_stylesheet(t.soloed, color("STATE_SOLO")))
             end
             if refs.lock_btn then
                 qt_constants.PROPERTIES.SET_STYLE(refs.lock_btn,
-                    build_track_header_btn_stylesheet(t.locked, "#ccaa00"))
+                    build_track_header_btn_stylesheet(t.locked, color("STATE_LOCK")))
             end
             if refs.sync_mode_btn then
                 qt_constants.PROPERTIES.SET_TEXT(refs.sync_mode_btn, SYNC_ICONS[t.sync_mode] or "?")
@@ -1724,15 +1731,15 @@ Signals.connect("track_preference_changed", function(track_id, property, new_val
     local active = new_val == 1
     if property == "muted" and refs.mute_btn then
         qt_constants.PROPERTIES.SET_STYLE(refs.mute_btn,
-            build_sm_btn_stylesheet(active, "#cc3333"))
+            build_sm_btn_stylesheet(active, color("STATE_MUTE")))
         update_all_header_dim()
     elseif property == "soloed" and refs.solo_btn then
         qt_constants.PROPERTIES.SET_STYLE(refs.solo_btn,
-            build_sm_btn_stylesheet(active, "#ccaa00"))
+            build_sm_btn_stylesheet(active, color("STATE_SOLO")))
         update_all_header_dim()
     elseif property == "locked" and refs.lock_btn then
         qt_constants.PROPERTIES.SET_STYLE(refs.lock_btn,
-            build_track_header_btn_stylesheet(active, "#ccaa00"))
+            build_track_header_btn_stylesheet(active, color("STATE_LOCK")))
     end
 end)
 
@@ -1744,7 +1751,7 @@ Signals.connect("track_waveform_display_changed", function(track_id, new_val)
     if not refs or not refs.wave_btn then return end
     local active = new_val == 1
     qt_constants.PROPERTIES.SET_STYLE(refs.wave_btn,
-        build_track_header_btn_stylesheet(active, "#4488aa"))
+        build_track_header_btn_stylesheet(active, color("STATE_WAVEFORM")))
 end)
 
 -- MVC: sync_mode_changed fires when cycle button or SetSyncMode command runs.
@@ -1952,7 +1959,12 @@ local function build_track_header_row(track, track_type, header_color)
             build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
-        rec_btn = qt_constants.WIDGET.CREATE_BUTTON(display_label)
+        -- rec-id button shows this record track's stable routing identity
+        -- (V1/A1…), mirroring the source-side patch button — NOT the user's
+        -- track name (the wide name_label below owns the rename). Renaming a
+        -- track must never relabel its routing button.
+        rec_btn = qt_constants.WIDGET.CREATE_BUTTON(
+            format_source_label(track_type, track.track_index))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(rec_btn, HDR.REC)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(rec_btn, HDR.REC)
         qt_constants.PROPERTIES.SET_STYLE(rec_btn,
@@ -2015,9 +2027,9 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.PROPERTIES.SET_MIN_WIDTH(lock_btn, HDR.LOCK)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(lock_btn, HDR.LOCK)
         qt_constants.PROPERTIES.SET_STYLE(lock_btn,
-            build_track_header_btn_stylesheet(track.locked, "#ccaa00"))
+            build_track_header_btn_stylesheet(track.locked, color("STATE_LOCK")))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
-        wire_toggle_preference(lock_btn, captured_track_id, "locked", "#ccaa00")
+        wire_toggle_preference(lock_btn, captured_track_id, "locked", color("STATE_LOCK"))
 
         sync_btn = qt_constants.WIDGET.CREATE_BUTTON(
             SYNC_ICONS[track.sync_mode] or "?")
@@ -2048,7 +2060,7 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(wave_btn, HDR.WAVE)
         qt_constants.PROPERTIES.SET_STYLE(wave_btn,
             build_track_header_btn_stylesheet(
-                track_state.get_waveform_enabled(captured_track_id), "#4488aa"))
+                track_state.get_waveform_enabled(captured_track_id), color("STATE_WAVEFORM")))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, wave_btn)
         wire_waveform_display_toggle(wave_btn, captured_track_id)
         cells[#cells + 1] = "wave"
@@ -2433,7 +2445,8 @@ function M.create(opts)
     -- luacheck: globals qt_create_focus_container
     local container = qt_create_focus_container()  -- Tab cycles between timecode + timeline view
     -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
-    qt_constants.PROPERTIES.SET_STYLE(container, [[QWidget { background: #2b2b2b; }]])
+    qt_constants.PROPERTIES.SET_STYLE(container, string.format(
+        [[QWidget { background: %s; }]], color("SURFACE_CHROME")))
     local main_layout = qt_constants.LAYOUT.CREATE_VBOX()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(main_layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(main_layout, 0, 0, 0, 0)
@@ -2455,8 +2468,16 @@ function M.create(opts)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_tabs_layout, 0, 0, 0, 0)
     qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_tabs_container, tab_bar_tabs_layout)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_tabs_container, "Preferred", "Fixed")
+    -- Trailing stretch keeps tabs left-anchored: tabs insert before it (see
+    -- ensure_tab_for_strip_tab / reorder_tab_widgets), it eats the slack right.
+    qt_constants.LAYOUT.ADD_STRETCH(tab_bar_tabs_layout, 1)
 
-    -- Scroll area constrains tab bar width, clips overflow
+    -- Scroll area constrains tab bar width, clips overflow. widgetResizable is
+    -- ON so the inner tabs container fills the viewport (and grows past it when
+    -- tabs overflow → arrow scrolling). Left alignment of the tabs comes from a
+    -- trailing stretch in the tabs layout (added below): with the container
+    -- viewport-width and only fixed tabs, QHBoxLayout would otherwise spread the
+    -- slack; the trailing stretch absorbs it on the right, anchoring tabs left.
     local panel_bg = color("SURFACE_CHROME")
     tab_bar_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(tab_bar_scroll, true)
@@ -3602,10 +3623,14 @@ function M.finish_track_rename(track_id, name)
     })
 end
 
--- A rename (commit, undo, or redo) re-derives the header label. Rebuild the
+-- A rename (commit, undo, or redo) re-derives the header label. The cached
+-- track list the header rebuilds from is a tab-open snapshot, so first
+-- reconcile the new name into the owning tab's cache, then rebuild the
 -- displayed tab so the affected row picks up the new name / reverts to the
 -- derived label. Rare event — a full rebuild is acceptable.
-Signals.connect("track_name_changed", function()
+Signals.connect("track_name_changed", function(track_id, new_name)
+    local strip = timeline_state.get_tab_strip()
+    if strip then strip:refresh_track_name(track_id, new_name) end
     rebuild_for_displayed_tab()
 end)
 

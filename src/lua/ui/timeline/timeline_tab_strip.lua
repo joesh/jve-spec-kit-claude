@@ -328,6 +328,30 @@ function TimelineTabStrip:find_record_tab_by_sequence_id(sequence_id)
     return nil
 end
 
+--- Reconcile a track rename into the cached track list. A rename writes the
+--- DB and emits track_name_changed, but each tab's cache.tracks is a snapshot
+--- taken at tab-open time — so the header view, which rebuilds from the cache,
+--- would keep showing the old name until the tab is reopened. This updates the
+--- cached name in place wherever the track lives (a track belongs to exactly
+--- one open tab's cache). new_name is the stored value: a string, or nil when
+--- the override was cleared (the derived label then returns).
+--- @return boolean true if the track was found in some tab's cache.
+function TimelineTabStrip:refresh_track_name(track_id, new_name)
+    assert(type(track_id) == "string" and track_id ~= "",
+        "TimelineTabStrip:refresh_track_name: track_id required (non-empty string)")
+    assert(new_name == nil or type(new_name) == "string",
+        "TimelineTabStrip:refresh_track_name: new_name must be a string or nil")
+    for _, tab in ipairs(self.tabs) do
+        for _, track in ipairs(tab.cache.tracks) do
+            if track.id == track_id then
+                track.name = new_name
+                return true
+            end
+        end
+    end
+    return false
+end
+
 function TimelineTabStrip:_first_record_tab()
     for _, t in ipairs(self.tabs) do
         if t.kind == "record" then return t end
