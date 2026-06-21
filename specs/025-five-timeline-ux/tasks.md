@@ -4,6 +4,8 @@
 **Branch**: `025-five-timeline-ux`
 **Gate**: `make -j4` green before marking any FR complete
 
+> **Field naming:** FR-001 detection (T008) uses the **current** columns `master_layer_track_id` (video) / `master_audio_track_id` (audio). Spec 021 later renames them to `source_video_track_id` / `source_audio_track_id` and sweeps 025's code with everything else — 025 does not perform the rename.
+
 ---
 
 ## Phase 3.1: Tests First (TDD) ⚠️ WRITE AND CONFIRM FAILING BEFORE PHASE 3.3
@@ -17,19 +19,22 @@ Each test must be run with `cd tests && luajit test_harness.lua synthetic/lua/te
   - No DB setup needed — pure function test
 
 - [ ] T002 [P] Write `tests/synthetic/lua/test_join_through_edit.lua`
-  - Covers FR-001: create sequence + two tracks + adjacent clips from same master with contiguous source range; execute JoinThroughEdit; verify one clip remains with combined duration and correct source_in/source_out; verify undo restores both clips exactly; verify JoinAllThroughEdits collapses a 3-clip chain in one undo step
-  - **Direct predicate tests** (once `core/through_edit.lua` exists): call `through_edit.is_through_edit()` directly with: (a) same master + contiguous → true; (b) different masters → false; (c) same master but source gap → false; (d) same master + subframe mismatch → false; (e) non-adjacent (gap between clips) → false
-  - **Rule 2.32 assert paths**: use `pcall()` to test: dispatching JoinThroughEdit against a non-through-edit pair → pcall returns false AND error message contains function name + clip IDs; dispatching against a locked track → pcall returns false AND error message contains function name + track_id; dispatching with missing `edit_frame` or `track_id` → pcall returns false AND error message is actionable
+  - Covers FR-001: create sequence + two tracks + adjacent clips from same master track with contiguous source range; execute JoinThroughEdit; verify one clip remains with combined duration and correct source_in/source_out; verify undo restores both clips exactly; verify JoinAllThroughEdits collapses a 3-clip chain in one undo step
+  - **Marker migration**: give the right clip a `clip_markers` row; after join, assert the marker now belongs to the left (surviving) clip and was not lost to CASCADE; after undo, assert it is back on the (restored) right clip
+  - **Direct predicate tests** (once `core/through_edit.lua` exists): call `through_edit.is_through_edit(a, b, kind)` directly with: (a) same master track + contiguous → true; (b) **different master track, same master sequence** (multicam/split-channel) → false; (c) same master track but source gap → false; (d) same master track + subframe mismatch → false; (e) non-adjacent (gap between clips) → false; (f) master-less clip (gap/generator, nil master track id) → false
+  - **Rule 2.32 assert paths**: use `pcall()` to test: dispatching JoinThroughEdit against a non-through-edit pair → pcall returns false AND error message contains function name + clip IDs; dispatching with missing `edit_frame` or `track_id` → pcall returns false AND error message is actionable
+  - **Locked track is a graceful refusal, NOT an assert** (decision: locked = no-op via `track_lock_guard`): dispatching JoinThroughEdit against a locked track returns a non-crashing failure (command result false / guard error string) and leaves BOTH clips unchanged — assert no mutation occurred. Do NOT assert a crash here.
   - Use non-trivial source_in values (e.g., source_in=120, source_out=240, not zero)
 
 - [ ] T003 [P] Write `tests/synthetic/lua/test_timecode_entry_commands.lua`
   - Covers FR-002 command dispatch: execute IncrementTimecode, DecrementTimecode, GoToTimecode on a live sequence; verify each emits `tc_entry_activate` signal with the correct prefix (`"+"`, `"-"`, `"="`); use `signals` module to register a listener and capture emissions
-  - **`compute_action` pure function tests** (once T011 exposes `timecode_entry.compute_action(text, selected_ids, current_frame)`): test all branches — `"=0:01:00:00"` → `{command="SetPlayhead", frame=…}`; `"+10"` with empty selection → `{command="SetPlayhead", ...}`; `"+10"` with non-empty selection → `{command="Nudge", nudge_amount=10, ...}`; `"-5"` with selection → `{command="Nudge", nudge_amount=-5, ...}`; derive frame values from TC math (30fps: 1 second = 30 frames), not from code
+  - **`compute_action` pure function tests** (once T011 exposes `timecode_entry.compute_action(prefix, value_frames, has_selection, current_frame)` — decision B: takes already-parsed `value_frames` + a `has_selection` boolean, not raw text or selection arrays): test all branches — `("=", 1800, true)` → `{command="SetPlayhead", args.playhead_position=1800}` (1800 = 60s × 30fps, derived from TC math not code; ignores selection); `("+", 10, false, current)` → `{command="SetPlayhead", args.playhead_position=current+10}`; `("+", 10, true)` → `{command="NudgeSelection", args.direction=1, args.magnitude=10}`; `("+", 30, true)` → `magnitude=30` (1 second); `("-", -5, true)` → `{command="NudgeSelection", args.direction=-1, args.magnitude=5}`; `("-", -5, false, current)` → `playhead_position=current-5`; `("+", 0, true)` → **nil** (bare-prefix no-op); assert arg is `playhead_position` not `frame`. (TC-string→frame parsing is tested at the panel layer via `core.timecode_input`, already covered.)
   - **Rule 2.32 assert paths**: `pcall()` IncrementTimecode with missing `sequence_id` → returns false AND error message contains function name; `pcall()` with missing `project_id` → same; validate messages are actionable
 
 - [ ] T004 [P] Write `tests/synthetic/lua/test_exclusive_toggle_track_pref.lua`
   - Covers FR-005: create sequence with 3 audio tracks (A1 muted=false, A2 muted=true, A3 muted=false); execute ExclusiveToggleTrackPreference on A1 with property="muted"; verify A1 muted=true, A2 muted=false, A3 muted=false; verify undo does NOT exist (undoable=false); verify video tracks are unaffected; verify single-track-only edge case (no other tracks)
-  - **Rule 2.32 assert paths**: `pcall()` with invalid `property` (e.g., `"volume"`) → returns false AND error message contains function name + the bad value; `pcall()` with missing `track_id` → returns false AND error message actionable; `pcall()` against locked track → returns false AND error message contains function name + track_id
+  - **Rule 2.32 assert paths**: `pcall()` with invalid `property` (e.g., `"volume"`) → returns false AND error message contains function name + the bad value; `pcall()` with missing `track_id` → returns false AND error message actionable
+  - **Locked clicked track is a graceful no-op, NOT an assert** (decision 2): execute ExclusiveToggleTrackPreference on a locked track → command succeeds with no effect (clicked track NOT toggled, no other track modified) — assert state is unchanged. Do NOT expect a crash/error here.
   - Use non-trivial initial state (mixed mute states, not all-false)
 
 ---
@@ -60,8 +65,10 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
 ⚠️ Only begin after Phase 3.1 tests are confirmed failing.
 
 - [ ] T008 [P] Create `src/lua/core/through_edit.lua` — through-edit detection predicate
-  - Export `M.is_through_edit(clip_a, clip_b)` — returns bool
-  - Detection rule: same `master_id`, `clip_a.sequence_start + clip_a.duration == clip_b.sequence_start`, `clip_a.source_out == clip_b.source_in`, and subframe equality when both `source_out_subframe`/`source_in_subframe` are non-nil
+  - Export `M.is_through_edit(clip_a, clip_b, kind)` — returns bool; `kind` is the shared timeline-track kind (`"video"`/`"audio"`)
+  - Same-source identity = the kind-appropriate **master track**: `master_layer_track_id` for video, `master_audio_track_id` for audio (current column names; 021 renames later). A module-local `master_track_id(clip, kind)` helper asserts on unknown kind.
+  - Master-less clips (gap/generator, nil master track id) → return false (never a through-edit) — NOT an assert (legitimate domain case)
+  - Detection rule: same master track id, `clip_a.sequence_start + clip_a.duration == clip_b.sequence_start`, `clip_a.source_out == clip_b.source_in` (`source_out` is exclusive, so equality = contiguous), and subframe equality when both `source_out_subframe`/`source_in_subframe` are non-nil
   - Assert both clips are non-nil with module+callsite name in message
   - No DB access — pure computation on clip property objects
   - Module-local, returns `M`
@@ -75,13 +82,13 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
 
 - [ ] T010 [P] Create `src/lua/core/commands/join_through_edit.lua` — JoinThroughEdit + JoinAllThroughEdits
   - Follow `blade.lua` pattern exactly: SPEC table, `M.execute()`, `M.register()`
-  - **JoinThroughEdit executor**: assert `edit_frame`, `track_id`, `sequence_id`; find left clip (ends at edit_frame) + right clip (starts at edit_frame); assert both exist; assert `through_edit.is_through_edit(left, right)`; assert track not locked; SAVEPOINT `"join_through_edit_atomic"`; snapshot right clip via `Clip.load_v13_row(right.id)` + left clip's `{duration_frames, source_out_frame}`; migrate markers/keyframes from right to left (within SAVEPOINT); `Clip.delete_one(right.id)`; `Clip.update_bounds(left.id, ...)` to extend; RELEASE SAVEPOINT; `command:set_parameter("__timeline_mutations", ...)` with updates + deletes; store snapshot via `command:set_parameter("_undo_state", ...)`
-  - **JoinThroughEdit undoer**: re-insert right clip row from snapshot; `Clip.update_bounds(left)` to restore original bounds; emit inverse mutations
-  - **JoinAllThroughEdits**: required args `sequence_id` (injected by command_manager); scan all tracks in sequence, collect through-edit pairs, process chains right-to-left in one SAVEPOINT `"join_all_through_edits_atomic"`; single combined mutations bucket
+  - **JoinThroughEdit executor**: assert `edit_frame`, `track_id`, `sequence_id`; load `track_id` → derive `kind`; find left clip (ends at edit_frame) + right clip (starts at edit_frame); assert both exist; assert `through_edit.is_through_edit(left, right, kind)`; **do NOT assert track-unlocked** — the menu grays locked tracks and the Clip-model writes route through `track_lock_guard` (graceful refusal, no crash); SAVEPOINT `"join_through_edit_atomic"`; snapshot right clip via `Clip.load_v13_row(right.id)` + left clip's `{duration_frames, source_out_frame}` + the right clip's `clip_markers` ids; reassign right clip's `clip_markers.clip_id` → `left.id` **before delete** (within SAVEPOINT; no keyframe table exists); `Clip.delete_one(right.id)`; `Clip.update_bounds(left.id, ...)` to extend; RELEASE SAVEPOINT; `command:set_parameter("__timeline_mutations", ...)` with updates + deletes; store snapshot (incl. `migrated_marker_ids`) via `command:set_parameter("_undo_state", ...)`
+  - **JoinThroughEdit undoer**: re-insert right clip row from snapshot; reassign `migrated_marker_ids` back to the right clip; `Clip.update_bounds(left)` to restore original bounds; emit inverse mutations
+  - **JoinAllThroughEdits**: required args `sequence_id` (injected by command_manager); scan all tracks in sequence, collect through-edit pairs (passing each track's `kind` to the predicate), **skip locked tracks**, process chains right-to-left in one SAVEPOINT `"join_all_through_edits_atomic"`; single combined mutations bucket
   - Register both in commands init
 
 - [ ] T011 [P] Create `src/lua/core/commands/timecode_entry.lua` — IncrementTimecode, DecrementTimecode, GoToTimecode + compute_action helper
-  - **`M.compute_action(text, selected_ids, current_frame)`** — pure exported function (no signals, no DB): strips prefix char from `text`; if prefix `"="` → `{command="SetPlayhead", frame=parsed_absolute}`; if prefix `"+"` or `"-"` and `#selected_ids > 0` → `{command="Nudge", nudge_amount=signed_offset, selected_clip_ids=selected_ids}`; if prefix `"+"` or `"-"` and no selection → `{command="SetPlayhead", frame=current_frame + signed_offset}`; assert prefix is one of `{"+", "-", "="}` with function name in message; assert `current_frame` is not nil when needed
+  - **`M.compute_action(prefix, value_frames, has_selection, current_frame)`** — pure exported function (no signals, no DB, **no parsing**). Per the interactive decision **B** (panel pre-parses with `core.timecode_input`, which resolves fps + sign; this stays fps-free): the panel passes `prefix` ∈ `{"+","-","="}`, an already-resolved integer `value_frames` (for `"="` the ABSOLUTE target frame; for `"+"`/`"-"` the SIGNED offset in frames), and a `has_selection` boolean (panel computes it from `timeline_state.get_selected_clips()` / `get_selected_edges()` — note the real accessor is `get_selected_clips`, returning clip OBJECTS; there is no `get_selected_clip_ids`). Branches: prefix `"="` → `{command="SetPlayhead", args={playhead_position=value_frames}}`; prefix `"+"`/`"-"` and `has_selection` → `{command="NudgeSelection", args={direction=±1, magnitude=abs(value_frames)}}` (the canonical selection-aware dispatcher comma/period use — it reads the live selection itself and routes edges→`BatchRippleEdit` (ripple) / clips→`Nudge`, owning undo; we do NOT re-extract clip ids or hand `Nudge` raw edges); prefix `"+"`/`"-"` and **not** `has_selection` → `{command="SetPlayhead", args={playhead_position=current_frame + value_frames}}`. Bare `"+"`/`"-"` (value_frames == 0) over a selection returns **nil** (no-op — NudgeSelection requires positive magnitude). Assert prefix valid (function name in message); assert `value_frames` integer; assert `has_selection` boolean; assert `current_frame` not nil for the relative-no-selection branch. **Arg name is `playhead_position` (not `frame`)** — verified against `set_playhead.lua`. (The TC-string→frame math, incl. `+00:00:01:00`@30fps=30, lives in the panel's `core.timecode_input.parse` call — already a tested utility — NOT here.)
   - Three non-undoable commands (`SPEC.undoable = false`), each:
     1. Assert `project_id`, `sequence_id`
     2. `signals.emit("request_stop_playback")`
@@ -89,10 +96,15 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
   - No move logic in the commands — actual move dispatched by `apply_timecode_entry_text()` via `compute_action`
   - Register all three in commands init; keybinding wiring comes in T018
 
+- [ ] T012a [P] Create `src/lua/core/track_preference.lua` — shared write chokepoint (DRY, Rule #4 / 2.16)
+  - Export `M.set(track, property, value)`: `track[property] = value`; `assert(track:save(), ...)`; `signals.emit("track_preference_changed", {track_id, property})`
+  - Refactor `src/lua/core/commands/toggle_track_preference.lua` to call `track_preference.set` for its per-track write (behavior unchanged; its existing regression test guards the refactor — Rule 2.31)
+
 - [ ] T012 [P] Create `src/lua/core/commands/exclusive_toggle_track_preference.lua` — ExclusiveToggleTrackPreference
+  - Depends on T012a (shared `track_preference.set`)
   - Non-undoable (`SPEC.undoable = false`)
-  - Executor: assert `track_id`, `property`, `project_id`, `sequence_id`; assert `property == "muted" or property == "soloed"`; assert clicked track's track is not locked; load clicked track; `new_state = not track[property]`; load all tracks of same type (`VIDEO`/`AUDIO`) in sequence; set clicked track property to `new_state`; set all others to `not new_state`; emit `track_preference_changed` for each modified track
-  - Uses the same DB write path as `ToggleTrackPreference` (not recursive command dispatch — direct model writes for atomicity)
+  - Executor: assert `track_id`, `property`, `project_id`, `sequence_id`; assert `property == "muted" or property == "soloed"`; load clicked track; **if `track.locked` → no-op return** (graceful refusal per FR-005 — no crash, no other tracks touched; NOT an assert); `new_state = not track[property]`; load all tracks of same type (`VIDEO`/`AUDIO`) in sequence; `track_preference.set(clicked, property, new_state)`; for each other track `track_preference.set(other, property, not new_state)`
+  - Direct model writes via the shared helper (not recursive command dispatch — atomic, no nested command_manager invocations)
   - Register in commands init
 
 ---
@@ -101,7 +113,7 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
 
 - [ ] T013 [P] Add through-edit chevron rendering to `src/lua/ui/timeline/view/timeline_view_renderer.lua` (FR-001)
   - Depends on T005 (`THROUGH_EDIT_MARKER` constant in timeline_state) and T008 (`core/through_edit.lua`)
-  - After the clip draw loop for each track, add `collect_through_edit_positions(track_clips)` → list of cut pixel-x positions
+  - After the clip draw loop for each track, add `collect_through_edit_positions(track_clips, track_kind)` → list of cut pixel-x positions (passes the track's kind to `is_through_edit`)
   - Add `draw_through_edit_chevrons_at(ctx, cut_xs, track_y, track_h, colors.THROUGH_EDIT_MARKER)` — draws two small inward-pointing triangles via `timeline.add_triangle` at each cut position
   - Detection runs only on the Record tab (skip when displayed tab is Source)
   - Both helpers are module-local; main render function reads like a high-level algorithm (ENGINEERING.md §2.5)
@@ -110,7 +122,7 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
   - Depends on T008 (`core/through_edit.lua`) and T010 (`join_through_edit.lua` commands registered)
   - Add module-local constant `local EDIT_HIT_TOLERANCE_PX = 4`
   - Add `find_edit_under_cursor(view, x, y, width, height)` → `{frame, track_id, left_clip_id, right_clip_id}` or nil; iterate visible track clip pairs, check `|cursor_x - cut_x| <= EDIT_HIT_TOLERANCE_PX` and cursor y within track vertical bounds
-  - Add `show_edit_context_menu(view, edit_info)` — builds actions table with: existing left-clip actions (Reveal, Match Frame, Split, Delete…), separator, "Join Through Edit" (enabled iff `through_edit.is_through_edit(left, right)`; tooltip "Not a through-edit" when grayed), "Join All Through Edits" (always enabled)
+  - Add `show_edit_context_menu(view, edit_info)` — builds actions table with: existing left-clip actions (Reveal, Match Frame, Split, Delete…), separator, "Join Through Edit" (enabled iff `through_edit.is_through_edit(left, right, kind)` **and the track is unlocked**; tooltip "Not a through-edit" or "Track is locked" when grayed), "Join All Through Edits" (enabled when at least one joinable/unlocked through-edit exists in the sequence)
   - In the existing right-click handler: call `find_edit_under_cursor()` first; if found → `show_edit_context_menu()`; else → existing `find_clip_under_cursor()` → `show_clip_context_menu()` (unchanged path)
 
 ---
@@ -131,7 +143,7 @@ These tasks modify the same file and must run in order.
   - Add `build_timecode_field_stylesheet(active)` → returns normal or red-border stylesheet using `TC_ENTRY_ACTIVE_COLOR`
   - Subscribe to `tc_entry_activate` signal: insert prefix into line_edit text, set `tc_entry_mode`, apply `build_timecode_field_stylesheet(true)`, set focus on line_edit
   - Add `clear_tc_entry_mode()`: clears `tc_entry_mode`, applies `build_timecode_field_stylesheet(false)`
-  - Extend `apply_timecode_entry_text()`: call `timecode_entry.compute_action(text, selection_hub.get_selected_clip_ids(sequence_id), current_frame)` → dispatch the returned `{command, args}` via `command_manager.execute`; call `clear_tc_entry_mode()` on commit or cancel; no inline prefix/selection logic here — that lives in `compute_action` (Rule 2.5)
+  - Extend `apply_timecode_entry_text()`: call `timecode_entry.compute_action(text, timeline_state.get_selected_clip_ids(), timeline_state.get_selected_edges(), current_frame)` → dispatch the returned `{command, args}` via `command_manager.execute`; call `clear_tc_entry_mode()` on commit or cancel; no inline prefix/selection logic here — that lives in `compute_action` (Rule 2.5). (Selection accessors are `timeline_state.get_selected_clip_ids()` / `get_selected_edges()` — same source the keyboard Nudge path reads; NOT `selection_hub`.)
   - Cancel path (Escape): also calls `clear_tc_entry_mode()`
 
 - [ ] T017 `src/lua/ui/timeline/timeline_panel.lua` FR-005: wire_toggle_preference modifier check
@@ -181,6 +193,7 @@ T007       (build + int.test)→  unblocks T017
 T008       (through_edit.lua)→  unblocks T010, T013, T014
 T010       (join commands)   →  unblocks T014
 T011       (TC commands)     →  unblocks T016, T018
+T012a      (track_preference)→  unblocks T012
 T012       (excl.toggle cmd) →  unblocks T017
 T013, T014                   →  no downstream deps (renderer/input, independent)
 T015–T017  (panel changes)   →  sequential (same file), in order: T015 → T016 → T017
@@ -206,7 +219,8 @@ T008  core/through_edit.lua
 T009  playback_engine_transport.lua shuttle refactor
 T010  core/commands/join_through_edit.lua
 T011  core/commands/timecode_entry.lua
-T012  core/commands/exclusive_toggle_track_preference.lua
+T012a core/track_preference.lua + toggle_track_preference.lua refactor
+T012  core/commands/exclusive_toggle_track_preference.lua   (after T012a)
 
 # Group 4 — Renderer + Input (run concurrently after T008, T010 complete)
 T013  timeline_view_renderer.lua chevrons

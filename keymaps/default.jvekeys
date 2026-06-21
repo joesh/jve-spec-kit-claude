@@ -108,6 +108,13 @@
 "Period"       = "NudgeSelection direction=1 magnitude=1 @timeline"
 "Shift+Comma"  = "NudgeSelection direction=-1 magnitude=5 @timeline"
 "Shift+Period" = "NudgeSelection direction=1 magnitude=5 @timeline"
+# Timecode entry (spec 025 FR-002): +/-/= arm the timeline TC field for offset
+# / absolute-goto entry. The parser demotes shifted "Plus" → Shift+Equal, so
+# "Plus" binds the main-keyboard + key; "Equal"/"Minus" bind = and -.
+# (Numpad Num+/Num- deferred — key-name parsing not yet validated.)
+"Plus"         = "IncrementTimecode @timeline"
+"Minus"        = "DecrementTimecode @timeline"
+"Equal"        = "GoToTimecode @timeline"
 "E"            = "ExtendEdit @timeline"
 "F9" = "Insert advance_playhead=true"
 "F10" = "Overwrite advance_playhead=true"

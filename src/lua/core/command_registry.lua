@@ -74,6 +74,11 @@ local module_aliases = {
     ClearSift = "core.commands.sift",
     ShowTimelineIndex = "core.commands.sift",
 
+    -- Timecode-entry commands (multi-register, spec 025 FR-002)
+    IncrementTimecode = "core.commands.timecode_entry",
+    DecrementTimecode = "core.commands.timecode_entry",
+    GoToTimecode      = "core.commands.timecode_entry",
+
     -- Smart Bin commands (multi-register)
     CreateSmartBin = "core.commands.smart_bin_commands",
     UpdateSmartBin = "core.commands.smart_bin_commands",

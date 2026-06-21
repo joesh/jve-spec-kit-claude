@@ -39,8 +39,8 @@ Through-edit detection and rendering applies to the **Record tab only** (the edi
 Clips A and B form a through-edit when all three conditions hold:
 
 1. Adjacent on the same track: `A` ends exactly where `B` begins (no gap).
-2. Same source: both clips reference the same master/source sequence.
-3. Contiguous source frames.
+2. Same source track: both clips reference the **same master track** — `master_layer_track_id` for clips on a video track, `master_audio_track_id` for clips on an audio track (these columns get renamed to `source_video_track_id` / `source_audio_track_id` by spec 021; 025 uses the current names and is swept by 021 later). Two clips drawn from the same master *sequence* but a **different track** (multicam angles, split channels) are **not** a through-edit. A clip with no master track reference (gap / generator) never forms a through-edit.
+3. Contiguous source frames: the left clip's `source_out` equals the right clip's `source_in`. (`source_out` is the exclusive one-past-last frame, so equality — not off-by-one — means contiguous; this matches how the blade/split commands cut.)
 
 For audio clips with subframe precision, subframe continuity is also required when both values are present.
 
@@ -48,14 +48,14 @@ For audio clips with subframe precision, subframe continuity is also required wh
 
 Right-clicking an **edit point** (the cut line between two clips) adds two items (with a preceding separator):
 
-- **Join Through Edit** — rejoins the right-clicked edit: deletes the right clip and extends the left clip to absorb it. Enabled only when the right-clicked edit is a through-edit; shown but grayed out otherwise with tooltip "Not a through-edit".
-- **Join All Through Edits** — rejoins every through-edit pair in the active sequence in one undoable operation.
+- **Join Through Edit** — rejoins the right-clicked edit: deletes the right clip and extends the left clip to absorb it. Enabled only when the right-clicked edit is a through-edit **on an unlocked track**; shown but grayed out otherwise, with tooltip "Not a through-edit" (not a through-edit) or "Track is locked" (locked track).
+- **Join All Through Edits** — rejoins every through-edit pair in the active sequence in one undoable operation. Pairs on locked tracks are skipped (their markers still render). The item is grayed out only when no joinable (unlocked) through-edit exists.
 
 Both operations are **undoable**.
 
 ### Join Behavior
 
-Joining a through-edit extends the left clip’s out-point and duration to cover the right clip’s full range, then removes the right clip. The result is identical to what the original uncut clip would have been for that range. Link group membership is preserved on the surviving clip. Any markers, keyframes, or other per-clip data on the right clip are migrated to the left clip.
+Joining a through-edit extends the left clip’s out-point and duration to cover the right clip’s full range, then removes the right clip. The result is identical to what the original uncut clip would have been for that range. Link group membership is preserved on the surviving clip. Any `clip_markers` on the right clip are reassigned to the left clip **before** the right clip is deleted — otherwise the schema's `ON DELETE CASCADE` would discard them. (There are no per-clip keyframes in the model, so none are migrated.)
 
 ### Acceptance Scenarios
 
@@ -69,7 +69,7 @@ Joining a through-edit extends the left clip’s out-point and duration to cover
 ### Edge Cases
 
 - Three-way chain (clip B is the right member of one through-edit and the left member of another): "Join All Through Edits" collapses the entire chain.
-- Through-edit on a locked track: join is refused; the marker still renders.
+- Through-edit on a locked track: the chevron marker still renders, but the "Join Through Edit" menu item is grayed out (tooltip "Track is locked") and "Join All Through Edits" skips the pair. There is no assert/crash — the existing `track_lock_guard` would refuse the write as a non-crashing no-op even if a join were somehow dispatched.
 - Zero-duration clips cannot form a through-edit.
 
 ---
@@ -78,7 +78,7 @@ Joining a through-edit extends the left clip’s out-point and duration to cover
 
 ### Overview
 
-Pressing `+` or `-` (main keyboard or numpad) activates the timecode entry field in offset mode. The field is pre-populated with the sign character. The user types an offset, then presses Enter. **If nothing is selected**, the playhead moves by that amount. **If clips or edits are selected**, `IncrementTimecode`/`DecrementTimecode` delegate to the existing `Nudge` commands to execute the move — no clip/edit move logic is re-implemented in these commands. Pressing `=` activates the field pre-populated with `=` for direct absolute-timecode entry; Enter moves the playhead to that exact frame regardless of selection. This matches the standard NLE "nudge by typed amount / go to" gesture.
+Pressing `+` or `-` (main keyboard or numpad) activates the timecode entry field in offset mode. The field is pre-populated with the sign character. The user types an offset, then presses Enter. The activation commands (`IncrementTimecode`/`DecrementTimecode`/`GoToTimecode`) only stop playback and open the field (via signals); they perform no move themselves. On Enter the panel parses the field with `core.timecode_input` and dispatches the move through `timecode_entry.compute_action`: **if nothing is selected**, the playhead moves by that amount (`SetPlayhead`); **if clips or edits are selected**, the move delegates to the existing selection-aware `NudgeSelection` command (which routes edges→`BatchRippleEdit` and clips→`Nudge`, owning undo) — no clip/edit move logic is re-implemented. Pressing `=` activates the field pre-populated with `=` for direct absolute-timecode entry; Enter moves the playhead to that exact frame regardless of selection. This matches the standard NLE "nudge by typed amount / go to" gesture.
 
 ### Activation
 
@@ -212,7 +212,7 @@ Consistent with plain `ToggleTrackPreference`, this operation is not on the undo
 
 ### Edge Cases
 
-- Option+click on a locked track: refused (locked track invariant); other tracks are not modified.
+- Option+click on a locked track: the gesture is a no-op — the clicked track is not toggled and no other tracks are modified. This is a graceful refusal (early return), not an assert/crash.
 - Option+click with no other tracks of the same type: behaves as a plain toggle.
 
 ---

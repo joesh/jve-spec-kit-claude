@@ -219,6 +219,16 @@ Signals.connect("displayed_tab_changed", function(_new_seq_id, _prev_seq_id)
     end
 end)
 
+-- Timecode entry (spec 025 FR-002): opening the TC field with +/-/= parks
+-- the transport-targeted engine so the typed go-to/offset lands on a stopped
+-- transport. Transport owns "stop the active engine"; the command layer only
+-- emits the request (MVC — commands never reach into engines directly).
+Signals.connect("request_stop_playback", function()
+    if not M.is_bootstrapped() then return end
+    local engine = M.engine_for_target()
+    if engine and engine:is_playing() then engine:stop() end
+end)
+
 -- Project change: tear down both role-bound PlaybackControllers + the
 -- shared audio session BEFORE media_cache clears its reader pool.
 -- Transport owns the cross-engine resource lifecycle — it walks "which

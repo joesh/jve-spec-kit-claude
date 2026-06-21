@@ -229,12 +229,15 @@ local function refresh_timecode_display()
     set_timecode_text_if_changed(get_formatted_playhead_timecode())
 end
 
-local function build_timecode_field_stylesheet()
+-- `entry_active` switches the border to the red timecode-entry colour (spec
+-- 025 FR-002) so the field reads as "armed for +/-/= entry" rather than a
+-- passive playhead display.
+local function build_timecode_field_stylesheet(entry_active)
     local field_bg = color("FIELD_WELL_BG")
-    local field_border = color("BORDER_HAIRLINE")
+    local field_border = entry_active and color("STATE_ENTRY") or color("BORDER_HAIRLINE")
     local field_text = color("TEXT_VALUE")
     local focus_bg = color("FIELD_FOCUS_BG")
-    local focus_border = color("STATE_FOCUS")
+    local focus_border = entry_active and color("STATE_ENTRY") or color("STATE_FOCUS")
     local fonts = assert(ui_constants.FONTS,
         "timeline_panel: ui_constants.FONTS missing — required for TIMECODE_FONT_SIZE")
     local font_size = assert(fonts.TIMECODE_FONT_SIZE,
@@ -247,7 +250,11 @@ local function build_timecode_field_stylesheet()
             background: %s;
             color: %s;
             border: 1px solid %s;
-            padding: 2px 6px;
+            /* No vertical padding: the 20px timecode font is nearly as tall as
+               the row, so every vertical pixel goes to the glyph. The field is
+               sized (via the wrapper margins below) to give it room to center
+               without clipping the descenders. */
+            padding: 0px 6px;
             font-family: "Helvetica Neue";
             font-weight: 500;
             font-size: %s;
@@ -284,20 +291,84 @@ local function focus_timeline_view()
     return false
 end
 
--- Convert typed timecode text into the absolute sequence frame to store as
--- playhead_position. Returns (frame, nil) on success, (nil, err) on parse
--- failure. Absolute input ("01:02:03:04") parses straight to an absolute
--- frame. Relative input ("+10" / "-2s") is a delta off the current position.
-local function parse_typed_timecode_to_raw_frame(text)
+-- spec 025 FR-002 — timecode-entry mode (the +/-/= "armed" state).
+local function apply_timecode_field_style(entry_active)
+    if not timecode_entry.line_edit then return end
+    qt_constants.PROPERTIES.SET_STYLE(timecode_entry.line_edit,
+        build_timecode_field_stylesheet(entry_active))
+end
+
+-- Open the TC field for +/-/= entry: prefill the prefix, paint the red
+-- entry-mode border, and focus for typing. Re-arming while already active
+-- only swaps the leading prefix character (does NOT stack — FR-002), keeping
+-- any digits already typed.
+local function enter_timecode_entry_mode(prefix)
+    if not timecode_entry.line_edit then return end
+    assert(prefix == "+" or prefix == "-" or prefix == "=", string.format(
+        "timeline_panel.enter_timecode_entry_mode: prefix must be +, -, or =; got %s",
+        tostring(prefix)))
+
+    local new_text
+    if timecode_entry.entry_active then
+        local current = qt_constants.PROPERTIES.GET_TEXT(timecode_entry.line_edit) or ""
+        new_text = prefix .. (current:gsub("^%s*[%+%-=]", ""))
+    else
+        new_text = prefix  -- fresh: discard the passive playhead display
+    end
+
+    timecode_entry.entry_active = true
+    apply_timecode_field_style(true)
+    timecode_entry.last_text = new_text
+    qt_constants.PROPERTIES.SET_TEXT(timecode_entry.line_edit, new_text)  -- cursor lands at end
+    qt_set_focus(timecode_entry.line_edit)
+    timecode_entry.has_focus = true
+    require("ui.focus_manager").set_focused_panel("timeline")
+end
+
+local function exit_timecode_entry_mode()
+    if not timecode_entry.entry_active then return end
+    timecode_entry.entry_active = false
+    apply_timecode_field_style(false)
+end
+
+-- Resolve typed field text into the {prefix, value_frames} pair that
+-- core.commands.timecode_entry.compute_action consumes (decision B: the panel
+-- parses; the command stays fps-free). All TC parsing delegates to
+-- core.timecode_input. Returns (prefix, value_frames, current_frame) or
+-- (nil, err) on a parse failure.
+--
+--   "+X" / "-X"        → prefix "+"/"-", value_frames = SIGNED offset frames
+--   "=X" / plain "X"   → prefix "=",      value_frames = ABSOLUTE target frame
+--   bare "+"/"-"       → zero offset      (FR-002: treated as no-op)
+--   bare "=" / empty   → current frame    (no-op go-to)
+local function resolve_timecode_offset(raw)
     local rate = get_sequence_frame_rate_for_timecode()
     if not rate then return nil, "No sequence displayed" end
-    local current = state.get_playhead_position()
-    local parsed, err = timecode_input.parse(text, rate, {base_time = current})
+    local current_frame = state.get_playhead_position()
+    assert(type(current_frame) == "number",
+        "timeline_panel.resolve_timecode_offset: playhead position must be an integer frame")
+
+    local trimmed = (raw or ""):match("^%s*(.-)%s*$")
+    local first = trimmed:sub(1, 1)
+
+    if first == "+" or first == "-" then
+        local body = trimmed:sub(2):match("^%s*(.-)%s*$")
+        if body == "" then
+            return first, 0, current_frame  -- bare sign → zero offset
+        end
+        local parsed, err = timecode_input.parse(trimmed, rate, {base_time = current_frame})
+        if not parsed then return nil, err end
+        return first, parsed.frames - current_frame, current_frame
+    end
+
+    -- "=" prefix OR a plain absolute TC (no prefix): both are absolute go-to.
+    local body = (first == "=") and trimmed:sub(2):match("^%s*(.-)%s*$") or trimmed
+    if body == "" then
+        return "=", current_frame, current_frame  -- bare "=" → current TC
+    end
+    local parsed, err = timecode_input.parse(body, rate)
     if not parsed then return nil, err end
-    local frame = parsed.frames
-    assert(type(frame) == "number" and frame == math.floor(frame),
-        "timeline_panel: timecode parse must yield integer frame, got " .. tostring(frame))
-    return frame, nil
+    return "=", parsed.frames, current_frame
 end
 
 local function apply_timecode_entry_text()
@@ -305,17 +376,26 @@ local function apply_timecode_entry_text()
         return false
     end
     local raw = qt_constants.PROPERTIES.GET_TEXT(timecode_entry.line_edit)
-    local frame, err = parse_typed_timecode_to_raw_frame(raw)
-    if not frame then
-        log.warn("Invalid timecode input: %s (%s)", tostring(raw), tostring(err))
-        set_timecode_text_if_changed(get_formatted_playhead_timecode())
+    local prefix, value_or_err, current_frame = resolve_timecode_offset(raw)
+    if not prefix then
+        -- Parse failure: keep the field open for re-entry (FR-002 edge case).
+        log.warn("Invalid timecode input: %s (%s)", tostring(raw), tostring(value_or_err))
         return false
     end
-    command_manager.execute_interactive("SetPlayhead", {
-        project_id = state.get_project_id(),
-        sequence_id = state.get_movement_target_sequence_id(),
-        playhead_position = frame,
-    })
+
+    local has_selection =
+        (#timeline_state.get_selected_clips() > 0) or (#timeline_state.get_selected_edges() > 0)
+    local timecode_entry_cmd = require("core.commands.timecode_entry")
+    local action = timecode_entry_cmd.compute_action(prefix, value_or_err, has_selection, current_frame)
+
+    if action and action.command then
+        local args = action.args
+        args.project_id  = state.get_project_id()
+        args.sequence_id = state.get_movement_target_sequence_id()
+        command_manager.execute_interactive(action.command, args)
+    end
+
+    exit_timecode_entry_mode()
     return true
 end
 
@@ -364,7 +444,11 @@ local function create_timecode_header()
 
     local layout = qt_constants.LAYOUT.CREATE_HBOX()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(layout, 0)
-    qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 6, 4, 6, 4)
+    -- Thin top/bottom margins (1px) so the line-edit fills almost the whole
+    -- RULER_HEIGHT row: the 20px timecode font needs ~26px of content height to
+    -- render without clipping, which a tall field provides. The field then
+    -- vertically centers the glyph itself.
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 6, 1, 6, 1)
 
     local line_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
     -- ClickFocus (not StrongFocus) keeps the timecode field out of Qt's Tab
@@ -530,8 +614,16 @@ function M.cancel_timecode_entry()
     end
     timecode_entry.has_focus = false
     timecode_entry.last_text = nil  -- invalidate cache so SET_TEXT actually fires
+    exit_timecode_entry_mode()      -- drop the red entry-mode border (FR-002)
     refresh_timecode_display()
     return focus_timeline_view()
+end
+
+--- @return boolean — true while the TC field is armed for +/-/= entry
+-- (spec 025 FR-002). Public so the L3 keymap smoke can assert that an
+-- arm keypress actually opened the field before typing into it.
+function M.is_timecode_entry_active()
+    return timecode_entry.entry_active == true
 end
 
 local function get_sequence_display_name(sequence_id)
@@ -1724,6 +1816,12 @@ local function update_all_header_dim()
         end
     end
 end
+
+-- spec 025 FR-002: Increment/Decrement/GoToTimecode emit tc_entry_activate
+-- with the prefix; the view arms the field (commands never touch the view).
+Signals.connect("tc_entry_activate", function(prefix)
+    enter_timecode_entry_mode(prefix)
+end)
 
 Signals.connect("track_preference_changed", function(track_id, property, new_val)
     local refs = track_button_refs[track_id]

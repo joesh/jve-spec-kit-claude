@@ -96,10 +96,10 @@ end
 
 --- @return integer count of currently selected clips on the displayed sequence
 function M.selection_count()
-    local ids = require("ui.timeline.timeline_state").get_selected_clip_ids()
-    assert(ids, "debug_helpers.selection_count: timeline_state returned no "
+    local clips = require("ui.timeline.timeline_state").get_selected_clips()
+    assert(clips, "debug_helpers.selection_count: timeline_state returned no "
         .. "selection table (no displayed sequence?)")
-    return #ids
+    return #clips
 end
 
 -- ─── Focus / UI state ───────────────────────────────────────────────
