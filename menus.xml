@@ -19,6 +19,9 @@
       <item name="EDL..." command="ExportEDL"/>
     </menu>
     <separator/>
+    <item name="Relink Media..." command="ShowRelinkDialog"/>
+    <item name="Consolidate Media..." command="ConsolidateMedia"/>
+    <separator/>
     <item name="Save Project" command="SaveProject"/>
     <item name="Save Project As..." command="SaveProjectAs"/>
     <separator/>
@@ -93,9 +96,6 @@
     <item name="New Bin" command="NewBin"/>
     <item name="New Smart Bin..." command="CreateSmartBin"/>
     <item name="Rename..." command="RenameItem"/>
-    <separator/>
-    <item name="Relink Media..." command="ShowRelinkDialog"/>
-    <item name="Consolidate Media..." command="ConsolidateMedia"/>
     <separator/>
     <item name="Tag Media..." command="TagMedia"/>
     <item name="Manage Tags..." command="ManageTags"/>
