@@ -94,6 +94,13 @@ local active_text_color = selection_color
 local hover_text_color = color("TEXT_PRIMARY")
 local source_tab_color = color("ACCENT_SOURCE")
 
+-- Tab bar row height. Pinned like RULER_HEIGHT so the row hugs the tabs: a
+-- QScrollArea with a Fixed vertical policy otherwise reports a default
+-- sizeHint far taller than the tab content, and the scroll area + arrow
+-- buttons share the tab-bar HBox, so the row stretches to the tallest of
+-- them — that surplus was the gap between the tabs and the ruler.
+local TAB_BAR_HEIGHT = 30
+
 -- Tab styling per spec FR-002: source vs record distinction is always-on
 -- (determined by tab type, not just active state). Caller must pass an
 -- explicit background ("transparent" for record tabs, accent hex for the
@@ -2554,12 +2561,14 @@ function M.create(opts)
     local tab_bar_widget = qt_constants.WIDGET.CREATE()
     local tab_bar_layout = qt_constants.LAYOUT.CREATE_HBOX()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_bar_layout, 6)
-    qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_layout, 12, 6, 12, 0)
+    -- Seamless with the timeline body below: the tab bar shares the recessed
+    -- canvas tone (same as the ruler/track area), no divider line, and no
+    -- vertical padding around the tabs so they sit flush against the ruler.
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_layout, 12, 0, 12, 0)
     qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_widget, tab_bar_layout)
     qt_constants.PROPERTIES.SET_STYLE(tab_bar_widget, string.format(
-        [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
-        color("SURFACE_CHROME"),
-        color("BORDER_DIVIDER")
+        [[QWidget { background: %s; }]],
+        color("SURFACE_CANVAS")
     ))
     tab_bar_tabs_container = qt_constants.WIDGET.CREATE()
     tab_bar_tabs_layout = qt_constants.LAYOUT.CREATE_HBOX()
@@ -2577,7 +2586,7 @@ function M.create(opts)
     -- trailing stretch in the tabs layout (added below): with the container
     -- viewport-width and only fixed tabs, QHBoxLayout would otherwise spread the
     -- slack; the trailing stretch absorbs it on the right, anchoring tabs left.
-    local panel_bg = color("SURFACE_CHROME")
+    local panel_bg = color("SURFACE_CANVAS")
     tab_bar_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(tab_bar_scroll, true)
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(tab_bar_scroll, "AlwaysOff")
@@ -2587,6 +2596,10 @@ function M.create(opts)
     qt_constants.PROPERTIES.SET_STYLE(tab_bar_scroll, string.format(
         [[QScrollArea { background: %s; border: none; }
           QWidget#qt_scrollarea_viewport { background: %s; }]], panel_bg, panel_bg))
+    -- Pin the scroll area to the tab-bar height so it hugs the tabs instead of
+    -- claiming its (much taller) default QScrollArea sizeHint.
+    qt_constants.PROPERTIES.SET_MIN_HEIGHT(tab_bar_scroll, TAB_BAR_HEIGHT)
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(tab_bar_scroll, TAB_BAR_HEIGHT)
 
     -- Arrow buttons for scrolling overflow tabs
     local arrow_style = string.format([[
@@ -2597,6 +2610,7 @@ function M.create(opts)
     tab_bar_left_arrow = qt_constants.WIDGET.CREATE_BUTTON("\xe2\x97\x80")  -- ◀
     qt_constants.PROPERTIES.SET_STYLE(tab_bar_left_arrow, arrow_style)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_left_arrow, "Fixed", "Fixed")
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(tab_bar_left_arrow, TAB_BAR_HEIGHT)  -- keep row at tab height
     qt_constants.DISPLAY.SET_VISIBLE(tab_bar_left_arrow, false)
     local left_arrow_handler = register_global_handler("__jve_tab_scroll_left", function()
         qt_scroll_area_h_scroll_by(tab_bar_scroll, -200)
@@ -2606,6 +2620,7 @@ function M.create(opts)
     tab_bar_right_arrow = qt_constants.WIDGET.CREATE_BUTTON("\xe2\x96\xb6")  -- ▶
     qt_constants.PROPERTIES.SET_STYLE(tab_bar_right_arrow, arrow_style)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_right_arrow, "Fixed", "Fixed")
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(tab_bar_right_arrow, TAB_BAR_HEIGHT)  -- keep row at tab height
     qt_constants.DISPLAY.SET_VISIBLE(tab_bar_right_arrow, false)
     local right_arrow_handler = register_global_handler("__jve_tab_scroll_right", function()
         qt_scroll_area_h_scroll_by(tab_bar_scroll, 200)

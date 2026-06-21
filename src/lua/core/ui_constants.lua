@@ -85,6 +85,7 @@ local GREEN_EDGE   = "#66ff66"   -- edge-trim available room
 -- SURFACE_* — backgrounds, ordered by elevation (deeper = recessed).
 local SURFACE_WELL     = GREY_900   -- deepest inset (scrollbar track, input wells)
 local SURFACE_CANVAS   = GREY_850   -- editing surfaces (timeline, ruler, monitor)
+local SURFACE_CHROME_RECESSED = GREY_830  -- recessed chrome bars (panel headers, monitor title/marks bars)
 local SURFACE_CHROME   = GREY_750   -- app/panel chrome (the signature surface)
 local SURFACE_PANEL    = GREY_720   -- content panel raised on chrome (inspector body)
 local SURFACE_OVERLAY  = GREY_600   -- popovers, dropdowns, menus, section headers
@@ -267,6 +268,7 @@ ui_constants.COLORS = {
     -- Surfaces (by elevation)
     SURFACE_WELL = SURFACE_WELL,
     SURFACE_CANVAS = SURFACE_CANVAS,
+    SURFACE_CHROME_RECESSED = SURFACE_CHROME_RECESSED,
     SURFACE_CHROME = SURFACE_CHROME,
     SURFACE_PANEL = SURFACE_PANEL,
     SURFACE_OVERLAY = SURFACE_OVERLAY,

@@ -34,6 +34,10 @@ local ui_constants = require("core.ui_constants")
 -- All monitor chrome (title bar, timecode bar, grade status) uses this so it
 -- matches Resolve side-by-side; neutral #2b2b2b reads visibly warmer.
 local CHROME_BG = ui_constants.COLORS.SURFACE_CHROME
+-- Recessed dark tone for the chrome bars that frame the image — the title
+-- strip and the timecode/marks row. The monitor body container stays
+-- CHROME_BG so the letterbox around the image reads as raised chrome.
+local RECESSED_BG = ui_constants.COLORS.SURFACE_CHROME_RECESSED
 
 local SequenceMonitor = {}
 SequenceMonitor.__index = SequenceMonitor
@@ -392,7 +396,7 @@ function SequenceMonitor:_create_widgets()
     self._title_label = qt_constants.WIDGET.CREATE_LABEL(self.view_id)
     qt_constants.PROPERTIES.SET_STYLE(self._title_label, string.format(
         "QLabel { background: %s; color: white; font-size: 12px; padding: 4px; }",
-        CHROME_BG))
+        RECESSED_BG))
     -- "Ignored" horizontal policy: the label fills the bar but its text width
     -- never feeds the panel's minimum width — so a long title clips at the
     -- panel edge instead of forcing the panel (and window) wider. Vertical
@@ -1103,7 +1107,7 @@ function SequenceMonitor:_update_grade_status()
     -- Match TC_STYLE metrics/background so the status sits flush with the two
     -- timecodes — same height, same bar colour, only the text colour differs.
     qt_constants.PROPERTIES.SET_STYLE(self._grade_status, string.format(
-        "QLabel { background: %s; color: %s; %s }", CHROME_BG, color, GRADE_STATUS_METRICS))
+        "QLabel { background: %s; color: %s; %s }", RECESSED_BG, color, GRADE_STATUS_METRICS))
 end
 
 --- Sync-in-progress flag (FR-016): the bridge broadcasts start/finish; the
@@ -1159,7 +1163,7 @@ local TC_STYLE = string.format([[
         font-family: "Menlo", "Monaco", monospace;
         font-size: 11px;
     }
-]], CHROME_BG)
+]], RECESSED_BG)
 
 function SequenceMonitor:_create_tc_row(parent_layout)
     local row_layout = qt_constants.LAYOUT.CREATE_HBOX()
@@ -1202,7 +1206,7 @@ function SequenceMonitor:_create_tc_row(parent_layout)
     -- QLabel style; this only fills the container behind them.
     local tc_row_widget = qt_constants.WIDGET.CREATE()
     qt_constants.PROPERTIES.SET_STYLE(tc_row_widget, string.format(
-        "QWidget { background: %s; }", CHROME_BG))
+        "QWidget { background: %s; }", RECESSED_BG))
     qt_constants.LAYOUT.SET_ON_WIDGET(tc_row_widget, row_layout)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tc_row_widget, "Expanding", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(parent_layout, tc_row_widget)

@@ -33,7 +33,7 @@ local FOCUS_COLOR = assert(ui_constants.COLORS.STATE_FOCUS, "focus_manager: ui_c
 -- #2a2a2a reads visibly different side-by-side. Match the shared constant.
 local COLORS = {
     focused_header = FOCUS_COLOR,
-    unfocused_header = ui_constants.COLORS.SURFACE_CHROME,
+    unfocused_header = ui_constants.COLORS.SURFACE_CHROME_RECESSED,
     focused_border = FOCUS_COLOR,
     unfocused_border = ui_constants.COLORS.UNFOCUSED_PANEL_BORDER,  -- subtle dark border, always drawn
 }

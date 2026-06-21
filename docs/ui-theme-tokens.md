@@ -49,6 +49,7 @@ Deeper rung = more recessed. Pick by where the surface sits, not by its colour.
 |-------|---------|
 | `SURFACE_WELL`    | deepest insets — input wells, scrollbar tracks |
 | `SURFACE_CANVAS`  | editing surfaces — timeline canvas, ruler, monitor letterbox |
+| `SURFACE_CHROME_RECESSED` | recessed chrome bars — panel header/tab strips, monitor title + marks bars |
 | `SURFACE_CHROME`  | the app / panel chrome (the signature grey behind everything) |
 | `SURFACE_PANEL`   | a content panel raised on the chrome — e.g. the inspector body |
 | `SURFACE_OVERLAY` | things that float over panels — dropdowns, menus, popovers, section headers |

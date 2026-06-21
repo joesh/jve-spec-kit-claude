@@ -32,7 +32,7 @@ local function style_header_label()
             font-size: %s;
             font-weight: bold;
         }
-    ]], C.INSPECTOR_HEADER_BG, C.TEXT_PRIMARY, F.HEADER_FONT_SIZE)
+    ]], C.SURFACE_CHROME_RECESSED, C.TEXT_PRIMARY, F.HEADER_FONT_SIZE)
 end
 
 local function style_content_widget()

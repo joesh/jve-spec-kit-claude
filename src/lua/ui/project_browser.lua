@@ -1082,7 +1082,7 @@ function M.create()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_layout, 6)
     qt_constants.PROPERTIES.SET_STYLE(tab_container, string.format(
         [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
-        color("SURFACE_CHROME"),
+        color("SURFACE_CHROME_RECESSED"),
         color("BORDER_DIVIDER")
     ))
 
