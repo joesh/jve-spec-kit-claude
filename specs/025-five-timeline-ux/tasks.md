@@ -26,7 +26,7 @@ Each test must be run with `cd tests && luajit test_harness.lua synthetic/lua/te
   - **Locked track is a graceful refusal, NOT an assert** (decision: locked = no-op via `track_lock_guard`): dispatching JoinThroughEdit against a locked track returns a non-crashing failure (command result false / guard error string) and leaves BOTH clips unchanged — assert no mutation occurred. Do NOT assert a crash here.
   - Use non-trivial source_in values (e.g., source_in=120, source_out=240, not zero)
 
-- [ ] T003 [P] Write `tests/synthetic/lua/test_timecode_entry_commands.lua`
+- [x] T003 [P] Write `tests/synthetic/lua/test_timecode_entry_commands.lua`
   - Covers FR-002 command dispatch: execute IncrementTimecode, DecrementTimecode, GoToTimecode on a live sequence; verify each emits `tc_entry_activate` signal with the correct prefix (`"+"`, `"-"`, `"="`); use `signals` module to register a listener and capture emissions
   - **`compute_action` pure function tests** (once T011 exposes `timecode_entry.compute_action(prefix, value_frames, has_selection, current_frame)` — decision B: takes already-parsed `value_frames` + a `has_selection` boolean, not raw text or selection arrays): test all branches — `("=", 1800, true)` → `{command="SetPlayhead", args.playhead_position=1800}` (1800 = 60s × 30fps, derived from TC math not code; ignores selection); `("+", 10, false, current)` → `{command="SetPlayhead", args.playhead_position=current+10}`; `("+", 10, true)` → `{command="NudgeSelection", args.direction=1, args.magnitude=10}`; `("+", 30, true)` → `magnitude=30` (1 second); `("-", -5, true)` → `{command="NudgeSelection", args.direction=-1, args.magnitude=5}`; `("-", -5, false, current)` → `playhead_position=current-5`; `("+", 0, true)` → **nil** (bare-prefix no-op); assert arg is `playhead_position` not `frame`. (TC-string→frame parsing is tested at the panel layer via `core.timecode_input`, already covered.)
   - **Rule 2.32 assert paths**: `pcall()` IncrementTimecode with missing `sequence_id` → returns false AND error message contains function name; `pcall()` with missing `project_id` → same; validate messages are actionable
@@ -87,7 +87,7 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
   - **JoinAllThroughEdits**: required args `sequence_id` (injected by command_manager); scan all tracks in sequence, collect through-edit pairs (passing each track's `kind` to the predicate), **skip locked tracks**, process chains right-to-left in one SAVEPOINT `"join_all_through_edits_atomic"`; single combined mutations bucket
   - Register both in commands init
 
-- [ ] T011 [P] Create `src/lua/core/commands/timecode_entry.lua` — IncrementTimecode, DecrementTimecode, GoToTimecode + compute_action helper
+- [x] T011 [P] Create `src/lua/core/commands/timecode_entry.lua` — IncrementTimecode, DecrementTimecode, GoToTimecode + compute_action helper
   - **`M.compute_action(prefix, value_frames, has_selection, current_frame)`** — pure exported function (no signals, no DB, **no parsing**). Per the interactive decision **B** (panel pre-parses with `core.timecode_input`, which resolves fps + sign; this stays fps-free): the panel passes `prefix` ∈ `{"+","-","="}`, an already-resolved integer `value_frames` (for `"="` the ABSOLUTE target frame; for `"+"`/`"-"` the SIGNED offset in frames), and a `has_selection` boolean (panel computes it from `timeline_state.get_selected_clips()` / `get_selected_edges()` — note the real accessor is `get_selected_clips`, returning clip OBJECTS; there is no `get_selected_clip_ids`). Branches: prefix `"="` → `{command="SetPlayhead", args={playhead_position=value_frames}}`; prefix `"+"`/`"-"` and `has_selection` → `{command="NudgeSelection", args={direction=±1, magnitude=abs(value_frames)}}` (the canonical selection-aware dispatcher comma/period use — it reads the live selection itself and routes edges→`BatchRippleEdit` (ripple) / clips→`Nudge`, owning undo; we do NOT re-extract clip ids or hand `Nudge` raw edges); prefix `"+"`/`"-"` and **not** `has_selection` → `{command="SetPlayhead", args={playhead_position=current_frame + value_frames}}`. Bare `"+"`/`"-"` (value_frames == 0) over a selection returns **nil** (no-op — NudgeSelection requires positive magnitude). Assert prefix valid (function name in message); assert `value_frames` integer; assert `has_selection` boolean; assert `current_frame` not nil for the relative-no-selection branch. **Arg name is `playhead_position` (not `frame`)** — verified against `set_playhead.lua`. (The TC-string→frame math, incl. `+00:00:01:00`@30fps=30, lives in the panel's `core.timecode_input.parse` call — already a tested utility — NOT here.)
   - Three non-undoable commands (`SPEC.undoable = false`), each:
     1. Assert `project_id`, `sequence_id`
@@ -139,15 +139,15 @@ These tasks modify the same file and must run in order.
     (spec-derived `sm_width >= 24` on both a video and an audio row; verified RED
     at 16, GREEN at 24). Existing header layout/alignment tests unaffected.
 
-- [ ] T016 `src/lua/ui/timeline/timeline_panel.lua` FR-002: TC entry field activation + apply extension
+- [x] T016 `src/lua/ui/timeline/timeline_panel.lua` FR-002: TC entry field activation + apply extension
   - Depends on T011 (timecode_entry commands registered and emitting `tc_entry_activate` signal)
-  - Add module-local constant `local TC_ENTRY_ACTIVE_COLOR = "#cc3333"`
-  - Add module-local `tc_entry_mode` flag (`nil` | `"offset"` | `"goto"`)
-  - Add `build_timecode_field_stylesheet(active)` → returns normal or red-border stylesheet using `TC_ENTRY_ACTIVE_COLOR`
-  - Subscribe to `tc_entry_activate` signal: insert prefix into line_edit text, set `tc_entry_mode`, apply `build_timecode_field_stylesheet(true)`, set focus on line_edit
-  - Add `clear_tc_entry_mode()`: clears `tc_entry_mode`, applies `build_timecode_field_stylesheet(false)`
-  - Extend `apply_timecode_entry_text()`: call `timecode_entry.compute_action(text, timeline_state.get_selected_clip_ids(), timeline_state.get_selected_edges(), current_frame)` → dispatch the returned `{command, args}` via `command_manager.execute`; call `clear_tc_entry_mode()` on commit or cancel; no inline prefix/selection logic here — that lives in `compute_action` (Rule 2.5). (Selection accessors are `timeline_state.get_selected_clip_ids()` / `get_selected_edges()` — same source the keyboard Nudge path reads; NOT `selection_hub`.)
-  - Cancel path (Escape): also calls `clear_tc_entry_mode()`
+  - **As-built (reconciled with decision B — the pre-decision-B prose below was abandoned):**
+  - Entry-mode border uses the new `STATE_ENTRY` semantic token in `ui_constants` (red), NOT a call-site hex constant. `build_timecode_field_stylesheet(entry_active)` paints the red border (field + focus) when `entry_active`, else the normal hairline/focus colors.
+  - Transient state is a single `timecode_entry.entry_active` boolean (no `"offset"`/`"goto"` mode enum). `enter_timecode_entry_mode(prefix)` prefills the prefix, paints the red border, focuses the field; re-arming while already active swaps the leading prefix char without stacking. `exit_timecode_entry_mode()` drops the border.
+  - Subscribe to `tc_entry_activate` → `enter_timecode_entry_mode(prefix)` (commands emit; the view arms — MVC).
+  - `apply_timecode_entry_text()`: `resolve_timecode_offset(raw)` → `(prefix, value_frames, current_frame)` (delegates TC parse to `core.timecode_input`); compute `has_selection = #get_selected_clips() > 0 or #get_selected_edges() > 0`; `compute_action(prefix, value_frames, has_selection, current_frame)`; dispatch the returned `{command, args}` via `command_manager.execute_interactive` (merging `project_id`/`sequence_id`); `exit_timecode_entry_mode()`. No inline prefix/selection logic (Rule 2.5). Accessors are `get_selected_clips()` (clip objects) / `get_selected_edges()` — NOT the nonexistent `get_selected_clip_ids`, NOT `selection_hub`.
+  - Cancel path (Escape) `M.cancel_timecode_entry`: also calls `exit_timecode_entry_mode()`.
+  - Added `M.is_timecode_entry_active()` accessor so the L3 keymap smoke can assert the field armed before typing.
 
 - [ ] T017 `src/lua/ui/timeline/timeline_panel.lua` FR-005: wire_toggle_preference modifier check
   - Depends on T007 (C++ binding built) and T012 (ExclusiveToggleTrackPreference command registered)
@@ -161,7 +161,7 @@ These tasks modify the same file and must run in order.
 
 ## Phase 3.6: Keybindings
 
-- [ ] T018 `keymaps/default.jvekeys`: add TC entry and timecode keybindings (FR-002)
+- [x] T018 `keymaps/default.jvekeys`: add TC entry and timecode keybindings (FR-002)
   - Depends on T011 (commands registered)
   - Add under timeline context (match existing @timeline scoping):
     ```
