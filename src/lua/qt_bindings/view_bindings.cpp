@@ -883,3 +883,25 @@ int lua_set_tree_expand_collapse_handler(lua_State* L) {
     }
     return 1;
 }
+
+// ─── qt_keyboard_modifiers() → { alt, shift, cmd, ctrl } ───────────────────
+//
+// Current global keyboard-modifier state via QApplication::keyboardModifiers()
+// (the modifiers of the event being processed, valid inside a click handler).
+// Spec 025 FR-005: the track-header M/S click handler reads this to choose
+// ExclusiveToggle (Option/Alt held) vs the plain toggle — QPushButton::clicked
+// carries no modifier flags, so the handler queries the live state instead.
+//
+// Naming is by PHYSICAL key, matching the convention documented in
+// input_bindings.cpp's qt_mods_to_cg_flags: on macOS Qt swaps Control/Meta,
+// so Qt::ControlModifier is Cmd and Qt::MetaModifier is the physical Ctrl.
+static int lua_keyboard_modifiers(lua_State* L)
+{
+    Qt::KeyboardModifiers mods = QApplication::keyboardModifiers();
+    lua_newtable(L);
+    lua_pushboolean(L, (mods & Qt::AltModifier)     != 0); lua_setfield(L, -2, "alt");
+    lua_pushboolean(L, (mods & Qt::ShiftModifier)   != 0); lua_setfield(L, -2, "shift");
+    lua_pushboolean(L, (mods & Qt::ControlModifier) != 0); lua_setfield(L, -2, "cmd");
+    lua_pushboolean(L, (mods & Qt::MetaModifier)    != 0); lua_setfield(L, -2, "ctrl");
+    return 1;
+}

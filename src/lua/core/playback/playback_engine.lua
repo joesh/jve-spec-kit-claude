@@ -1121,7 +1121,11 @@ end
 function PlaybackEngine:get_status()
     if self.state == "stopped" then return "stopped" end
     local dir_str = self.direction == 1 and ">" or "<"
-    return string.format("%s %.1fx", dir_str, self.speed)
+    -- Show the quarter-step ladder rungs (1.25x/1.75x) faithfully without
+    -- padding the whole/half speeds: format to 2 decimals, then trim a
+    -- single trailing zero so "1.00"→"1.0", "1.50"→"1.5", "1.25"→"1.25".
+    local speed_str = string.format("%.2f", self.speed):gsub("0$", "")
+    return string.format("%s %sx", dir_str, speed_str)
 end
 
 --- Calculate frame from microseconds (delegates to helpers).

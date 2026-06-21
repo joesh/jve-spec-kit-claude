@@ -98,6 +98,7 @@ M.colors = {
     selection_box = C.STATE_SELECTED_WARM,
     edge_selected_available = C.EDGE_AVAILABLE,
     edge_selected_limit = C.EDGE_LIMIT,
+    through_edit_marker = C.THROUGH_EDIT_MARKER,
 }
 
 -- Core Lifecycle

@@ -56,6 +56,12 @@ if qt_constants then
     qt_constants.PROPERTIES.SET_TOOLTIP = qt_constants.PROPERTIES.SET_TOOLTIP or require_global_function("qt_set_tooltip")
     qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE = qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE or require_global_function("qt_set_window_appearance")
 
+    -- Input state queries (spec 025 FR-005: Alt+click on M/S track buttons).
+    -- GET_KEYBOARD_MODIFIERS() → { alt, shift, cmd, ctrl } booleans, the live
+    -- modifier state of the event being processed (valid in a click handler).
+    qt_constants.INPUT = qt_constants.INPUT or {}
+    qt_constants.INPUT.GET_KEYBOARD_MODIFIERS = qt_constants.INPUT.GET_KEYBOARD_MODIFIERS or require_global_function("qt_keyboard_modifiers")
+
     -- Widget Functions - add parent relationship support
     qt_constants.WIDGET = qt_constants.WIDGET or {}
     qt_constants.WIDGET.SET_PARENT = qt_constants.WIDGET.SET_PARENT or require_global_function("qt_set_parent")

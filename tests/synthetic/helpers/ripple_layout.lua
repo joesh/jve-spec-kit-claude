@@ -375,6 +375,11 @@ function M.create(opts)
             source_out_frame = c.source_in + c.duration,
             source_in_subframe = sub_in,
             source_out_subframe = sub_out,
+            -- Optional master source-track refs (spec 025 FR-001 through-edit
+            -- fixtures; spec 021 renames to source_video/audio_track_id). Nil
+            -- unless a clip override supplies one — existing layouts unaffected.
+            master_layer_track_id = c.master_layer_track_id,
+            master_audio_track_id = c.master_audio_track_id,
             fps_mismatch_policy = "resample",
             enabled = (c.enabled == nil) and 1 or c.enabled,
             volume = 1.0,

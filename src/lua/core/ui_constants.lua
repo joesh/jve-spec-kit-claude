@@ -138,6 +138,7 @@ local CLIP_MUTED_FILL    = GREY_450   -- muted/disabled audio-video fill
 local MARK_RANGE_FILL    = "#19dfeeff" -- translucent cyan in/out range (ARGB)
 local EDGE_AVAILABLE     = GREEN_EDGE  -- edge-trim has room
 local EDGE_LIMIT         = CORAL_TEXT  -- edge-trim at media limit
+local THROUGH_EDIT_MARKER = CORAL      -- through-edit cut chevrons (spec 025 FR-001); bright red reads on both video + audio bodies
 
 -- =============================================================================
 -- TIER 3 — COMPONENT (widget-specific surfaces that aren't a plain role)
@@ -319,6 +320,7 @@ ui_constants.COLORS = {
     MARK_RANGE_FILL = MARK_RANGE_FILL,
     EDGE_AVAILABLE = EDGE_AVAILABLE,
     EDGE_LIMIT = EDGE_LIMIT,
+    THROUGH_EDIT_MARKER = THROUGH_EDIT_MARKER,
 
     -- Component surfaces
     INSPECTOR_HEADER_BG = INSPECTOR_HEADER_BG,

@@ -25,11 +25,13 @@
 --
 -- DOMAIN RULES PINNED (spec 017 transport state machine):
 --   TS-1  Shuttle ramp: from stopped, J/L start at 1×; repeating the same
---         direction doubles speed (1→2→4→8) and caps at 8×. NLE shuttle
---         convention: a fixed geometric ladder, not unbounded.
---   TS-2  Shuttle unwind: the opposite direction SLOWS before reversing
---         (8→4→2→1), and one more opposite step from 1× STOPS (does not
---         flip straight to reverse) — the J/K/L unwinding rule.
+--         direction climbs the 025 FR-003 ladder — 0.25 steps from 1× to
+--         2×, then powers of two with no upper bound
+--         (1→1.25→1.5→1.75→2→4→8→…).
+--   TS-2  Shuttle unwind: the opposite direction RETREATS one rung down
+--         that same ladder (4→2→1.75→1.5→1.25→1), and one more opposite
+--         step from 1× STOPS (does not flip straight to reverse) — the
+--         J/K/L unwinding rule.
 --   TS-3  slow_play(dir) plays at exactly 0.5× in `dir`, in shuttle mode.
 --   TS-4  get_status projects transport state: "stopped" when parked;
 --         "> N.0x" forward, "< N.0x" reverse while shuttling.
@@ -203,40 +205,46 @@ end
 release_audio()
 
 -- ════════════════════════════════════════════════════════════════════════════
--- TS-1  Shuttle ramp: 1 → 2 → 4 → 8 → 8 (cap)
+-- TS-1  Shuttle ramp (025 FR-003): 1 → 1.25 → 1.5 → 1.75 → 2 → 4 → 8 → 16
 -- ════════════════════════════════════════════════════════════════════════════
-print("\n-- (TS-1) shuttle ramp doubles and caps at 8x --")
+print("\n-- (TS-1) shuttle ramp climbs the quarter→geometric ladder --")
 do
     stop_and_settle()
     rec:shuttle(1)
     assert(rec.state == "playing", "shuttle from stopped → playing")
     assert(rec.direction == 1, "forward")
     assert(rec.speed == 1, "first J/L is 1x")
-    rec:shuttle(1); assert(rec.speed == 2, "second forward → 2x")
-    rec:shuttle(1); assert(rec.speed == 4, "third forward → 4x")
-    rec:shuttle(1); assert(rec.speed == 8, "fourth forward → 8x")
-    rec:shuttle(1); assert(rec.speed == 8, "fifth forward caps at 8x")
+    rec:shuttle(1); assert(rec.speed == 1.25, "second forward → 1.25x")
+    rec:shuttle(1); assert(rec.speed == 1.5,  "third forward → 1.5x")
+    rec:shuttle(1); assert(rec.speed == 1.75, "fourth forward → 1.75x")
+    rec:shuttle(1); assert(rec.speed == 2,    "fifth forward → 2x")
+    rec:shuttle(1); assert(rec.speed == 4,    "sixth forward → 4x (geometric)")
+    rec:shuttle(1); assert(rec.speed == 8,    "seventh forward → 8x")
+    rec:shuttle(1); assert(rec.speed == 16,   "eighth forward → 16x (no upper cap)")
     stop_and_settle()
-    print("  PASS: 1→2→4→8→8(cap)")
+    print("  PASS: 1→1.25→1.5→1.75→2→4→8→16 (unbounded)")
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
--- TS-2  Shuttle unwind: opposite direction slows, then stops at 1x
+-- TS-2  Shuttle unwind: opposite direction retreats one rung, stops at 1x
 -- ════════════════════════════════════════════════════════════════════════════
-print("\n-- (TS-2) opposite shuttle unwinds before reversing --")
+print("\n-- (TS-2) opposite shuttle unwinds down the ladder before reversing --")
 do
     stop_and_settle()
-    rec:shuttle(1); rec:shuttle(1); rec:shuttle(1); rec:shuttle(1)  -- ramp to 8x fwd
-    assert(rec.speed == 8 and rec.direction == 1, "fixture: 8x forward")
+    -- ramp to 4x fwd: 1→1.25→1.5→1.75→2→4 (six presses)
+    rec:shuttle(1); rec:shuttle(1); rec:shuttle(1); rec:shuttle(1); rec:shuttle(1); rec:shuttle(1)
+    assert(rec.speed == 4 and rec.direction == 1, "fixture: 4x forward")
 
-    rec:shuttle(-1); assert(rec.speed == 4 and rec.direction == 1, "unwind 8→4, still forward")
-    rec:shuttle(-1); assert(rec.speed == 2 and rec.direction == 1, "unwind 4→2, still forward")
-    rec:shuttle(-1); assert(rec.speed == 1 and rec.direction == 1, "unwind 2→1, still forward")
+    rec:shuttle(-1); assert(rec.speed == 2    and rec.direction == 1, "unwind 4→2, still forward")
+    rec:shuttle(-1); assert(rec.speed == 1.75 and rec.direction == 1, "unwind 2→1.75, still forward")
+    rec:shuttle(-1); assert(rec.speed == 1.5  and rec.direction == 1, "unwind 1.75→1.5, still forward")
+    rec:shuttle(-1); assert(rec.speed == 1.25 and rec.direction == 1, "unwind 1.5→1.25, still forward")
+    rec:shuttle(-1); assert(rec.speed == 1    and rec.direction == 1, "unwind 1.25→1, still forward")
     rec:shuttle(-1)
     assert(rec.state == "stopped",
         "one more opposite step at 1x STOPS (does not flip to reverse)")
     release_audio()
-    print("  PASS: 8→4→2→1→stop on opposite direction")
+    print("  PASS: 4→2→1.75→1.5→1.25→1→stop on opposite direction")
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -265,7 +273,7 @@ do
     rec:shuttle(1)
     assert(rec:get_status() == "> 1.0x", "forward 1x → '> 1.0x'")
     rec:shuttle(1)
-    assert(rec:get_status() == "> 2.0x", "forward 2x → '> 2.0x'")
+    assert(rec:get_status() == "> 1.25x", "forward 1.25x → '> 1.25x' (quarter rung shown faithfully)")
 
     stop_and_settle()
     rec:shuttle(-1)

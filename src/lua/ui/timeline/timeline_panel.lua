@@ -1369,13 +1369,28 @@ local command_dispatch = require("core.command_dispatch")
 
 local function wire_toggle_preference(btn, track_id, property, _active_color)
     local handler = register_track_btn_handler(function()
-        assert(Track.load(track_id), string.format(
+        local track = Track.load(track_id)
+        assert(track, string.format(
             "wire_toggle_preference: track %s not found", tostring(track_id)))
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_toggle_preference: no project_id")
-        command_dispatch.execute_or_fail("ToggleTrackPreference", {
-            track_id = track_id, property = property, project_id = project_id,
-        }, "track-header " .. property .. " click")
+
+        -- FR-005: Option/Alt+click on M or S sets this track and the OPPOSITE
+        -- state on every other track of the same kind ("solo only this" / "mute
+        -- everything except this"). Lock has no exclusive variant. A
+        -- QPushButton click carries no modifier flags, so read the live
+        -- keyboard state at click time.
+        local mods = qt_constants.INPUT.GET_KEYBOARD_MODIFIERS()
+        if mods.alt and (property == "muted" or property == "soloed") then
+            command_dispatch.execute_or_fail("ExclusiveToggleTrackPreference", {
+                track_id = track_id, property = property,
+                project_id = project_id, sequence_id = track.sequence_id,
+            }, "track-header " .. property .. " Option+click")
+        else
+            command_dispatch.execute_or_fail("ToggleTrackPreference", {
+                track_id = track_id, property = property, project_id = project_id,
+            }, "track-header " .. property .. " click")
+        end
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
     return handler

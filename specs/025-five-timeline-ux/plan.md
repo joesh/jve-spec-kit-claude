@@ -8,6 +8,8 @@
 
 Five discrete timeline UX improvements: through-edit chevron rendering + join commands (FR-001); ±offset and goto TC entry via `+`/`-`/`=` keys (FR-002); quarter-step JKL shuttle ladder (FR-003); wider M/S track-header buttons (FR-004); Option+click exclusive mute/solo (FR-005). All changes are additive or small surgical modifications to existing Lua modules; one new C++ binding (modifier query); no schema changes.
 
+**Field naming:** FR-001's same-source identity reads the current columns `master_layer_track_id` (video) / `master_audio_track_id` (audio). Spec 021 renames these to `source_video_track_id` / `source_audio_track_id`; 025 uses the current names and is swept by 021 like any other consumer — 025 does **not** perform the rename.
+
 ---
 
 ## Technical Context
@@ -52,10 +54,13 @@ specs/025-five-timeline-ux/
 ```
 src/lua/
 ├── core/
+│   ├── through_edit.lua                             NEW — is_through_edit predicate (shared: renderer + commands)
+│   ├── track_preference.lua                         NEW — set(track, property, value) shared write chokepoint
 │   ├── commands/
 │   │   ├── join_through_edit.lua                    NEW
 │   │   ├── timecode_entry.lua                       NEW
-│   │   └── exclusive_toggle_track_preference.lua    NEW
+│   │   ├── exclusive_toggle_track_preference.lua    NEW
+│   │   └── toggle_track_preference.lua              MODIFY — call track_preference.set (DRY refactor)
 │   └── playback/
 │       └── playback_engine_transport.lua            MODIFY — shuttle() speed ladder
 ├── ui/
@@ -100,19 +105,33 @@ See `research.md`. All unknowns resolved:
 
 Shared pure function extracted to a module (e.g. `core.through_edit`), usable by both the renderer and the command:
 
+Same-source identity is the **master track** the clips were drawn from, not merely the master sequence — clips from the same master sequence but a different track (multicam angle, split channel) are not a through-edit. Both clips share a timeline track (adjacency requires it), so they share a `kind` ("video"/"audio"); the predicate compares the kind-appropriate master track id (`master_layer_track_id` for video / `master_audio_track_id` for audio).
+
 ```lua
+-- The master track id for this clip's population. Master-less clips
+-- (gaps, generators) return nil and can never form a through-edit.
+local function master_track_id(clip, kind)
+    if kind == "video" then return clip.master_layer_track_id end
+    if kind == "audio" then return clip.master_audio_track_id end
+    assert(false, "master_track_id: unknown track kind " .. tostring(kind))
+end
+
 -- Returns true iff clip_a (left) and clip_b (right) form a through-edit.
-local function is_through_edit(clip_a, clip_b)
+-- `kind` is the shared timeline-track kind ("video" | "audio").
+local function is_through_edit(clip_a, clip_b, kind)
     assert(clip_a and clip_b, "is_through_edit: both clips required")
-    if clip_a.master_id ~= clip_b.master_id then return false end
+    local ma, mb = master_track_id(clip_a, kind), master_track_id(clip_b, kind)
+    if not ma or not mb then return false end          -- master-less: never a through-edit
+    if ma ~= mb then return false end                  -- different master track (e.g. multicam)
     if clip_a.sequence_start + clip_a.duration ~= clip_b.sequence_start then return false end
-    if clip_a.source_out ~= clip_b.source_in then return false end
-    local a_sf = clip_a.source_out_subframe
-    local b_sf = clip_b.source_in_subframe
+    if clip_a.source_out ~= clip_b.source_in then return false end  -- source_out is exclusive → equality = contiguous
+    local a_sf, b_sf = clip_a.source_out_subframe, clip_b.source_in_subframe
     if a_sf ~= nil and b_sf ~= nil and a_sf ~= b_sf then return false end
     return true
 end
 ```
+
+> **Naming:** uses the current columns `master_layer_track_id` / `master_audio_track_id`. Spec 021 later renames them to `source_video_track_id` / `source_audio_track_id` and sweeps this predicate with everything else.
 
 ### FR-001 — JoinThroughEdit command (`join_through_edit.lua`)
 
@@ -120,18 +139,19 @@ Follows `blade.lua` pattern: SPEC table, `M.execute()` pure function, `M.registe
 
 **Executor steps:**
 1. Assert `edit_frame`, `track_id`, `sequence_id` present.
-2. Find left clip (ends at `edit_frame`) and right clip (starts at `edit_frame`) on `track_id`. Assert both exist.
-3. Assert `is_through_edit(left, right)`. Assert track not locked.
-4. SAVEPOINT `"join_through_edit_atomic"`.
-5. Snapshot right clip: `Clip.load_v13_row(right.id)` + left clip's original `{duration_frames, source_out_frame}`.
-6. Migrate markers/keyframes from right clip to left clip (within SAVEPOINT).
-7. `Clip.delete_one(right.id)`.
-8. `Clip.update_bounds(left.id, left.sequence_start_frame, left.duration_frames + right.duration_frames, left.source_in_frame, right.source_out_frame)`.
-9. RELEASE SAVEPOINT.
-10. `command:set_parameter("__timeline_mutations", {updates={mutation_entry(left)}, deletes={{clip_id=right.id}}, ...})`.
-11. Store snapshot in `command:set_parameter("_undo_state", ...)`.
+2. Load `track_id`; derive its `kind` ("video"/"audio").
+3. Find left clip (ends at `edit_frame`) and right clip (starts at `edit_frame`) on `track_id`. Assert both exist.
+4. Assert `is_through_edit(left, right, kind)`. (Track-lock is **not** asserted here — the context menu grays the item on locked tracks, and the Clip-model writes below route through `track_lock_guard`, which refuses with a non-crashing failure if a join is somehow dispatched against a locked track.)
+5. SAVEPOINT `"join_through_edit_atomic"`.
+6. Snapshot right clip: `Clip.load_v13_row(right.id)` + left clip's original `{duration_frames, source_out_frame}` + the ids of the right clip's `clip_markers` rows (for undo).
+7. Reassign the right clip's `clip_markers` rows to `left.id` (within SAVEPOINT) — **before** the delete, or `ON DELETE CASCADE` discards them. (No per-clip keyframes exist in the model.)
+8. `Clip.delete_one(right.id)`.
+9. `Clip.update_bounds(left.id, left.sequence_start, left.duration + right.duration, left.source_in, right.source_out)`.
+10. RELEASE SAVEPOINT.
+11. `command:set_parameter("__timeline_mutations", {updates={mutation_entry(left)}, deletes={{clip_id=right.id}}, ...})`.
+12. Store snapshot (incl. `migrated_marker_ids`) in `command:set_parameter("_undo_state", ...)`.
 
-**Undoer steps:** Re-insert right clip row from snapshot → `Clip.update_bounds(left)` to restore original bounds → emit inverse mutations (`inserts` + `updates`).
+**Undoer steps:** Re-insert right clip row from snapshot → reassign `migrated_marker_ids` back to the right clip → `Clip.update_bounds(left)` to restore original bounds → emit inverse mutations (`inserts` + `updates`).
 
 **JoinAllThroughEdits**: same file, scans all tracks in sequence, collects pairs, processes chains right-to-left inside one SAVEPOINT, emits one combined mutations bucket.
 
@@ -146,7 +166,7 @@ local cut_xs = collect_through_edit_positions(track_clips, ctx, track_id)
 draw_through_edit_chevrons_at(cut_xs, ctx, track_y, track_h, colors.THROUGH_EDIT_MARKER)
 ```
 
-Both are short helper functions (ENGINEERING.md §2.5/2.6). `collect_through_edit_positions` iterates adjacent pairs; `draw_through_edit_chevrons_at` calls `timeline.add_triangle` twice per position (left and right chevron).
+Both are short helper functions (ENGINEERING.md §2.5/2.6). `collect_through_edit_positions` iterates adjacent pairs, calling `is_through_edit(a, b, track_kind)` with the track's kind; `draw_through_edit_chevrons_at` calls `timeline.add_triangle` twice per position (left and right chevron). Record tab only — skip when the displayed tab is Source.
 
 ### FR-001 — Input (`timeline_view_input.lua`)
 
@@ -157,18 +177,20 @@ Right-click dispatch extended: check edit point first; if found, call new `show_
 `show_edit_context_menu` builds:
 - Existing clip actions for the left clip (Reveal, Match Frame, Split, Delete, etc.)
 - Separator
-- "Join Through Edit" — enabled iff `is_through_edit(left, right)`; tooltip "Not a through-edit" when grayed
-- "Join All Through Edits" — always enabled
+- "Join Through Edit" — enabled iff `is_through_edit(left, right, kind)` **and the track is unlocked**; tooltip "Not a through-edit" or "Track is locked" when grayed
+- "Join All Through Edits" — enabled when at least one joinable (unlocked) through-edit exists in the sequence
 
 ### FR-002 — TC entry commands (`timecode_entry.lua`)
 
 `timecode_entry.lua` contains both the three commands AND an exported pure helper:
 
-**`M.compute_action(text, selected_ids, current_frame)`** — pure function, no signals, no DB (Rule 2.5, Rule 2.32 — keeps dispatch logic testable without Qt):
-- prefix `"="` → `{command="SetPlayhead", frame=<parsed absolute>}`
-- prefix `"+"` or `"-"` + non-empty `selected_ids` → `{command="Nudge", nudge_amount=<signed offset>, selected_clip_ids=selected_ids}`
-- prefix `"+"` or `"-"` + empty `selected_ids` → `{command="SetPlayhead", frame=current_frame + signed_offset}`
+**`M.compute_action(text, selected_clip_ids, selected_edges, current_frame)`** — pure function, no signals, no DB (Rule 2.5, Rule 2.32 — keeps dispatch logic testable without Qt). "Selection non-empty" means clips and/or edges are selected:
+- prefix `"="` → `{command="SetPlayhead", playhead_position=<parsed absolute frame>}`
+- prefix `"+"`/`"-"` + non-empty selection → `{command="Nudge", nudge_amount=<signed offset>, selected_clip_ids=selected_clip_ids, selected_edges=selected_edges}` — `Nudge` already moves both clips and edges (FR-002 spec).
+- prefix `"+"`/`"-"` + empty selection → `{command="SetPlayhead", playhead_position=current_frame + signed_offset}`
 - asserts prefix is one of `{"+","-","="}` with function name in message; asserts `current_frame` non-nil when needed
+
+`SetPlayhead`'s arg is `playhead_position` (integer frame), not `frame` — verified against `set_playhead.lua`.
 
 Three non-undoable commands. Each:
 1. Asserts `project_id`, `sequence_id`.
@@ -182,11 +204,15 @@ Three non-undoable commands. Each:
 
 **`apply_timecode_entry_text()`** extended:
 ```
-local action = timecode_entry.compute_action(text, selection_hub.get_selected_clip_ids(sequence_id), current_frame)
+local action = timecode_entry.compute_action(
+    text,
+    timeline_state.get_selected_clip_ids(),
+    timeline_state.get_selected_edges(),
+    current_frame)
 command_manager.execute(action.command, action.args)
 clear_tc_entry_mode()
 ```
-No inline prefix/selection logic in the panel — all branching lives in `compute_action`.
+Selection accessors are `timeline_state.get_selected_clip_ids()` / `get_selected_edges()` — the same source the keyboard `Nudge` path reads (verified in `command_state.capture_selection_snapshot`). No inline prefix/selection logic in the panel — all branching lives in `compute_action`.
 ```
 
 ### FR-003 — Shuttle speed ladder (`playback_engine_transport.lua`)
@@ -242,16 +268,26 @@ int lua_get_keyboard_modifiers(lua_State* L) {
 // Returns {alt=bool, shift=bool, ctrl=bool, meta=bool} — no bitmask in Lua
 ```
 
+**Shared write helper (`core/track_preference.lua`)** — extracted so both `ToggleTrackPreference` and `ExclusiveToggleTrackPreference` use one write chokepoint (Rule #4 / 2.16):
+```
+M.set(track, property, value):
+    track[property] = value
+    assert(track:save(), "track_preference.set: save failed for " .. track.id)
+    signals.emit("track_preference_changed", { track_id = track.id, property = property })
+```
+`ToggleTrackPreference`'s existing per-track write is refactored to call `track_preference.set`; its existing regression test guards the refactor (Rule 2.31).
+
 **`exclusive_toggle_track_preference.lua`** — SPEC `undoable = false`:
 ```
 Executor:
 1. Assert track_id, property in {"muted","soloed"}, project_id, sequence_id.
-2. Load clicked track. new_state = not track[property].
-3. Load all tracks of same type in sequence (VIDEO or AUDIO population).
-4. Set clicked track property → new_state.
-5. Set all other tracks property → not new_state.
-6. Emit track_preference_changed for each modified track.
+2. Load clicked track. If track.locked → no-op return (graceful refusal per FR-005; no crash, no other tracks touched).
+3. new_state = not track[property].
+4. Load all tracks of same type in sequence (VIDEO or AUDIO population).
+5. track_preference.set(clicked, property, new_state).
+6. For each other track: track_preference.set(other, property, not new_state).
 ```
+Direct model writes (not recursive command dispatch) — atomic, no nested command_manager invocations.
 
 **`timeline_panel.lua`** — `wire_toggle_preference`:
 ```lua

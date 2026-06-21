@@ -16,6 +16,7 @@
 
 local qt_constants = require("core.qt_constants")
 local audio_playback = require("core.media.audio_playback")
+local shuttle_ladder = require("core.playback.shuttle_ladder")
 
 local M = {}
 
@@ -70,19 +71,14 @@ function PlaybackEngine:shuttle(dir)
         self.transport_mode = "shuttle"
         self._last_committed_frame = math.floor(self:get_position())
     elseif self.direction == dir then
-        if self.speed < 8 then
-            self.speed = self.speed * 2
-        end
+        self.speed = shuttle_ladder.step_up(self.speed)
     else
-        if self.speed > 1 then
-            self.speed = self.speed / 2
-        elseif self.speed == 1 then
-            self:stop()
-            return
-        elseif self.speed == 0.5 then
+        local next_speed = shuttle_ladder.step_down(self.speed)
+        if next_speed == nil then
             self:stop()
             return
         end
+        self.speed = next_speed
     end
 
     self.transport_mode = "shuttle"

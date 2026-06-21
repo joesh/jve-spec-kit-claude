@@ -98,6 +98,41 @@ function ClipMarker.delete_for_clip(clip_id)
     assert(ok, "ClipMarker.delete_for_clip: delete failed for " .. clip_id)
 end
 
+-- Reassign a specific set of markers to a different clip, shifting each
+-- marker's clip-start-relative `frame` by `frame_shift`. Used by
+-- JoinThroughEdit (spec 025 FR-001): the right clip's markers move to the
+-- surviving left clip, and because `frame` is an offset from the clip's
+-- start, the offset grows by the left clip's pre-join duration so the
+-- marker keeps its absolute timeline position. Undo passes the same ids
+-- with the negated shift to move them back.
+-- Reassigning by explicit id (not by from-clip) is deliberate: on undo the
+-- destination clip may already carry its OWN markers, and only the ones
+-- that originally belonged to the right clip may move back.
+-- @param marker_ids table: array of marker id strings (may be empty → no-op)
+-- @param to_clip_id string: destination clip id
+-- @param frame_shift number: added to each marker's frame (may be negative)
+function ClipMarker.reassign(marker_ids, to_clip_id, frame_shift)
+    assert(type(marker_ids) == "table", "ClipMarker.reassign: marker_ids array required")
+    assert(to_clip_id and to_clip_id ~= "", "ClipMarker.reassign: to_clip_id required")
+    assert(type(frame_shift) == "number", "ClipMarker.reassign: frame_shift must be a number")
+    if #marker_ids == 0 then return end
+
+    local conn = database.get_connection()
+    assert(conn, "ClipMarker.reassign: no database connection")
+    local stmt = conn:prepare([[
+        UPDATE clip_markers SET clip_id = ?, frame = frame + ? WHERE id = ?
+    ]])
+    assert(stmt, "ClipMarker.reassign: failed to prepare update")
+    for _, id in ipairs(marker_ids) do
+        stmt:bind_value(1, to_clip_id)
+        stmt:bind_value(2, frame_shift)
+        stmt:bind_value(3, id)
+        assert(stmt:exec(), "ClipMarker.reassign: update failed for marker " .. tostring(id))
+        stmt:reset()
+    end
+    stmt:finalize()
+end
+
 -- Load all markers for a clip, ordered by frame.
 -- @param clip_id string
 -- @return table: array of ClipMarker (empty if none)

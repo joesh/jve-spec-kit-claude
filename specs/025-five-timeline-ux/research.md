@@ -12,7 +12,7 @@
 **Decision:** Collect through-edit boundary positions during the main clip-draw pass (checking `track_clips[i-1]` adjacency for each clip). After the clip pass, draw chevrons in a second micro-pass over the collected positions. This avoids a full second iteration and keeps the hot path structure intact.
 
 ### Through-edit detection logic
-Both `source_out` (left clip) and `source_in` (right clip) are available from the clip data (`clip.source_in`, `clip.source_out`). Same-master detection uses `clip.master_id`. Subframe precision: `clip.source_out_subframe` / `clip.source_in_subframe` (nil when not applicable).
+Both `source_out` (left clip) and `source_in` (right clip) are available from the clip data (`clip.source_in`, `clip.source_out`). `source_out` is **exclusive** (one-past-last frame; verified via `split_clip.lua` — split sets `left.source_out == right.source_in`), so contiguous means `left.source_out == right.source_in`, not off-by-one. Same-source detection uses the **master track** reference — `master_layer_track_id` (video clips) / `master_audio_track_id` (audio clips), NOT a single `master_id` (no such field). Same master *sequence* but different master track (multicam/split-channel) is NOT a through-edit. The predicate takes the shared timeline-track `kind` to pick the right field. Subframe precision: `clip.source_out_subframe` / `clip.source_in_subframe` (nil when not applicable). Spec 021 later renames these columns to `source_video_track_id` / `source_audio_track_id`; 025 uses the current names.
 
 ### Color constant
 Add `THROUGH_EDIT_MARKER = "#e83030"` to `timeline_state.lua` colors table (vivid red, readable against `#548bb5` video and `#32986b` audio clip bodies, and against the `#ff8c42` selected-clip orange).
@@ -24,7 +24,8 @@ Add `THROUGH_EDIT_MARKER = "#e83030"` to `timeline_state.lua` colors table (vivi
 - Mutations: `updates = {mutation_entry(left)}`, `deletes = {clip_id = right.id}`.
 - Undo: re-insert right clip row (all columns from snapshot), `Clip.update_bounds(left)` to restore original bounds. Mutations: `inserts = {mutation_entry(right)}`, `updates = {mutation_entry(left)}`.
 - SAVEPOINT: `"join_through_edit_atomic"`.
-- Markers/keyframes on right clip: migrated to left clip during execute (same SAVEPOINT).
+- `clip_markers` on right clip: reassigned to left clip during execute (same SAVEPOINT), **before** the delete — `clip_markers.clip_id` is `ON DELETE CASCADE`, so they'd be lost otherwise. Reassigned ids recorded for undo. (No keyframe table exists; nothing else to migrate.)
+- Locked track: NOT asserted in the command. The menu grays the item on locked tracks; the Clip-model writes route through `track_lock_guard`, which refuses gracefully (no crash) as a backstop.
 
 ### JoinAllThroughEdits command — blueprint
 - Shared detection logic with JoinThroughEdit, iterated over all tracks.
@@ -39,7 +40,7 @@ Add `THROUGH_EDIT_MARKER = "#e83030"` to `timeline_state.lua` colors table (vivi
 **Finding:** The TC `QLineEdit` already exists and already handles relative input (`+10`, `-5`, `+00:00:01:00`) via `timecode_input.parse()` with `base_time = current_playhead`. `apply_timecode_entry_text()` fires on `editing_finished`, always dispatches `SetPlayhead`.  
 **Decision:** Extend `apply_timecode_entry_text()` to:  
 1. Detect prefix character (`=` → absolute mode, `+`/`-` → offset mode).  
-2. In offset mode, check `selection_hub.get_selected_clip_ids()`. If non-empty → dispatch `Nudge`. If empty → dispatch `SetPlayhead`.  
+2. In offset mode, check `timeline_state.get_selected_clip_ids()` / `get_selected_edges()` (the same source the keyboard Nudge path reads — NOT `selection_hub`). If either is non-empty → dispatch `Nudge` (moves clips and edges). If both empty → dispatch `SetPlayhead` (arg `playhead_position`).  
 3. In absolute mode → always `SetPlayhead` (ignore selection).
 
 ### New commands — minimal footprint
@@ -98,12 +99,13 @@ The `shuttle()` body replaces its current doubling/halving block with calls to t
 ### ExclusiveToggleTrackPreference command
 Non-undoable. Args: `track_id`, `property`, `project_id`, `sequence_id`.  
 Executor:
-1. Load clicked track; compute `new_state = not track[property]`.
-2. Load all tracks of same type (`VIDEO`/`AUDIO`) in the sequence.
-3. Set clicked track property to `new_state`; set all others to `not new_state`.
-4. Emit `track_preference_changed` for each modified track.
+1. Load clicked track. **If `track.locked` → no-op return** (graceful refusal per FR-005; no crash, no other tracks touched).
+2. Compute `new_state = not track[property]`.
+3. Load all tracks of same type (`VIDEO`/`AUDIO`) in the sequence.
+4. Set clicked track property to `new_state`; set all others to `not new_state`.
+5. Emit `track_preference_changed` for each modified track.
 
-Reuses `ToggleTrackPreference`'s executor logic per track (the `value` arg already exists for force-set). Alternatively, calls the same DB write path directly to avoid N command dispatches inside one executor. The direct DB path is preferred for atomicity and to avoid recursive command_manager invocations.
+**Decision (resolves earlier "reuse vs direct" ambiguity):** extract a shared `core/track_preference.lua` → `set(track, property, value)` (mutate field → `track:save()` → emit), and have **both** `ToggleTrackPreference` and `ExclusiveToggleTrackPreference` call it. One write chokepoint (Rule #4 / 2.16), no recursive command dispatch. `Track:save()` is the only track-preference write path in the model (no `set_muted()` helper exists), so the shared function wraps it.
 
 ### wire_toggle_preference modification
 After the modifier check is available:

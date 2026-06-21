@@ -25,6 +25,7 @@ local track_state = require("ui.timeline.state.track_state")
 local duplicate_track_map = require("core.duplicate_track_map")
 local peak_cache = require("core.media.peak_cache")
 local peak_constants = require("core.media.peak_constants")
+local through_edit = require("core.through_edit")
 local Signals = require("core.signals")
 local ui_constants = require("core.ui_constants")
 local C = ui_constants.COLORS
@@ -1314,6 +1315,50 @@ local function render_snap_indicator(ctx)
     timeline.add_line(ctx.view.widget, sx, 0, sx, ctx.height, 0x00FFFF, 2)
 end
 
+-- Phase: through-edit chevrons (spec 025 FR-001). At every cut where two
+-- adjacent same-track clips form a through-edit (same master source track +
+-- contiguous source frames — core.through_edit), draw two small inward-
+-- pointing red triangles meeting at the cut line: ►◄. Record tab only (the
+-- Source tab shows a raw master and never has through-edits).
+local CHEVRON_W = 5   -- px the triangle reaches away from the cut line
+local CHEVRON_H = 9   -- px tall
+local function render_through_edit_markers(ctx)
+    local displayed = ctx.state_module.get_tab_strip():get_displayed()
+    if not displayed or displayed.kind ~= "record" then return end
+
+    local view, state_module = ctx.view, ctx.state_module
+    local color = assert(state_module.colors.through_edit_marker,
+        "timeline_view_renderer: state_module.colors.through_edit_marker is nil")
+
+    for _, track in ipairs(view.filtered_tracks) do
+        local track_id = track and track.id
+        local layout = track_id and ctx.layout_by_id and ctx.layout_by_id[track_id] or nil
+        if layout and layout.y < ctx.height and (layout.y + layout.height) > 0 then
+            local kind = (layout.track_type == "AUDIO") and "audio" or "video"
+            local clips = state_module.get_tab_strip():track_clip_index(track_id)
+            for i = 1, (clips and #clips or 0) - 1 do
+                local a, b = clips[i], clips[i + 1]
+                if a and b and not a.is_gap and not b.is_gap
+                    and through_edit.is_through_edit(a, b, kind) then
+                    local cut = b.sequence_start
+                    if cut >= ctx.viewport_start and cut <= ctx.viewport_end then
+                        local cx = state_module.time_to_pixel(cut, ctx.width)
+                        local top = layout.y + 4
+                        local mid = top + CHEVRON_H / 2
+                        local bot = top + CHEVRON_H
+                        -- Left clip's right edge: rightward triangle, tip on the cut.
+                        timeline.add_triangle(view.widget,
+                            cx, mid, cx - CHEVRON_W, top, cx - CHEVRON_W, bot, color)
+                        -- Right clip's left edge: leftward triangle, tip on the cut.
+                        timeline.add_triangle(view.widget,
+                            cx, mid, cx + CHEVRON_W, top, cx + CHEVRON_W, bot, color)
+                    end
+                end
+            end
+        end
+    end
+end
+
 function M.render(view)
     if not view.widget then return end
 
@@ -1346,6 +1391,9 @@ function M.render(view)
     -- flag on the strip; displayed_clips() asserts on it.
     ctx.state_module.get_tab_strip():forbid_bulk_clip_read(function()
         draw_visible_clips(ctx, ctx.viewport_start, ctx.viewport_end)
+        -- Through-edit chevrons read clips per-track via track_clip_index too,
+        -- so keep them inside the forbid-bulk-read scope (no displayed_clips()).
+        render_through_edit_markers(ctx)
     end)
 
     render_selected_gaps_overlay(view, ctx.state_module, ctx.width, ctx.height)
@@ -1367,6 +1415,11 @@ end
 -- renderer dispatch (which rebuilds preview_data via ensure_edge_preview
 -- on every render and would clobber a test fixture).
 M.assert_affected_clip_entry = assert_affected_clip_entry
+
+-- TEST-ONLY: the through-edit chevron phase (spec 025 FR-001), exposed so a
+-- test can drive it with a stub `timeline` global + minimal ctx and assert
+-- the emitted triangles without standing up the full render pipeline.
+M._render_through_edit_markers = render_through_edit_markers
 M.lower_bound_start_frames = lower_bound_start_frames
 M.clip_h_span = clip_h_span
 

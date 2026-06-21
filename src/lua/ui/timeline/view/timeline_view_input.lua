@@ -13,6 +13,8 @@ local cancel = require("core.cancel")
 local qt_constants = require("core.qt_constants")
 local grade_badge = require("ui.grade_badge")
 local ClipGrade = require("models.clip_grade")
+local through_edit = require("core.through_edit")
+local track_state = require("ui.timeline.state.track_state")
 local log = require("core.logger").for_area("timeline")
 
 -- luacheck: globals qt_monotonic_s
@@ -284,13 +286,86 @@ local function clone_edge(edge)
     }
 end
 
+-- ── Through-edit edit-point context menu (spec 025 FR-001) ──────────────────
+
+-- Pure: the enabled/tooltip state of the "Join Through Edit" item for a
+-- right-clicked edit point. Enabled only when the pair is a through-edit on
+-- an UNLOCKED track; otherwise grayed with the reason as a tooltip.
+function M.join_one_state(left_clip, right_clip, kind, track_locked)
+    if track_locked then return false, "Track is locked" end
+    if not through_edit.is_through_edit(left_clip, right_clip, kind) then
+        return false, "Not a through-edit"
+    end
+    return true, nil
+end
+
+-- Pure: is any joinable (unlocked-track) through-edit present? `tracks` is an
+-- array of { locked=bool, kind="video"|"audio", clips={sorted clip list} }.
+-- Drives the "Join All Through Edits" enabled state.
+function M.any_through_edit_joinable(tracks)
+    for _, t in ipairs(tracks) do
+        if not t.locked then
+            local clips = t.clips
+            for i = 1, #clips - 1 do
+                local a, b = clips[i], clips[i + 1]
+                if a and b and not a.is_gap and not b.is_gap
+                    and through_edit.is_through_edit(a, b, t.kind) then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- Snapshot every displayed track as { locked, kind, clips } for the join-all
+-- scan (mirrors the renderer's per-track track_clip_index walk).
+local function displayed_tracks_with_clips(state)
+    local out = {}
+    for _, t in ipairs(state.get_tab_strip():displayed_tracks()) do
+        out[#out + 1] = {
+            locked = t.locked == true,
+            kind   = (t.track_type == "AUDIO") and "audio" or "video",
+            clips  = state.get_tab_strip():track_clip_index(t.id) or {},
+        }
+    end
+    return out
+end
+
+-- Resolve a right-click at (x,y) to an edit point: an interior boundary,
+-- within the trim zone, flanked by two real (non-gap) clips. Returns
+-- { track_id, left_clip, left_clip_id, right_clip, kind, track_locked } or nil.
+local function find_edit_point_at_cursor(view, x, y, width, height)
+    local state = view.state
+    local track_id = view.get_track_id_at_y(y, height)
+    if not track_id then return nil end
+    local picked = pick_edges_for_track(state, track_id, x, width)
+    if not (picked and picked.selection and #picked.selection > 0 and picked.boundary) then
+        return nil  -- not within a boundary's trim zone → a clip-body click
+    end
+    local b = picked.boundary
+    if not (b.left and b.right and b.left.clip and b.right.clip
+        and not b.left.clip.is_gap and not b.right.clip.is_gap) then
+        return nil  -- a sequence end, or a clip/gap boundary — not an edit point
+    end
+    local track = track_state.get_by_id(track_id)
+    return {
+        track_id     = track_id,
+        left_clip    = b.left.clip,
+        left_clip_id = b.left.clip_id,
+        right_clip   = b.right.clip,
+        kind         = (track and track.track_type == "AUDIO") and "audio" or "video",
+        track_locked = track and track.locked == true,
+    }
+end
+
 --- Show context menu for timeline clips
 -- @param view Timeline view
 -- @param x Mouse x position (widget-local)
 -- @param y Mouse y position (widget-local)
 -- @param clicked_clip The clip under cursor (or nil)
 -- @param event The mouse event object (may contain global_x, global_y)
-local function show_clip_context_menu(view, x, y, clicked_clip, event)
+local function show_clip_context_menu(view, x, y, clicked_clip, event, edit_point)
     local state = view.state
 
     -- Get global mouse position for popup
@@ -325,8 +400,8 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         end
     end
 
-    if #selected_clips == 0 then
-        return  -- No clips selected, no menu
+    if #selected_clips == 0 and not edit_point then
+        return  -- No clips selected and not on an edit point → no menu
     end
 
     local actions = {}
@@ -416,6 +491,38 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         end
     })
 
+    -- Through-edit join (spec 025 FR-001): only when the right-click landed on
+    -- an edit point (cut between two real clips). "Join Through Edit" is grayed
+    -- (with a reason tooltip) unless the pair is a through-edit on an unlocked
+    -- track; "Join All Through Edits" is grayed when nothing is joinable.
+    if edit_point then
+        table.insert(actions, { separator = true })
+        local one_enabled, one_tooltip = M.join_one_state(
+            edit_point.left_clip, edit_point.right_clip, edit_point.kind, edit_point.track_locked)
+        table.insert(actions, {
+            label = "Join Through Edit",
+            enabled = one_enabled,
+            tooltip = one_tooltip,
+            handler = function()
+                command_manager.execute_interactive("JoinThroughEdit", {
+                    project_id  = state.get_project_id(),
+                    sequence_id = state.get_tab_strip():active_sequence_id(),
+                    clip_id     = edit_point.left_clip_id,
+                })
+            end
+        })
+        table.insert(actions, {
+            label = "Join All Through Edits",
+            enabled = M.any_through_edit_joinable(displayed_tracks_with_clips(state)),
+            handler = function()
+                command_manager.execute_interactive("JoinAllThroughEdits", {
+                    project_id  = state.get_project_id(),
+                    sequence_id = state.get_tab_strip():active_sequence_id(),
+                })
+            end
+        })
+    end
+
     if #actions == 0 then
         return
     end
@@ -440,6 +547,9 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
             local qt_action = qt_constants.MENU.CREATE_MENU_ACTION(menu, label)
             if action_def.enabled == false then
                 qt_constants.MENU.SET_ACTION_ENABLED(qt_action, false)
+                if action_def.tooltip then
+                    qt_constants.PROPERTIES.SET_TOOLTIP(qt_action, action_def.tooltip)
+                end
             else
                 qt_constants.MENU.CONNECT_MENU_ACTION(qt_action, function()
                     action_def.handler()
@@ -480,10 +590,12 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         if focus_manager and focus_manager.set_focused_panel then pcall(focus_manager.set_focused_panel, "timeline") end
         if qt_set_focus then pcall(qt_set_focus, view.widget) end
 
-        -- Right-click: show context menu
+        -- Right-click: show context menu. An edit-point click (cut between two
+        -- real clips) appends the through-edit join items (spec 025 FR-001).
         if button == RIGHT_MOUSE_BUTTON then
             local clicked_clip = find_clip_under_cursor(view, x, y, width, height)
-            show_clip_context_menu(view, x, y, clicked_clip, modifiers)  -- modifiers is the event object
+            local edit_point = find_edit_point_at_cursor(view, x, y, width, height)
+            show_clip_context_menu(view, x, y, clicked_clip, modifiers, edit_point)  -- modifiers is the event object
             return
         end
 

@@ -285,6 +285,9 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_create_focus_container); lua_setglobal(L, "qt_create_focus_container");
     lua_pushcfunction(L, lua_set_container_default_button); lua_setglobal(L, "qt_set_container_default_button");
 
+    // Live keyboard-modifier query (spec 025 FR-005 Alt+click on M/S buttons)
+    lua_pushcfunction(L, lua_keyboard_modifiers);     lua_setglobal(L, "qt_keyboard_modifiers");
+
     // Synthetic input event bindings (for binding/smoke tests under --test mode)
     lua_pushcfunction(L, lua_send_key_click);         lua_setglobal(L, "qt_send_key_click");
     lua_pushcfunction(L, lua_send_key_press);         lua_setglobal(L, "qt_send_key_press");
