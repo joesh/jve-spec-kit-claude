@@ -10,6 +10,10 @@
 #include <QScrollArea>
 #include <QStyleOption>
 #include <QPainter>
+#include <QLabel>
+#include <QFontMetrics>
+#include <QResizeEvent>
+#include <algorithm>
 
 // QWidget subclass that paints its stylesheet AND focus borders.
 // Plain QWidget on macOS Qt6 skips paintEvent entirely, so stylesheet
@@ -67,6 +71,34 @@ public:
     void setViewportMargins(int left, int top, int right, int bottom) {
         QAbstractScrollArea::setViewportMargins(left, top, right, bottom);
     }
+};
+
+// QLabel that elides its text to the available width (Qt::ElideRight) instead of
+// forcing its parent wider. Stores the full text and re-elides on every resize;
+// its minimumSizeHint width is 0 so a long value (e.g. a long sequence name in
+// the Inspector header) can never dictate the panel width. Set text via
+// setFullText (the SET_TEXT binding routes here through a dynamic_cast). QSS
+// background/padding still render because QLabel's own paintEvent is kept.
+class ElidingLabel : public QLabel {
+public:
+    using QLabel::QLabel;
+    void setFullText(const QString& text) { m_full = text; reelide(); }
+    QString fullText() const { return m_full; }
+    QSize minimumSizeHint() const override {
+        return QSize(0, QLabel::minimumSizeHint().height());
+    }
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QLabel::resizeEvent(event);
+        reelide();
+    }
+private:
+    void reelide() {
+        const QFontMetrics fm(fontMetrics());
+        QLabel::setText(fm.elidedText(
+            m_full, Qt::ElideRight, std::max(0, contentsRect().width())));
+    }
+    QString m_full;
 };
 
 // Macro for standard widget creator functions

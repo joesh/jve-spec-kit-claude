@@ -107,6 +107,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_create_widget); lua_setfield(L, -2, "CREATE");
     lua_pushcfunction(L, lua_create_scroll_area); lua_setfield(L, -2, "CREATE_SCROLL_AREA");
     lua_pushcfunction(L, lua_create_label); lua_setfield(L, -2, "CREATE_LABEL");
+    lua_pushcfunction(L, lua_create_eliding_label); lua_setfield(L, -2, "CREATE_ELIDING_LABEL");
     lua_pushcfunction(L, lua_create_line_edit); lua_setfield(L, -2, "CREATE_LINE_EDIT");
     lua_pushcfunction(L, lua_create_button); lua_setfield(L, -2, "CREATE_BUTTON");
     lua_pushcfunction(L, lua_create_checkbox); lua_setfield(L, -2, "CREATE_CHECKBOX");

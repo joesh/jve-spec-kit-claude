@@ -92,8 +92,10 @@ local function build_search_row(root_layout)
 end
 
 local function build_header_label(root_layout)
-    local header = qt_constants.WIDGET.CREATE_LABEL("No editable selection")
-    assert(header, "inspector.mount: CREATE_LABEL for header returned nil")
+    -- Eliding label: a long selection title (e.g. a long sequence name shown
+    -- when nothing is selected) must clip with "…" rather than widen the panel.
+    local header = qt_constants.WIDGET.CREATE_ELIDING_LABEL("No editable selection")
+    assert(header, "inspector.mount: CREATE_ELIDING_LABEL for header returned nil")
     qt_constants.PROPERTIES.SET_STYLE(header, style_header_label())
     qt_constants.GEOMETRY.SET_SIZE_POLICY(header, "Expanding", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(root_layout, header)

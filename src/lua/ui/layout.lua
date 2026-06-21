@@ -517,6 +517,9 @@ menu_system.set_timeline_panel(timeline_panel_mod)
 selection_hub.register_listener(function(items, panel_id)
     inspector.update_selection(items or {}, panel_id)
 end)
+-- The timeline (record) monitor renders the timeline's output; it owns no
+-- selection of its own, so focusing it keeps the timeline's selection active.
+selection_hub.register_alias("timeline_monitor", "timeline")
 selection_hub.set_active_panel("timeline")
 
 -- Install global click-to-focus before registering panels

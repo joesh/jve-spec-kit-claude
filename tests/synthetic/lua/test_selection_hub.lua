@@ -381,6 +381,43 @@ do
 end
 
 -- ============================================================
+-- Alias: a panel that mirrors another panel's selection
+-- ============================================================
+-- The record (timeline) monitor renders the timeline's output; it owns no
+-- selection of its own. When it becomes active, the active selection must be
+-- the timeline's — so the inspector keeps showing the selected clip(s) instead
+-- of clearing the moment the monitor takes focus.
+print("\n--- alias mirrors source panel selection ---")
+do
+    fresh()
+    selection_hub.register_alias("timeline_monitor", "timeline")
+
+    local clip = { item_type = "timeline_clip", clip = { id = "c9" } }
+    selection_hub.update_selection("timeline", { clip })
+
+    -- Activating the alias yields the timeline's selection, reported under the
+    -- canonical (timeline) panel — never an empty monitor selection.
+    selection_hub.set_active_panel("timeline_monitor")
+    local items, panel = selection_hub.get_active_selection()
+    check("alias active selection = timeline's", #items == 1 and items[1].clip.id == "c9")
+    check("alias resolves to canonical panel", panel == "timeline")
+
+    -- A later timeline selection change still reaches listeners while the
+    -- monitor is the focused (aliased) panel.
+    local got
+    selection_hub.register_listener(function(it) got = it end)
+    selection_hub.update_selection("timeline", { { item_type = "timeline_clip", clip = { id = "c10" } } })
+    check("timeline update reaches listeners under alias", got and got[1].clip.id == "c10")
+
+    expect_error("alias requires from id", function()
+        selection_hub.register_alias("", "timeline")
+    end, "from_panel_id")
+    expect_error("alias requires to id", function()
+        selection_hub.register_alias("x", "")
+    end, "to_panel_id")
+end
+
+-- ============================================================
 -- Summary
 -- ============================================================
 print(string.format("\n=== Selection Hub: %d passed, %d failed ===", pass_count, fail_count))

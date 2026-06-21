@@ -29,6 +29,7 @@ int lua_create_tool_window(lua_State* L);
 int lua_create_widget(lua_State* L);
 int lua_create_scroll_area(lua_State* L);
 int lua_create_label(lua_State* L);
+int lua_create_eliding_label(lua_State* L);
 int lua_create_line_edit(lua_State* L);
 int lua_create_button(lua_State* L);
 int lua_create_checkbox(lua_State* L);

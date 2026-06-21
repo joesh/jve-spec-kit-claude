@@ -29,6 +29,16 @@ int lua_create_tool_window(lua_State* L) {
 LUA_BIND_WIDGET_CREATOR(lua_create_widget, StyledWidget)
 LUA_BIND_WIDGET_CREATOR_WITH_TEXT(lua_create_label, QLabel)
 
+// Eliding label: clips overflowing text with "…" instead of widening its panel.
+// Initial text (if given) goes through setFullText so it elides from the start.
+int lua_create_eliding_label(lua_State* L) {
+    const char* txt = lua_tostring(L, 1);
+    ElidingLabel* w = new ElidingLabel();
+    if (txt) w->setFullText(QString::fromUtf8(txt));
+    lua_push_widget(L, w);
+    return 1;
+}
+
 int lua_create_scroll_area(lua_State* L) {
     LuaScrollArea* sa = new LuaScrollArea();
     sa->setWidgetResizable(true);
@@ -65,7 +75,11 @@ int lua_set_text_generic(lua_State* L) {
     if (!w || !txt) return 0;
     QString qtxt = QString::fromUtf8(txt);
     
-    if (QLabel* l = qobject_cast<QLabel*>(w)) l->setText(qtxt);
+    // ElidingLabel has no Q_OBJECT (mirrors StyledWidget) so qobject_cast<QLabel*>
+    // would call the non-virtual QLabel::setText and bypass the elide store —
+    // detect it first via dynamic_cast and route to setFullText.
+    if (ElidingLabel* el = dynamic_cast<ElidingLabel*>(w)) el->setFullText(qtxt);
+    else if (QLabel* l = qobject_cast<QLabel*>(w)) l->setText(qtxt);
     else if (QLineEdit* le = qobject_cast<QLineEdit*>(w)) le->setText(qtxt);
     else if (QTextEdit* te = qobject_cast<QTextEdit*>(w)) te->setPlainText(qtxt);
     else if (QAbstractButton* ab = qobject_cast<QAbstractButton*>(w)) ab->setText(qtxt);

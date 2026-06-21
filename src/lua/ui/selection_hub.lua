@@ -7,6 +7,17 @@ local listeners = {}
 local next_token = 0
 local active_panel_id = nil
 
+-- Panel aliases: a panel that owns no selection of its own and instead mirrors
+-- another panel's. The record (timeline) monitor is a VIEW of the timeline's
+-- output, so it aliases "timeline" — focusing it keeps the timeline's selection
+-- active rather than clearing to an empty monitor slot.
+local aliases = {}
+
+local function resolve_panel(panel_id)
+    if panel_id == nil then return nil end
+    return aliases[panel_id] or panel_id
+end
+
 -- Last broadcast (panel_id, items_signature) — guards against redundant
 -- notifications. Both set_active_panel and update_selection fire notify
 -- unconditionally on their own; without this, a click in an already-
@@ -80,8 +91,19 @@ function M.clear_selection(panel_id)
     end
 end
 
+--- Register `from_panel_id` as an alias of `to_panel_id`: when the alias panel
+--- becomes active it shows (and notifies with) the target panel's selection.
+--- Used for view-only panels that mirror another panel's selection.
+function M.register_alias(from_panel_id, to_panel_id)
+    assert(type(from_panel_id) == "string" and from_panel_id ~= "",
+        "selection_hub.register_alias: from_panel_id required (non-empty string)")
+    assert(type(to_panel_id) == "string" and to_panel_id ~= "",
+        "selection_hub.register_alias: to_panel_id required (non-empty string)")
+    aliases[from_panel_id] = to_panel_id
+end
+
 function M.set_active_panel(panel_id)
-    active_panel_id = panel_id
+    active_panel_id = resolve_panel(panel_id)
     notify(active_panel_id)
 end
 
@@ -115,6 +137,7 @@ function M._reset_for_tests()
     listeners = {}
     next_token = 0
     active_panel_id = nil
+    aliases = {}
     last_broadcast_panel = nil
     last_broadcast_signature = nil
 end
