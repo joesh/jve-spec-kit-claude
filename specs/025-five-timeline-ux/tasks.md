@@ -131,10 +131,13 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
 
 These tasks modify the same file and must run in order.
 
-- [ ] T015 `src/lua/ui/timeline/timeline_panel.lua` FR-004: expand M/S button size
-  - Change `HDR.SM = 16` → `HDR.SM = 24` (one line; line ~1172 per research.md)
-  - No other changes; width flows through `SET_MIN_WIDTH`/`SET_MAX_WIDTH` automatically
-  - Visual verify: launch JVE, confirm M and S buttons are visibly wider
+- [x] T015 `src/lua/ui/timeline/timeline_panel.lua` FR-004: expand M/S button size
+  - Changed `HDR.SM = 16` → `HDR.SM = 24`; width flows through `SET_MIN_WIDTH`/`SET_MAX_WIDTH`
+  - Test hook `get_track_header_layout_for_test` now reports `sm_width` so the
+    click-zone width is black-box assertable without coupling to private Qt state
+  - Regression test: `tests/synthetic/binding/test_025_sm_button_click_zone.lua`
+    (spec-derived `sm_width >= 24` on both a video and an audio row; verified RED
+    at 16, GREEN at 24). Existing header layout/alignment tests unaffected.
 
 - [ ] T016 `src/lua/ui/timeline/timeline_panel.lua` FR-002: TC entry field activation + apply extension
   - Depends on T011 (timecode_entry commands registered and emitting `tc_entry_activate` signal)

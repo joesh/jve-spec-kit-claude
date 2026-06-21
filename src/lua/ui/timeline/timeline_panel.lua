@@ -1264,7 +1264,7 @@ local HDR = {
     REC  = 28,   -- rec-id patch button
     LOCK = 20,   -- lock toggle
     SYNC = 24,   -- sync-mode toggle (slightly wider to fit larger glyph)
-    SM   = 16,   -- each solo/mute button (stacked vertically)
+    SM   = 24,   -- each solo/mute button (stacked vertically); spec 025 FR-004 widened the click zone (16→24) — label text size unchanged
     WAVE = TRAILING_ALIGNMENT_PX,  -- waveform toggle (audio only)
 }
 
@@ -2184,6 +2184,7 @@ local function build_track_header_row(track, track_type, header_color)
         cells            = cells,
         lock_kind        = "icon",
         label_text       = track.name,
+        sm_width         = HDR.SM,   -- M/S button click-zone width (spec 025 FR-004)
         header_widget    = header,
         base_header_color = header_color,
     }
@@ -4042,7 +4043,9 @@ end
 --- lock-not-text-L) without coupling to private Qt widget state.
 --- @param track_id string
 --- @return table|nil { cells = {string...}, lock_kind = string,
----                    label_text = string } or nil if track not loaded
+---                    label_text = string, sm_width = integer } or nil if
+---                    track not loaded. sm_width is the M/S button click-zone
+---                    width in px (spec 025 FR-004).
 function M.get_track_header_layout_for_test(track_id)
     assert(track_id and track_id ~= "",
         "get_track_header_layout_for_test: track_id required")
@@ -4052,6 +4055,7 @@ function M.get_track_header_layout_for_test(track_id)
         cells      = refs.cells,
         lock_kind  = refs.lock_kind,
         label_text = refs.label_text,
+        sm_width   = refs.sm_width,
     }
 end
 
