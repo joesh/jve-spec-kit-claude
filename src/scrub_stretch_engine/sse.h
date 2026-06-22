@@ -7,14 +7,15 @@ namespace sse {
 
 // Quality modes
 enum class QualityMode {
-    Q1 = 1,           // Editor mode: ≤60ms latency, 0.25x-4x range
-    Q2 = 2,           // Extreme slomo: ≤150ms latency, down to 0.10x
-    Q3_DECIMATE = 3   // High-speed mode: >4x up to 16x, no pitch correction (decimation)
+    Q1 = 1,           // Editor mode: 1x-4x, pitch-corrected (WSOLA time-stretch)
+    Q2 = 2,           // Extreme slomo: <0.25x, pitch-corrected (WSOLA time-stretch)
+    Q3_DECIMATE = 3   // Varispeed (no pitch correction): >4x "chipmunk" and the
+                      // 0.25x-1x "natural pitch drop" band. Pitch scales with speed.
 };
 
 // Speed range constants
-constexpr float MAX_SPEED_STRETCHED = 4.0f;   // Max speed for pitch-corrected playback
-constexpr float MAX_SPEED_DECIMATE = 16.0f;   // Max speed for decimate mode
+constexpr float MAX_SPEED_STRETCHED = 4.0f;   // Max speed for pitch-corrected (WSOLA) playback
+constexpr float MAX_SPEED_DECIMATE = 32.0f;   // Max varispeed speed (matches 32x shuttle ceiling)
 
 // Snippet-based scrub constants
 constexpr int SNIPPET_MS = 40;                // Snippet length for overlap-add scrub
@@ -52,6 +53,15 @@ public:
     // speed: playback rate (negative = reverse)
     // mode: quality mode (Q1 or Q2)
     void SetTarget(int64_t t_us, float speed, QualityMode mode);
+
+    // Lightweight speed-only change for mid-play same-direction shuttle.
+    // Updates speed + quality WITHOUT jumping the render position — the
+    // engine keeps rendering from where it was, just at the new rate.
+    // (SetTarget would re-seat m_current_time_us and bridge an audible
+    // glitch into the output stream — wrong for an in-place speed bump.)
+    // A reverse-direction speed still triggers the crossfade + snippet
+    // reset that set_target does, but no flush / no device restart.
+    void SetSpeed(float signed_speed, QualityMode mode);
 
     // Provide source PCM from EMP
     // start_time_us: media time of first sample

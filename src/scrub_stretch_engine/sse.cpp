@@ -182,10 +182,22 @@ private:
     int64_t m_total_frames;
 };
 
-// Snippet-based overlap-add scrub engine
-// Algorithm: fetch source snippet at current time, linear-resample to output rate,
-// apply Hann window, overlap-add with 50% hop. Produces varispeed scrub at all speeds.
-// 1x uses direct passthrough (no windowing overhead).
+// Overlap-add stretch/scrub engine. Two synthesis paths share one 50%-overlap,
+// Hann-windowed, fixed-output-hop overlap-add loop; the source read position
+// advances by speed*hop between grains either way (advance_time multiplies by
+// m_speed). They differ only in how each grain is built:
+//
+//   WSOLA (Q1/Q2, pitch-corrected): fetch a NATIVE-rate grain and overlap-add it
+//     at the fixed output hop. Because no resampling happens, pitch is preserved
+//     while the playback rate changes. A waveform-similarity search shifts each
+//     grain's extraction point (±search_frames) to the offset that best continues
+//     the previous grain, removing the phase discontinuities plain OLA produces.
+//
+//   Varispeed (Q3_DECIMATE): fetch speed*snippet source frames and linear-resample
+//     them down to one grain. Pitch scales with speed — the intended "chipmunk"
+//     above 4x and the "natural pitch drop" in the 0.25x-1x band.
+//
+// 1x uses direct passthrough (no windowing overhead) in both modes.
 class ScrubStretchEngineImpl {
 public:
     ScrubStretchEngineImpl(const SseConfig& config)
@@ -204,8 +216,16 @@ public:
         m_snippet_frames = (config.sample_rate * SNIPPET_MS) / 1000;
         m_hop_frames = m_snippet_frames / 2;
 
-        // Max source frames needed: snippet_frames * MAX_SPEED_DECIMATE
-        int max_fetch = static_cast<int>(m_snippet_frames * MAX_SPEED_DECIMATE) + 1;
+        // WSOLA similarity-search tolerance: ±half a hop (~10ms). The grain
+        // extraction point may slide this far to align with the previous grain.
+        m_search_frames = m_hop_frames / 2;
+
+        // Max source frames needed: the larger of the varispeed fetch
+        // (snippet_frames * MAX_SPEED_DECIMATE) and the WSOLA search region
+        // (snippet_frames + 2*search_frames).
+        int varispeed_fetch = static_cast<int>(m_snippet_frames * MAX_SPEED_DECIMATE) + 1;
+        int wsola_fetch = m_snippet_frames + 2 * m_search_frames;
+        int max_fetch = std::max(varispeed_fetch, wsola_fetch);
 
         // Allocate buffers (interleaved: frames * channels)
         size_t snippet_size = static_cast<size_t>(m_snippet_frames * config.channels);
@@ -213,6 +233,10 @@ public:
         m_snippet_b.resize(snippet_size, 0.0f);
         m_fetch_buffer.resize(static_cast<size_t>(max_fetch * config.channels));
         m_xfade_buffer.resize(snippet_size);
+
+        // WSOLA natural-continuation reference: one overlap region (= hop frames).
+        m_natural_ref.resize(static_cast<size_t>(m_hop_frames * config.channels), 0.0f);
+        m_have_ref = false;
 
         // Hann window over snippet_frames
         m_window.resize(static_cast<size_t>(m_snippet_frames));
@@ -235,36 +259,25 @@ public:
     }
 
     void set_target(int64_t t_us, float speed, QualityMode mode) {
-        // Detect direction change
-        int new_direction = (speed >= 0) ? 1 : -1;
-        if (m_last_direction != 0 && new_direction != m_last_direction) {
-            // Direction flip: initiate crossfade from current output
-            m_xfade_remaining = m_xfade_frames;
-            // Save current snippet_a as crossfade source (best approximation of last output)
-            std::copy(m_snippet_a.begin(), m_snippet_a.end(), m_xfade_buffer.begin());
-            reset_snippet_state();
-        }
-        m_last_direction = new_direction;
-
+        apply_direction_change_if_any(speed);
         m_current_time_us = t_us;
         m_speed = speed;
         m_quality = mode;
+        clamp_speed_for_mode(mode);
+    }
 
-        // Clamp speed to valid range based on quality mode
-        float abs_speed = std::abs(m_speed);
-        if (mode == QualityMode::Q3_DECIMATE) {
-            if (abs_speed > MAX_SPEED_DECIMATE) {
-                m_speed = (m_speed >= 0) ? MAX_SPEED_DECIMATE : -MAX_SPEED_DECIMATE;
-            }
-        } else {
-            float min_speed = (mode == QualityMode::Q1) ? m_config.min_speed_q1 : m_config.min_speed_q2;
-            if (abs_speed < min_speed) {
-                m_speed = (m_speed >= 0) ? min_speed : -min_speed;
-            }
-            if (abs_speed > MAX_SPEED_DECIMATE) {
-                m_speed = (m_speed >= 0) ? MAX_SPEED_DECIMATE : -MAX_SPEED_DECIMATE;
-            }
-        }
+    // Lightweight: speed + quality change WITHOUT re-seating the render
+    // position. The engine keeps rendering from m_current_time_us; only
+    // the rate at which it advances source-time changes. Used for mid-play
+    // same-direction shuttle so the audio device never goes silent.
+    // A reverse-direction speed still triggers the standard crossfade +
+    // snippet reset (same as set_target) — the WRITE path is what differs,
+    // not the source-domain handling of a flip.
+    void set_speed_only(float speed, QualityMode mode) {
+        apply_direction_change_if_any(speed);
+        m_speed = speed;
+        m_quality = mode;
+        clamp_speed_for_mode(mode);
     }
 
     void push_source(const float* data, int64_t frames, int64_t start_time_us) {
@@ -306,11 +319,49 @@ public:
 private:
     // ── Snippet state management ──
 
+    // Detect a reverse direction relative to the last grain and trigger the
+    // crossfade + snippet reset that bridges the audible flip. Shared by
+    // set_target (full retarget) and set_speed_only (lightweight rate
+    // change) so a sign change is handled identically either way.
+    void apply_direction_change_if_any(float speed) {
+        int new_direction = (speed >= 0) ? 1 : -1;
+        if (m_last_direction != 0 && new_direction != m_last_direction) {
+            m_xfade_remaining = m_xfade_frames;
+            // Save current snippet_a as crossfade source (best approximation of last output).
+            std::copy(m_snippet_a.begin(), m_snippet_a.end(), m_xfade_buffer.begin());
+            reset_snippet_state();
+        }
+        m_last_direction = new_direction;
+    }
+
+    // Clamp m_speed to the valid range for the chosen quality mode.
+    // Q3_DECIMATE caps at MAX_SPEED_DECIMATE; Q1/Q2 cap at MAX_SPEED_STRETCHED
+    // (anything faster routes to Q3 at the caller) and floor at the mode's
+    // configured minimum.
+    void clamp_speed_for_mode(QualityMode mode) {
+        float abs_speed = std::abs(m_speed);
+        if (mode == QualityMode::Q3_DECIMATE) {
+            if (abs_speed > MAX_SPEED_DECIMATE) {
+                m_speed = (m_speed >= 0) ? MAX_SPEED_DECIMATE : -MAX_SPEED_DECIMATE;
+            }
+        } else {
+            float min_speed = (mode == QualityMode::Q1) ? m_config.min_speed_q1 : m_config.min_speed_q2;
+            if (abs_speed < min_speed) {
+                m_speed = (m_speed >= 0) ? min_speed : -min_speed;
+            }
+            if (abs_speed > MAX_SPEED_STRETCHED) {
+                m_speed = (m_speed >= 0) ? MAX_SPEED_STRETCHED : -MAX_SPEED_STRETCHED;
+            }
+        }
+    }
+
     void reset_snippet_state() {
         m_scrub_pos = 0;
         m_snippet_valid = false;
+        m_have_ref = false;
         std::fill(m_snippet_a.begin(), m_snippet_a.end(), 0.0f);
         std::fill(m_snippet_b.begin(), m_snippet_b.end(), 0.0f);
+        std::fill(m_natural_ref.begin(), m_natural_ref.end(), 0.0f);
     }
 
     // ── Core scrub render: overlap-add with Hann windowed snippets ──
@@ -416,9 +467,129 @@ private:
         return out_frames;
     }
 
-    // ── Prepare next snippet: swap, fetch, resample, window, advance ──
+    // ── Prepare next snippet: dispatch by quality ──
+    // Both paths leave a windowed grain in snippet_a, the previous grain in
+    // snippet_b, and advance the source read position by one hop.
 
     bool prepare_next_snippet() {
+        if (m_quality == QualityMode::Q3_DECIMATE) {
+            return prepare_snippet_varispeed();
+        }
+        return prepare_snippet_wsola();
+    }
+
+    // ── WSOLA grain: native-rate fetch + similarity search (pitch-preserving) ──
+
+    bool prepare_snippet_wsola() {
+        int ch = m_config.channels;
+        int sr = m_config.sample_rate;
+
+        // Swap: old snippet_a becomes snippet_b (the trailing overlap).
+        std::swap(m_snippet_a, m_snippet_b);
+
+        int tol = m_search_frames;
+        int64_t tol_us = (static_cast<int64_t>(tol) * 1000000LL) / sr;
+        int64_t snippet_us = (static_cast<int64_t>(m_snippet_frames) * 1000000LL) / sr;
+
+        // Fetch a search region so the nominal grain (region index tol, length
+        // snippet_frames) sits at source time m_current_time_us. For reverse we
+        // fetch a forward region and reverse the whole buffer so it reads in
+        // playback order and the identical indexing applies.
+        int region_frames = m_snippet_frames + 2 * tol;
+        int64_t region_start_us = (m_speed >= 0)
+            ? (m_current_time_us - tol_us)
+            : (m_current_time_us - snippet_us - tol_us);
+
+        int num_offsets = 2 * tol + 1;
+        bool have = m_source_buffer.get_samples(
+            region_start_us, sr, m_fetch_buffer.data(), region_frames);
+
+        if (!have) {
+            // Near a buffer edge the search margin isn't buffered. Extract the
+            // exact nominal grain (no search) so playback continues at the edge
+            // rather than reporting starvation. Genuine starvation (no nominal
+            // grain either) still returns false below.
+            region_frames = m_snippet_frames;
+            region_start_us = (m_speed >= 0)
+                ? m_current_time_us
+                : (m_current_time_us - snippet_us);
+            have = m_source_buffer.get_samples(
+                region_start_us, sr, m_fetch_buffer.data(), region_frames);
+            if (!have) return false;
+            num_offsets = 1;
+        }
+
+        if (m_speed < 0) {
+            reverse_interleaved(m_fetch_buffer.data(), region_frames);
+        }
+
+        // Pick the extraction offset whose head best continues the previous grain.
+        // First grain after reset/direction-flip (no reference) or an edge fetch
+        // (no margin) uses the nominal offset.
+        int nominal_off = (num_offsets == 1) ? 0 : tol;
+        int best_off = nominal_off;
+        if (m_have_ref && num_offsets > 1) {
+            best_off = find_best_offset(num_offsets);
+        }
+
+        // Window the chosen grain into snippet_a at NATIVE rate — no resampling,
+        // so pitch is preserved while playback rate follows the hop advance.
+        for (int i = 0; i < m_snippet_frames; i++) {
+            for (int c = 0; c < ch; c++) {
+                m_snippet_a[i * ch + c] =
+                    m_fetch_buffer[(best_off + i) * ch + c] * m_window[i];
+            }
+        }
+
+        // Record the natural continuation (un-windowed source one hop past the
+        // chosen position) as the reference the next grain's head must match.
+        for (int i = 0; i < m_hop_frames; i++) {
+            for (int c = 0; c < ch; c++) {
+                m_natural_ref[i * ch + c] =
+                    m_fetch_buffer[(best_off + m_hop_frames + i) * ch + c];
+            }
+        }
+        m_have_ref = true;
+        m_snippet_valid = true;
+
+        // Advance source time by one hop (advance_time scales by m_speed → the
+        // analysis hop is speed*hop, which is what sets the stretch ratio).
+        advance_time(m_hop_frames);
+        return true;
+    }
+
+    // Normalized cross-correlation search: among the first `num_offsets` grain
+    // positions in m_fetch_buffer, return the one whose leading overlap region
+    // best matches the stored natural-continuation reference.
+    int find_best_offset(int num_offsets) {
+        int ch = m_config.channels;
+        int best = 0;
+        float best_corr = -2.0f;
+        for (int off = 0; off < num_offsets; off++) {
+            float sum = 0.0f, norm_ref = 0.0f, norm_cand = 0.0f;
+            for (int i = 0; i < m_hop_frames; i++) {
+                for (int c = 0; c < ch; c++) {
+                    float r = m_natural_ref[i * ch + c];
+                    float s = m_fetch_buffer[(off + i) * ch + c];
+                    sum += r * s;
+                    norm_ref += r * r;
+                    norm_cand += s * s;
+                }
+            }
+            float corr = (norm_ref > 1e-6f && norm_cand > 1e-6f)
+                ? sum / std::sqrt(norm_ref * norm_cand)
+                : 0.0f;
+            if (corr > best_corr) {
+                best_corr = corr;
+                best = off;
+            }
+        }
+        return best;
+    }
+
+    // ── Varispeed grain: speed-scaled fetch + resample (pitch follows speed) ──
+
+    bool prepare_snippet_varispeed() {
         int ch = m_config.channels;
         float abs_speed = std::abs(m_speed);
 
@@ -559,17 +730,20 @@ private:
     // Snippet geometry
     int m_snippet_frames;   // 40ms = 1920 @ 48kHz
     int m_hop_frames;       // 50% overlap = 960 @ 48kHz
+    int m_search_frames;    // WSOLA similarity-search tolerance (±, frames)
 
     // Snippet state
     int m_scrub_pos;        // Current position within the hop region
     bool m_snippet_valid;   // Whether snippet_a/b contain valid data
+    bool m_have_ref;        // Whether m_natural_ref holds a valid continuation
 
     // Buffers (all interleaved: frames * channels)
     std::vector<float> m_snippet_a;     // Current snippet (windowed)
     std::vector<float> m_snippet_b;     // Previous snippet (for overlap tail)
-    std::vector<float> m_fetch_buffer;  // Raw source fetch (pre-resample)
+    std::vector<float> m_fetch_buffer;  // Raw source fetch (pre-resample / search region)
     std::vector<float> m_xfade_buffer;  // Direction crossfade snapshot
     std::vector<float> m_window;        // Hann window (snippet_frames)
+    std::vector<float> m_natural_ref;   // WSOLA reference: ideal next-grain head (hop frames)
 };
 
 // ScrubStretchEngine implementation
@@ -616,6 +790,10 @@ void ScrubStretchEngine::Reset() {
 
 void ScrubStretchEngine::SetTarget(int64_t t_us, float speed, QualityMode mode) {
     m_impl->set_target(t_us, speed, mode);
+}
+
+void ScrubStretchEngine::SetSpeed(float signed_speed, QualityMode mode) {
+    m_impl->set_speed_only(signed_speed, mode);
 }
 
 void ScrubStretchEngine::PushSourcePcm(const float* interleaved, int64_t frames, int64_t start_time_us) {

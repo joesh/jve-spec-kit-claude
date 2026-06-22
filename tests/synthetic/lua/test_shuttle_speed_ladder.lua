@@ -1,9 +1,13 @@
 -- Unit: FR-003 JKL shuttle speed ladder (spec 025).
 --
 -- DOMAIN RULE (FR-003): the shuttle speed ladder steps in 0.25 increments
--- from 1.0x to 2.0x, then in successive powers of two with NO upper bound:
+-- from 1.0x to 2.0x, then in successive powers of two CAPPED at 32x (FCP7
+-- convention). Above ~32x the decoder + clip prefetch cannot service the
+-- playhead, so video starves (freezes/gaps) while audio and the position
+-- counter keep running on their own threads — the cap keeps every reachable
+-- rung playable:
 --
---     1.0 → 1.25 → 1.5 → 1.75 → 2.0 → 4.0 → 8.0 → 16.0 → 32.0 → 64.0 → …
+--     1.0 → 1.25 → 1.5 → 1.75 → 2.0 → 4.0 → 8.0 → 16.0 → 32.0 (max)
 --
 -- Stepping DOWN reverses that ladder and, at 1.0x, signals STOP (the
 -- opposite-direction key at 1x stops playback — it does not reverse).
@@ -33,21 +37,30 @@ end
 
 print("=== test_shuttle_speed_ladder.lua ===")
 
--- ── Step UP across the whole ladder ──────────────────────────────────────
+-- ── Step UP across the whole ladder, then plateau at the 32x cap ─────────
 do
-    local seq = { 1.0, 1.25, 1.5, 1.75, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 }
+    local seq = { 1.0, 1.25, 1.5, 1.75, 2.0, 4.0, 8.0, 16.0, 32.0 }
     for i = 1, #seq - 1 do
         local got = ladder.step_up(seq[i])
         assert(approx(got, seq[i + 1]), string.format(
             "step_up(%.2f) → expected %.2f, got %s",
             seq[i], seq[i + 1], tostring(got)))
     end
-    print("  PASS: up ladder 1.0→1.25→1.5→1.75→2.0→4.0→8.0→16→32→64")
+    print("  PASS: up ladder 1.0→1.25→1.5→1.75→2.0→4.0→8.0→16→32")
+end
+
+-- ── 32x is the ceiling: holding the shuttle key STAYS at 32x ─────────────
+-- This is the regression for the freeze: an uncapped ladder climbed into
+-- 64/128x where decode+prefetch starve and video locks up.
+do
+    assert(approx(ladder.step_up(16.0), 32.0), "step_up(16)→32 (last real rung)")
+    assert(approx(ladder.step_up(32.0), 32.0), "step_up(32) must STAY 32 (ceiling)")
+    print("  PASS: ladder caps at 32x — no climb past the playable ceiling")
 end
 
 -- ── Step DOWN reverses the ladder; 1.0 → stop (nil) ──────────────────────
 do
-    local seq = { 64.0, 32.0, 16.0, 8.0, 4.0, 2.0, 1.75, 1.5, 1.25, 1.0 }
+    local seq = { 32.0, 16.0, 8.0, 4.0, 2.0, 1.75, 1.5, 1.25, 1.0 }
     for i = 1, #seq - 1 do
         local got = ladder.step_down(seq[i])
         assert(approx(got, seq[i + 1]), string.format(
@@ -56,7 +69,7 @@ do
     end
     assert(ladder.step_down(1.0) == nil,
         "step_down(1.0) must signal STOP (nil)")
-    print("  PASS: down ladder 64→…→1.0→stop")
+    print("  PASS: down ladder 32→…→1.0→stop")
 end
 
 -- ── Non-trivial starting speeds (not just sequential walks) ──────────────

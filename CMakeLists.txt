@@ -577,6 +577,30 @@ set_target_properties(test_sse_decimate PROPERTIES
 )
 add_test(NAME test_sse_decimate COMMAND test_sse_decimate)
 
+# SSE Pitch test (WSOLA pitch preservation)
+add_executable(test_sse_pitch
+    tests/synthetic/unit/test_sse_pitch.cpp
+)
+target_link_libraries(test_sse_pitch
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_sse_pitch PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_sse_pitch PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_sse_pitch PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_sse_pitch COMMAND test_sse_pitch)
+
 # PlaybackClock (A/V sync clock) test
 add_executable(test_playback_clock
     tests/synthetic/unit/test_playback_clock.cpp
@@ -600,6 +624,31 @@ set_target_properties(test_playback_clock PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 add_test(NAME test_playback_clock COMMAND test_playback_clock)
+
+# TMB READER_WARM proximity picker — pure picker over PreBufferJob vector
+add_executable(test_tmb_warm_picker
+    tests/synthetic/unit/test_tmb_warm_picker.cpp
+    src/assert_handler.cpp
+)
+target_link_libraries(test_tmb_warm_picker
+    EditorMediaPlatform
+    Qt6::Test
+    Qt6::Core
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_tmb_warm_picker PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/editor_media_platform/include
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_tmb_warm_picker PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_tmb_warm_picker PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_tmb_warm_picker COMMAND test_tmb_warm_picker)
 
 # Video-track visibility filter (mute/solo composite) — pure header function
 add_executable(test_video_track_filter

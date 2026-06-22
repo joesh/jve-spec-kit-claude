@@ -1,5 +1,8 @@
-// Tests for SSE decimate mode (>4x speeds up to 16x)
+// Tests for SSE decimate mode (>4x speeds up to 32x)
 // Decimate mode skips samples instead of pitch-correcting, for very high speeds.
+// 32x matches the shuttle ladder ceiling (core.playback.shuttle_ladder MAX) so
+// fast shuttle plays decimated "chipmunk" audio (Resolve-style) at the true
+// speed across the whole video range, staying synced to picture.
 
 #include <QtTest>
 #include <cmath>
@@ -50,8 +53,8 @@ private slots:
     }
 
     void test_max_speed_decimate_constant() {
-        // MAX_SPEED_DECIMATE should be 16.0
-        QCOMPARE(sse::MAX_SPEED_DECIMATE, 16.0f);
+        // MAX_SPEED_DECIMATE should be 32.0 (matches the 32x shuttle ceiling)
+        QCOMPARE(sse::MAX_SPEED_DECIMATE, 32.0f);
     }
 
     // ========================================================================
@@ -86,6 +89,25 @@ private slots:
         engine->PushSourcePcm(pcm.data(), frames, 0);
 
         engine->SetTarget(0, 16.0f, sse::QualityMode::Q3_DECIMATE);
+
+        std::vector<float> output(512 * cfg.channels);
+        int64_t produced = engine->Render(output.data(), 512);
+
+        QCOMPARE(produced, static_cast<int64_t>(512));
+        QVERIFY(has_audio(output.data(), 512, cfg.channels));
+    }
+
+    void test_render_32x_forward_produces_audio() {
+        // 32x is the shuttle ceiling — decimate must render real audio here, not
+        // be clamped down to 16x (which would lag 32x video).
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        int64_t frames = cfg.sample_rate * 8;  // 8 seconds of source headroom
+        std::vector<float> pcm = generate_ramp_pcm(frames, cfg.channels, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), frames, 0);
+
+        engine->SetTarget(0, 32.0f, sse::QualityMode::Q3_DECIMATE);
 
         std::vector<float> output(512 * cfg.channels);
         int64_t produced = engine->Render(output.data(), 512);
@@ -231,22 +253,22 @@ private slots:
     // SPEED CLAMPING TESTS
     // ========================================================================
 
-    void test_decimate_clamps_to_max_16x() {
-        // Speed above 16x should be clamped
+    void test_decimate_clamps_to_max_32x() {
+        // Speed above the 32x ceiling should be clamped, not read OOB.
         sse::SseConfig cfg = sse::default_config();
         auto engine = sse::ScrubStretchEngine::Create(cfg);
 
-        int64_t frames = cfg.sample_rate * 4;
+        int64_t frames = cfg.sample_rate * 8;
         std::vector<float> pcm = generate_ramp_pcm(frames, cfg.channels, cfg.sample_rate);
         engine->PushSourcePcm(pcm.data(), frames, 0);
 
-        // Set 32x speed (above max) - should be clamped to 16x
-        engine->SetTarget(0, 32.0f, sse::QualityMode::Q3_DECIMATE);
+        // Set 48x speed (above max) - should be clamped to 32x
+        engine->SetTarget(0, 48.0f, sse::QualityMode::Q3_DECIMATE);
 
         std::vector<float> output(512 * cfg.channels);
         engine->Render(output.data(), 512);
 
-        // Engine should handle this gracefully (clamped to 16x)
+        // Engine should handle this gracefully (clamped to 32x)
         QVERIFY(engine != nullptr);
     }
 };

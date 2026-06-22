@@ -26,8 +26,8 @@
 -- DOMAIN RULES PINNED (spec 017 transport state machine):
 --   TS-1  Shuttle ramp: from stopped, J/L start at 1×; repeating the same
 --         direction climbs the 025 FR-003 ladder — 0.25 steps from 1× to
---         2×, then powers of two with no upper bound
---         (1→1.25→1.5→1.75→2→4→8→…).
+--         2×, then powers of two CAPPED at 32×
+--         (1→1.25→1.5→1.75→2→4→8→16→32); holding past 32× stays at 32×.
 --   TS-2  Shuttle unwind: the opposite direction RETREATS one rung down
 --         that same ladder (4→2→1.75→1.5→1.25→1), and one more opposite
 --         step from 1× STOPS (does not flip straight to reverse) — the
@@ -205,9 +205,9 @@ end
 release_audio()
 
 -- ════════════════════════════════════════════════════════════════════════════
--- TS-1  Shuttle ramp (025 FR-003): 1 → 1.25 → 1.5 → 1.75 → 2 → 4 → 8 → 16
+-- TS-1  Shuttle ramp (025 FR-003): 1 → 1.25 → 1.5 → 1.75 → 2 → 4 → 8 → 16 → 32 (cap)
 -- ════════════════════════════════════════════════════════════════════════════
-print("\n-- (TS-1) shuttle ramp climbs the quarter→geometric ladder --")
+print("\n-- (TS-1) shuttle ramp climbs the quarter→geometric ladder, caps at 32x --")
 do
     stop_and_settle()
     rec:shuttle(1)
@@ -220,9 +220,11 @@ do
     rec:shuttle(1); assert(rec.speed == 2,    "fifth forward → 2x")
     rec:shuttle(1); assert(rec.speed == 4,    "sixth forward → 4x (geometric)")
     rec:shuttle(1); assert(rec.speed == 8,    "seventh forward → 8x")
-    rec:shuttle(1); assert(rec.speed == 16,   "eighth forward → 16x (no upper cap)")
+    rec:shuttle(1); assert(rec.speed == 16,   "eighth forward → 16x")
+    rec:shuttle(1); assert(rec.speed == 32,   "ninth forward → 32x (ceiling)")
+    rec:shuttle(1); assert(rec.speed == 32,   "tenth forward STAYS 32x — no climb past the cap")
     stop_and_settle()
-    print("  PASS: 1→1.25→1.5→1.75→2→4→8→16 (unbounded)")
+    print("  PASS: 1→1.25→1.5→1.75→2→4→8→16→32→32 (capped)")
 end
 
 -- ════════════════════════════════════════════════════════════════════════════

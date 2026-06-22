@@ -90,12 +90,26 @@ function PlaybackEngine:shuttle(dir)
         self:_try_audio("_sync_audio")
     end
 
-    -- Delegate to C++ PlaybackController
+    -- Delegate to C++ PlaybackController. Cold start (was stopped) routes
+    -- through PLAY: the device + SSE + clock all anchor fresh on the first
+    -- shuttle press. Mid-play same-direction ramp steps route through
+    -- SET_SPEED instead — re-entering PLAY per keypress would re-run the
+    -- ~200ms CoreAudio device restart on each L press and freeze the video
+    -- (spec 025 FR-003 / spec 017 TS-13). SetSpeed's lightweight branch
+    -- updates m_speed + reanchors the clock + retargets the SSE without
+    -- touching the audio output device. Direction changes mid-play don't
+    -- happen here — step_down stops at 1× before reversing — so SetSpeed
+    -- never sees a flip from this path; the heavyweight restart branch on
+    -- the C++ side covers flips that arrive via other entry points.
     assert(self._playback_controller,
         "PlaybackEngine:shuttle: _playback_controller required")
     local PLAYBACK = qt_constants.PLAYBACK
     PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
-    PLAYBACK.PLAY(self._playback_controller, self.direction, self.speed)
+    if was_stopped then
+        PLAYBACK.PLAY(self._playback_controller, self.direction, self.speed)
+    else
+        PLAYBACK.SET_SPEED(self._playback_controller, self.direction * self.speed)
+    end
 end
 
 --- K+J or K+L: slow playback at 0.5x

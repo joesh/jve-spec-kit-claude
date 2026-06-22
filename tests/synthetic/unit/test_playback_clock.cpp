@@ -353,7 +353,10 @@ private slots:
         PlaybackClock clock;
         clock.Reanchor(5000000, 2.0f, 1000000);
 
-        QCOMPARE(clock.MediaAnchorUS(), (int64_t)5000000);
+        // CurrentTimeUS(epoch) hits the pre-roll branch (heard_aop = epoch
+        // - latency precedes the segment), which returns the anchor exactly
+        // — the equivalent of the removed MediaAnchorUS() getter.
+        QCOMPARE(clock.CurrentTimeUS(1000000), (int64_t)5000000);
         QCOMPARE(clock.Speed(), 2.0f);
     }
 
@@ -362,7 +365,7 @@ private slots:
         clock.Reanchor(1000000, 1.0f, 0);
         clock.Reanchor(9000000, -1.5f, 500000);
 
-        QCOMPARE(clock.MediaAnchorUS(), (int64_t)9000000);
+        QCOMPARE(clock.CurrentTimeUS(500000), (int64_t)9000000);  // pre-roll → anchor
         QCOMPARE(clock.Speed(), -1.5f);
 
         // CurrentTimeUS uses new anchor/epoch
@@ -451,7 +454,10 @@ private slots:
 
         clock.Reanchor(anchor, speed, epoch);
 
-        QCOMPARE(clock.MediaAnchorUS(), anchor);
+        // Pre-roll branch: CurrentTimeUS(epoch) precedes the segment by
+        // output_latency µs, returns the anchor exactly. (Replaces the
+        // removed MediaAnchorUS() getter.)
+        QCOMPARE(clock.CurrentTimeUS(epoch), anchor);
         QCOMPARE(clock.Speed(), speed);
     }
 
