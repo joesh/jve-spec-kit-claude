@@ -154,6 +154,11 @@ struct VideoResult {
 // provides constant-time access to decoded video frames and audio PCM.
 class TimelineMediaBuffer {
 public:
+    // FCP7-ladder boundary: above this speed, the engine treats playback as
+    // shuttle (free-running video, sparse cache, widened consumer bound).
+    // Single owner — PlaybackController consumes this same constant.
+    static constexpr float SHUTTLE_FREE_RUN_SPEED = 2.0f;
+
     // Explicit pool sizing: 0 = synchronous (no workers), or >= 3 (1 prep + 1 video + 1 audio).
     // See start_workers() for the rationale on the 3-thread minimum.
     static std::unique_ptr<TimelineMediaBuffer> Create(int pool_threads);
@@ -423,6 +428,11 @@ private:
     // ── Pre-buffer thread pool ──
     // Decode-preparation jobs: submitted externally (SetPlayhead probe scan,
     // SetTrackClips reader warming). Processed with priority by prefetch_worker.
+    // PreBufferJob is public so unit tests can construct jobs and feed
+    // pick_proximity_warm_job (which is also public, below). The struct has
+    // no encapsulated invariants — just plain data fields used by the picker
+    // and the worker pipeline.
+public:
     struct PreBufferJob {
         enum Type { SPEED_DETECT, READER_WARM };
         Type type = SPEED_DETECT;
@@ -436,9 +446,20 @@ private:
         int32_t probe_rate_num = 0;
         int32_t probe_rate_den = 1;
 
+        // Timeline position of the clip this job warms. Used by
+        // process_next_decode_prep_job to pick the READER_WARM job whose clip
+        // is closest to the current playhead in the playback direction — so
+        // at shuttle speed where many warm jobs may be queued, the imminent
+        // clip wins over far-future ones (LIFO over sequence-ordered Lua
+        // insertions had the OPPOSITE shape: it warmed the furthest clip
+        // first, stalling the imminent one for ~10s at 32×).
+        // -1 = unknown (SPEED_DETECT jobs leave this at default).
+        int64_t sequence_start = -1;
+
         // WARM timing: set by submit_pre_buffer, checked by prefetch_worker
         std::chrono::steady_clock::time_point submitted_at{};
     };
+private:
 
     void start_workers(int count);
     void stop_workers();
@@ -453,6 +474,16 @@ private:
     bool process_next_decode_prep_job();
     void submit_pre_buffer(const PreBufferJob& job);
     static std::string job_key(const PreBufferJob& job);
+
+    // Public for unit testing — no controller state, pure function over the
+    // job vector + playhead state. Returns the index of the READER_WARM job
+    // whose sequence_start is closest to `playhead` in `direction`, or -1 if
+    // no READER_WARM jobs exist. See process_next_decode_prep_job for the
+    // rationale on proximity priority.
+public:
+    static int pick_proximity_warm_job(const std::vector<PreBufferJob>& jobs,
+                                       int64_t playhead, int direction);
+private:
 
     // Track selection for prefetch — find most urgent track needing work
     bool pick_video_track(TrackId& out);
@@ -542,6 +573,12 @@ private:
 
     // Max adaptive stride: ceil(decode_ms / frame_period_ms), clamped
     static constexpr int MAX_STRIDE = 8;
+
+    // Pool sizing: floor = 1 prep + 1 video + 1 audio (start_workers layout
+    // invariant). Ceiling = FFmpeg shared-state contention plateau past ~14
+    // decode threads on Apple Silicon Pro/Max.
+    static constexpr int MIN_POOL_THREADS = 3;
+    static constexpr int MAX_POOL_THREADS = 16;
 
     // Probe window: scan this far ahead of playhead for unprobed media paths.
     // Must be >> PREFETCH_MAX so probes complete well before prefetch reaches the clip.

@@ -130,7 +130,7 @@ end
 local PLAYBACK = qt_constants.PLAYBACK
 
 -- Controller transport bindings (positive evidence the gesture hit C++).
-local PB_WATCH = { "PLAY", "PARK", "STOP" }
+local PB_WATCH = { "PLAY", "PARK", "STOP", "SET_SPEED" }
 -- Audio DEVICE transport methods (negative evidence: must stay untouched).
 local DEV_WATCH = { "seek", "start", "stop", "set_speed" }
 
@@ -219,9 +219,14 @@ do
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
--- CA-3  shuttle while playing → C++ PLAY; never the device's set_speed.
+-- CA-3  shuttle while already playing → C++ SET_SPEED (lightweight);
+-- never the device's set_speed. The old behavior was PLAY-per-keypress, which
+-- re-ran the ~200ms CoreAudio device restart on each L press and froze video;
+-- spec 025 FR-003 + playback_engine_transport.lua:96 document the change.
+-- Cold-start shuttle (was_stopped) still routes through PLAY to anchor the
+-- device + SSE + clock fresh; that path is covered by CA-1.
 -- ════════════════════════════════════════════════════════════════════════════
-print("\n-- (CA-3) shuttle → PLAY, no device.set_speed --")
+print("\n-- (CA-3) mid-play shuttle → SET_SPEED, no device.set_speed --")
 do
     -- rec is playing from CA-2.
     assert(rec:is_playing(), "CA-3 precondition: engine playing")
@@ -229,10 +234,13 @@ do
     rec:shuttle(1)  -- bump shuttle speed (same direction → faster)
     restore_recorders()
 
-    assert(pb_called("PLAY"), "CA-3: shuttle must delegate to PLAYBACK.PLAY")
+    assert(pb_called("SET_SPEED"),
+        "CA-3: mid-play shuttle must delegate to PLAYBACK.SET_SPEED (lightweight, no device restart)")
+    assert(not pb_called("PLAY"),
+        "CA-3: mid-play shuttle must NOT re-enter PLAYBACK.PLAY (would 200ms-freeze video)")
     assert(not dev_called("set_speed"),
         "CA-3: shuttle must NOT call the audio device's set_speed (C++ owns transport)")
-    print("  PASS: shuttle → PLAY; device.set_speed untouched")
+    print("  PASS: shuttle → SET_SPEED; PLAY untouched; device.set_speed untouched")
 end
 
 -- ════════════════════════════════════════════════════════════════════════════

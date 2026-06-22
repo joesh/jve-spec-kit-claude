@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -140,17 +141,35 @@ static constexpr size_t DIAG_VIDEO_RING_SIZE = 1800;  // ~30s @60Hz, ~154KB
 static constexpr size_t DIAG_AUDIO_RING_SIZE = 3000;  // ~30s @~100Hz, ~140KB
 
 // ============================================================================
-// PlaybackClock - epoch-based A/V sync
+// PlaybackClock - rate-envelope A/V sync
 // ============================================================================
-// Tracks media time using AOP playhead as master clock.
-// Uses epoch-based subtraction: media_anchor + (playhead - epoch) * speed
-// This is FLUSH-agnostic (doesn't assume FLUSH resets playhead).
+// Tracks media time using AOP playhead as master clock. Holds a sorted
+// rate envelope: each segment is a piecewise-linear projection
+//   media = start_media_us + (aop - start_aop_us) * speed
+// SetSpeed during play APPENDS a segment scheduled to take effect when
+// the QAudioSink+ring drain catches up to it (~75-150ms ahead). Audio
+// device drains the prior segment's queued output at the prior rate;
+// the clock returns that prior projection until aop crosses the new
+// segment's start_aop. This matches what the user actually hears
+// across a key-repeat speed ramp.
+//
+// Reanchor is the hard-reset primitive (cold start, direction flip,
+// mix-flush, seek): it clears the deque and pushes a single segment.
 class PlaybackClock {
 public:
-    // Reanchor at transport event (play, seek, speed change)
+    // Reanchor at hard transport event: clears the rate envelope and
+    // installs one segment. Used for Play, seek, direction flip,
+    // mix-change flush — anywhere the audio device gets re-anchored.
     void Reanchor(int64_t media_time_us, float speed, int64_t aop_playhead_us);
 
-    // Get current media time from AOP playhead
+    // Append a future speed transition at aop_at_us. Coalesces any
+    // pending segments scheduled AFTER aop_at_us (a press faster than
+    // the prior press's drain trims the prior pending transition).
+    // No-op if there is no prior segment — caller must Reanchor first.
+    void ScheduleSpeedChange(float new_speed, int64_t aop_at_us);
+
+    // Get current media time from AOP playhead. Walks the rate
+    // envelope to find the segment active at (aop - output_latency).
     int64_t CurrentTimeUS(int64_t aop_playhead_us) const;
 
     // Convert media time to frame index
@@ -160,19 +179,42 @@ public:
     // Call once when audio session is activated. Falls back to DEFAULT_LATENCY_US on failure.
     void MeasureOutputLatency(uint32_t device_id, int32_t sample_rate);
 
-    // Getters for pump loop
-    int64_t MediaAnchorUS() const { return m_media_anchor_us.load(std::memory_order_relaxed); }
-    float Speed() const { return m_speed.load(std::memory_order_relaxed); }
+    // Getters for pump loop. Speed() returns the LATEST scheduled
+    // segment's speed (the target the SSE renders new samples at).
+    float Speed() const;
+
+    // The CURRENTLY-AUDIBLE rate (the active segment at heard_aop).
+    // Use this when video must track the rate the user is actually
+    // hearing — e.g., advancePosition's frame stride during a
+    // shuttle-ladder keypress, where m_speed has staged the new
+    // target but the audio device is still draining the prior rate.
+    float ActiveSpeed(int64_t aop_playhead_us) const;
     int64_t OutputLatencyUS() const { return m_output_latency_us.load(std::memory_order_relaxed); }
 
     // Set the QAudioSink buffer latency (call after each AOP Start).
     // Total output latency = CoreAudio device latency + sink buffer.
+    // This is ALSO the drain duration used by ScheduleSpeedChange's
+    // default scheduling offset (see PlaybackController::SetSpeed).
     void SetSinkBufferLatency(int64_t sink_us);
 
+public:
+    struct Segment {
+        int64_t start_aop_us;    // aop_playhead at which this rate takes effect
+        int64_t start_media_us;  // media-time projection at start_aop_us
+        float   speed;           // signed rate (negative = reverse)
+    };
 private:
-    std::atomic<int64_t> m_media_anchor_us{0};   // Media time at last reanchor
-    std::atomic<int64_t> m_aop_epoch_us{0};      // AOP playhead at last reanchor
-    std::atomic<float> m_speed{1.0f};            // Signed speed (negative = reverse)
+    // Segments sorted by start_aop_us ascending. Stored as an immutable
+    // vector swapped via std::atomic_store(shared_ptr) — read path is
+    // lock-free: atomic_load the snapshot, walk it. Write path (Reanchor,
+    // ScheduleSpeedChange) builds a new vector and swaps the pointer.
+    // Only main thread writes; pump + CVDisplayLink tick read concurrently.
+    using SegmentVec = std::vector<Segment>;
+    std::shared_ptr<SegmentVec> m_segments;
+    // Serializes the read-modify-write in ScheduleSpeedChange (load current,
+    // append, store new). Held only during pointer manipulation, never
+    // touched by the read path. Negligible — single-writer in practice.
+    mutable std::mutex m_write_mu;
 
     // Total audio output latency = device_latency + sink_buffer
     std::atomic<int64_t> m_output_latency_us{DEFAULT_LATENCY_US};
@@ -358,6 +400,7 @@ public:
         double cadence_p50_ms;
         double cadence_p95_ms;
         double cadence_p99_ms;
+        double cadence_max_ms;        // single worst gap between successful setFrame calls
         double drift_p50_s;
         double drift_p95_s;
         double drift_p99_s;
@@ -445,6 +488,15 @@ private:
     static constexpr int AUDIO_DRY_CONSECUTIVE = 3;       // 3 ticks of buf=0 → audio-master
     static constexpr int AUDIO_HEALTHY_CONSECUTIVE = 10;  // 10 ticks of buf>0 → back to PLL
 
+    // ---- Shuttle free-run mode ----
+    // Above this absolute speed, video must NEVER be pinned to the audio
+    // clock — SSE can't sustain decimation at extreme rates, the audio
+    // device runs dry, and pinning video to the dry audio clock produces
+    // multi-frame stalls (~1s gaps between displayed frames at 32×).
+    // Shuttle boundary lives at emp::TimelineMediaBuffer::SHUTTLE_FREE_RUN_SPEED
+    // (canonical single owner in the lower layer).
+    bool m_was_shuttle_mode{false};  // detect transitions back to normal play
+
     // ---- A/V sync PLL (phase-locked loop) ----
     // Gently steers video frame accumulator toward audio clock each tick.
     // Eliminates visible skip/hold artifacts while maintaining tight sync.
@@ -459,11 +511,31 @@ private:
     std::atomic<int64_t> m_prefetched_backward{0};  // TMB has clips verified back to here
     std::atomic<bool> m_prefetch_pending{false};     // true while a prefetch dispatch is queued
 
-    static constexpr int64_t PREFETCH_LOOKAHEAD = 150;  // ~6s at 25fps
-    static constexpr int64_t PREFETCH_MARGIN = 120;      // dispatch this many frames before frontier
+    static constexpr int64_t PREFETCH_LOOKAHEAD = 150;  // ~6s at 25fps @1×
+    static constexpr int64_t PREFETCH_MARGIN = 120;      // dispatch this many frames before frontier @1×
 
     void prefetchClips();            // the prefetch algorithm — runs on main thread
     void resetPrefetchFrontiers();   // direction changed — restart tracking from current pos
+
+    // Speed-scaled horizons. Without scaling, at 32× the 150-frame lookahead
+    // is only ~187ms of wall-time lead — far less than the 1–3s a fresh clip's
+    // first decode (file open + VT init + first GOP) needs, so the upcoming
+    // clip isn't even submitted for READER_WARM until the playhead is already
+    // 187ms away. Multiplying by |speed| keeps lead time constant in WALL TIME
+    // regardless of shuttle speed. This MUST be paired with proximity-priority
+    // READER_WARM picking in `process_next_decode_prep_job` — without (2), the
+    // expanded warm queue at high speed overloads the single prep_worker and
+    // the imminent clip waits at the queue tail (LIFO over Lua's sequence-
+    // ordered insertions), making the freeze WORSE (live-confirmed: 9.8s vs
+    // 6.9s pre-scaling).
+    int64_t speedScaledLookahead() const {
+        float spd = std::max(1.0f, std::abs(m_speed.load(std::memory_order_relaxed)));
+        return static_cast<int64_t>(PREFETCH_LOOKAHEAD * spd);
+    }
+    int64_t speedScaledMargin() const {
+        float spd = std::max(1.0f, std::abs(m_speed.load(std::memory_order_relaxed)));
+        return static_cast<int64_t>(PREFETCH_MARGIN * spd);
+    }
 
     // ---- Dependencies ----
     emp::TimelineMediaBuffer* m_tmb{nullptr};

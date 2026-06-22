@@ -103,37 +103,106 @@ std::string pumpFlagsStr(uint8_t flags) {
 // PlaybackClock implementation
 // ============================================================================
 
+// Read paths use std::atomic_load_explicit(&m_segments, acquire) directly.
+// Cheap (one atomic refcount increment); returned shared_ptr keeps the
+// vector alive even if the writer swaps the pointer mid-walk.
+
 void PlaybackClock::Reanchor(int64_t media_time_us, float speed, int64_t aop_playhead_us) {
-    m_media_anchor_us.store(media_time_us, std::memory_order_relaxed);
-    m_aop_epoch_us.store(aop_playhead_us, std::memory_order_relaxed);
-    m_speed.store(speed, std::memory_order_relaxed);
+    auto fresh = std::make_shared<SegmentVec>();
+    fresh->reserve(32);
+    fresh->push_back({aop_playhead_us, media_time_us, speed});
+    std::lock_guard<std::mutex> lk(m_write_mu);
+    std::atomic_store_explicit(&m_segments, fresh, std::memory_order_release);
+}
+
+void PlaybackClock::ScheduleSpeedChange(float new_speed, int64_t aop_at_us) {
+    std::lock_guard<std::mutex> lk(m_write_mu);
+    auto current = std::atomic_load_explicit(&m_segments, std::memory_order_acquire);
+    JVE_ASSERT(current && !current->empty(),
+        "ScheduleSpeedChange called before Reanchor — clock has no baseline segment");
+
+    // Build a new vector: copy keep-prefix, append new segment. Coalesce
+    // by trimming any prior pending segments scheduled AT-OR-AFTER aop_at_us
+    // (a press faster than the prior drain replaces those pending entries).
+    auto fresh = std::make_shared<SegmentVec>();
+    fresh->reserve(current->size() + 1);
+    for (const auto& s : *current) {
+        if (s.start_aop_us >= aop_at_us) break;
+        fresh->push_back(s);
+    }
+    JVE_ASSERT(!fresh->empty(),
+        "ScheduleSpeedChange: coalesce trimmed the baseline segment — "
+        "aop_at_us is at or before Reanchor's start_aop");
+
+    const Segment& prev = fresh->back();
+    int64_t elapsed = aop_at_us - prev.start_aop_us;
+    double delta = static_cast<double>(elapsed) * prev.speed;
+    int64_t start_media = (prev.speed >= 0)
+        ? prev.start_media_us + static_cast<int64_t>(std::floor(delta))
+        : prev.start_media_us + static_cast<int64_t>(std::ceil(delta));
+
+    fresh->push_back({aop_at_us, start_media, new_speed});
+    std::atomic_store_explicit(&m_segments, fresh, std::memory_order_release);
 }
 
 int64_t PlaybackClock::CurrentTimeUS(int64_t aop_playhead_us) const {
-    int64_t anchor = m_media_anchor_us.load(std::memory_order_relaxed);
-    int64_t epoch = m_aop_epoch_us.load(std::memory_order_relaxed);
-    float speed = m_speed.load(std::memory_order_relaxed);
     int64_t output_latency = m_output_latency_us.load(std::memory_order_relaxed);
 
-    int64_t elapsed_us = aop_playhead_us - epoch;
+    // The user hears samples that were fed to the sink output_latency ago.
+    // Project from the segment that was active at the time those samples
+    // were rendered, not from the segment currently being fed.
+    int64_t heard_aop = aop_playhead_us - output_latency;
 
-    // Compensate for audio output latency (OS mixer + driver + DAC)
-    // The playhead reports audio consumed by OS, but there's additional delay
-    // before it reaches the speakers. Subtract this to sync video with heard audio.
-    int64_t compensated_elapsed_us = std::max<int64_t>(0, elapsed_us - output_latency);
+    auto segs = std::atomic_load_explicit(&m_segments, std::memory_order_acquire);
+    JVE_ASSERT(segs && !segs->empty(),
+        "CurrentTimeUS called before Reanchor — clock has no segments");
 
-    // Apply speed scaling
-    double delta = static_cast<double>(compensated_elapsed_us) * speed;
-
-    // Symmetric rounding: floor for positive speed, ceil for negative
-    int64_t result;
-    if (speed >= 0) {
-        result = anchor + static_cast<int64_t>(std::floor(delta));
-    } else {
-        result = anchor + static_cast<int64_t>(std::ceil(delta));
+    // Find the latest segment with start_aop_us <= heard_aop. Scan from
+    // back: the active segment for the current tick is almost always the
+    // most recent or the one before.
+    const Segment* active = nullptr;
+    for (auto it = segs->rbegin(); it != segs->rend(); ++it) {
+        if (it->start_aop_us <= heard_aop) { active = &(*it); break; }
     }
 
-    return result;
+    // heard_aop precedes the oldest segment: pre-roll window after a fresh
+    // Reanchor, before the device has consumed output_latency of samples.
+    // Return the segment's anchor (no advance yet — audio not yet heard).
+    if (!active) {
+        return segs->front().start_media_us;
+    }
+
+    int64_t elapsed = heard_aop - active->start_aop_us;
+    double delta = static_cast<double>(elapsed) * active->speed;
+    if (active->speed >= 0) {
+        return active->start_media_us + static_cast<int64_t>(std::floor(delta));
+    }
+    return active->start_media_us + static_cast<int64_t>(std::ceil(delta));
+}
+
+float PlaybackClock::Speed() const {
+    auto segs = std::atomic_load_explicit(&m_segments, std::memory_order_acquire);
+    JVE_ASSERT(segs && !segs->empty(),
+        "Speed() called before Reanchor — clock has no segments");
+    // Latest scheduled segment is the target speed (what SSE renders new
+    // samples at, what AudioPump uses for fetch-direction branching).
+    return segs->back().speed;
+}
+
+float PlaybackClock::ActiveSpeed(int64_t aop_playhead_us) const {
+    int64_t output_latency = m_output_latency_us.load(std::memory_order_relaxed);
+    int64_t heard_aop = aop_playhead_us - output_latency;
+
+    auto segs = std::atomic_load_explicit(&m_segments, std::memory_order_acquire);
+    JVE_ASSERT(segs && !segs->empty(),
+        "ActiveSpeed called before Reanchor — clock has no segments");
+
+    for (auto it = segs->rbegin(); it != segs->rend(); ++it) {
+        if (it->start_aop_us <= heard_aop) { return it->speed; }
+    }
+    // heard_aop precedes the oldest segment (pre-roll); use the oldest
+    // segment's speed since that IS the rate the device is feeding.
+    return segs->front().speed;
 }
 
 void PlaybackClock::MeasureOutputLatency(uint32_t /*device_id*/, int32_t sample_rate) {
@@ -1181,24 +1250,62 @@ void PlaybackController::SetSpeed(float signed_speed) {
     JVE_ASSERT(signed_speed != 0, "PlaybackController::SetSpeed: speed cannot be zero");
 
     float abs_speed = std::abs(signed_speed);
-    JVE_ASSERT(abs_speed <= 16.0f,
-        "PlaybackController::SetSpeed: abs_speed exceeds MAX_SPEED_DECIMATE (16)");
+    // 32x is the top shuttle rung (matches core.playback.shuttle_ladder MAX).
+    // Above it the decoder + prefetch can't keep the playhead's frame cached.
+    JVE_ASSERT(abs_speed <= 32.0f,
+        "PlaybackController::SetSpeed: abs_speed exceeds max shuttle speed (32)");
+
+    int new_dir = (signed_speed >= 0) ? 1 : -1;
+    int prev_dir = m_direction.load(std::memory_order_relaxed);
 
     m_speed.store(abs_speed, std::memory_order_relaxed);
-    int dir = (signed_speed >= 0) ? 1 : -1;
-    m_direction.store(dir, std::memory_order_relaxed);
+    m_direction.store(new_dir, std::memory_order_relaxed);
 
-    // While playing with audio, reanchor + refill + restart the device at the
-    // live position under the new speed. prefillAudioAtTime is the single path
-    // that correctly restarts the QAudioSink that Flush() stops.
-    if (m_playing.load(std::memory_order_relaxed) &&
-        m_has_audio.load(std::memory_order_relaxed) && m_aop && m_sse) {
+    bool playing_with_audio = m_playing.load(std::memory_order_relaxed) &&
+        m_has_audio.load(std::memory_order_relaxed) && m_aop && m_sse;
+
+    // Mid-play same-direction speed change (the JKL ramp): take the LIGHTWEIGHT
+    // path. The audio device keeps streaming — no Flush, no Reset, no CoreAudio
+    // spin-up. The clock reanchors at the live position with the new speed (so
+    // video projects forward at the new rate from a continuous t-axis); the
+    // SSE retargets m_speed + m_quality without re-seating m_current_time_us
+    // (so the next grain renders from where the pump left off, just at the
+    // new ratio). Eight successive L presses = eight three-field writes, not
+    // eight ~200ms device restarts.
+    //
+    // Direction flip mid-play and cold start (was stopped, just engaging audio)
+    // still go through the canonical Flush+Reset+prefill+Start primitive —
+    // the device has to be re-anchored to a fresh sign-correct PCM stream,
+    // which only prefillAudioAtTime does. Above 4x the quality mode is
+    // Q3_DECIMATE (sample-skip "chipmunk"); decimation plays at TRUE speed
+    // so video stays synced right up to the 32x cap.
+    if (playing_with_audio && prev_dir == new_dir) {
+        // The new speed becomes audible when heard_aop reaches the press
+        // moment's aop_playhead — i.e., when output_latency µs of new-speed
+        // SSE samples have made it through the device queue. Segments live
+        // in heard-aop space; CurrentTimeUS subtracts output_latency before
+        // looking them up. So we schedule the new segment at aop_playhead
+        // (the press moment), and the latency subtraction in CurrentTimeUS
+        // naturally defers its activation until the drain completes.
+        int64_t aop_playhead = m_aop->PlayheadTimeUS();
+        m_clock.ScheduleSpeedChange(signed_speed, aop_playhead);
+        sse::QualityMode mode = static_cast<sse::QualityMode>(qualityModeForSpeed(abs_speed));
+        m_sse->SetSpeed(signed_speed, mode);
+        JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d lightweight (same-dir mid-play)",
+            signed_speed, qualityModeForSpeed(abs_speed));
+    } else if (playing_with_audio) {
+        // Direction flip while playing: full restart so the audio stream
+        // re-anchors with the correct sign + crossfade.
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t current_time_us = m_clock.CurrentTimeUS(aop_playhead);
-        prefillAudioAtTime(current_time_us, dir, abs_speed);
+        prefillAudioAtTime(current_time_us, new_dir, abs_speed);
+        JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d restart (direction flip)",
+            signed_speed, qualityModeForSpeed(abs_speed));
+    } else {
+        // Not playing — m_speed/m_direction are staged for the next Play().
+        JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d staged (not playing)",
+            signed_speed, qualityModeForSpeed(abs_speed));
     }
-
-    JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d", signed_speed, qualityModeForSpeed(abs_speed));
 }
 
 void PlaybackController::FlushAudioForMixChange() {
@@ -1342,7 +1449,7 @@ void PlaybackController::prefetchClips() {
         break;
     }
     case 1: {
-        int64_t prefetch_goal = current_position + PREFETCH_LOOKAHEAD;
+        int64_t prefetch_goal = current_position + speedScaledLookahead();
         int64_t already_fetched = m_prefetched_forward.load(std::memory_order_relaxed);
         if (already_fetched < prefetch_goal) {
             load_clips_in_range(already_fetched, prefetch_goal);
@@ -1351,7 +1458,7 @@ void PlaybackController::prefetchClips() {
         break;
     }
     case -1: {
-        int64_t prefetch_goal = std::max(int64_t(0), current_position - PREFETCH_LOOKAHEAD);
+        int64_t prefetch_goal = std::max(int64_t(0), current_position - speedScaledLookahead());
         int64_t already_fetched = m_prefetched_backward.load(std::memory_order_relaxed);
         if (already_fetched > prefetch_goal) {
             load_clips_in_range(prefetch_goal, already_fetched);
@@ -1529,10 +1636,11 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
     // Prefetch: dispatch clip loading when playhead approaches the frontier
     if (!m_prefetch_pending.load(std::memory_order_relaxed)) {
         bool need_prefetch = false;
+        const int64_t scaled_margin = speedScaledMargin();
         if (dir > 0) {
-            need_prefetch = (new_pos + PREFETCH_MARGIN >= m_prefetched_forward.load(std::memory_order_relaxed));
+            need_prefetch = (new_pos + scaled_margin >= m_prefetched_forward.load(std::memory_order_relaxed));
         } else if (dir < 0) {
-            need_prefetch = (new_pos - PREFETCH_MARGIN <= m_prefetched_backward.load(std::memory_order_relaxed));
+            need_prefetch = (new_pos - scaled_margin <= m_prefetched_backward.load(std::memory_order_relaxed));
         }
         if (need_prefetch) {
             tick.flags |= TickFlags::PREFETCH;
@@ -1609,7 +1717,52 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
 
     int64_t current = m_position.load(std::memory_order_relaxed);
     int dir = m_direction.load(std::memory_order_relaxed);
-    float speed = m_speed.load(std::memory_order_relaxed);
+
+    // During a shuttle-ladder press, m_speed has the staged TARGET while the
+    // audio device is still draining the prior rate's queued samples. Track
+    // the CURRENTLY-AUDIBLE rate so the video frame stride matches what the
+    // user hears through each transition; the rate envelope walks the
+    // staircase as heard_aop crosses each segment. Backward play and the
+    // not-yet-running-pump branch fall back to the controller atomic.
+    //
+    // Fetch aop_playhead ONCE — it's used for both the speed lookup and the
+    // audio-master/PLL block below; sampling twice would let the two reads
+    // see different values and turn micro-jitter into measurable A/V drift
+    // (test_playback_av_sync Test 3).
+    bool audio_active = dir > 0 && m_has_audio.load(std::memory_order_relaxed) &&
+        m_audio_pump && m_audio_pump->IsRunning() && m_aop;
+    int64_t aop_playhead = audio_active ? m_aop->PlayheadTimeUS() : 0;
+
+    float speed = audio_active
+        ? m_clock.ActiveSpeed(aop_playhead)
+        : m_speed.load(std::memory_order_relaxed);
+
+    // Shuttle free-run gate. At intent speed > SHUTTLE_FREE_RUN_SPEED video
+    // must NOT pin to the audio clock: SSE can't sustain decimation at
+    // extreme rates, the device runs dry, and audio-master would freeze
+    // video for the duration of the dry window (~1s stalls at 32×). Audio
+    // is allowed to scrub/gap; video advances on m_speed via the PLL block
+    // below (with audio_active=false-equivalent semantics for the master
+    // gate). Read m_speed (USER intent) not ActiveSpeed (HEARD rate) —
+    // when SSE is starved heard_aop lags and would keep us in normal mode
+    // past the user's shuttle request.
+    float intent_speed = m_speed.load(std::memory_order_relaxed);
+    bool shuttle_mode = std::abs(intent_speed) > emp::TimelineMediaBuffer::SHUTTLE_FREE_RUN_SPEED;
+
+    // On the speed-cross back into normal play, re-anchor the clock so the
+    // accumulated shuttle-window drift (clock projected at requested speed
+    // while device fell behind) doesn't show up as audio "racing forward"
+    // catch-up at 1×. New baseline: video frame = where we are, audio
+    // playhead = where the device actually is.
+    if (m_was_shuttle_mode && !shuttle_mode && audio_active) {
+        int64_t media_us = (current * 1000000LL * m_fps_den) / m_fps_num;
+        m_clock.Reanchor(media_us, intent_speed, aop_playhead);
+        m_fractional_frames = 0.0;
+        JVE_LOG_EVENT(Ticks,
+            "shuttle→play: Reanchor at frame %lld speed %.2f aop %lld",
+            (long long)current, intent_speed, (long long)aop_playhead);
+    }
+    m_was_shuttle_mode = shuttle_mode;
 
     // Audio-master detection: engage when PLL can't maintain sync.
     // Trigger: audio stall (buf=0 for AUDIO_DRY_CONSECUTIVE ticks).
@@ -1618,12 +1771,22 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     // Audio-master skipped for backward play: stalled backward audio would
     // freeze video at the stalled position. PLL with drift cap handles the
     // cadence correction instead.
-    if (dir > 0 &&
-        m_has_audio.load(std::memory_order_relaxed) &&
-        m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
+    // Audio-master also skipped in shuttle mode (see free-run gate above) —
+    // force-release if engaged from a prior lower-speed window so video
+    // doesn't carry the hold across the ladder rung that crossed >2×.
+    if (shuttle_mode) {
+        if (m_audio_master_position) {
+            m_audio_master_position = false;
+            m_fractional_frames = 0.0;
+            JVE_LOG_EVENT(Ticks,
+                "audio-master OFF: shuttle speed %.2f× (video free-runs)",
+                intent_speed);
+        }
+        m_consecutive_audio_dry = 0;
+        m_consecutive_audio_healthy = 0;
+    } else if (audio_active) {
 
         int64_t buf = m_aop->BufferedFrames();
-        int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t audio_time_us = m_clock.CurrentTimeUS(aop_playhead);
         int64_t video_time_us = (current * 1000000LL * m_fps_den) / m_fps_num;
         double drift_s = static_cast<double>(video_time_us - audio_time_us) / 1000000.0;
@@ -1683,8 +1846,11 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     if (m_has_audio.load(std::memory_order_relaxed) &&
         m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
 
-        int64_t aop_playhead = m_aop->PlayheadTimeUS();
-        int64_t audio_time_us = m_clock.CurrentTimeUS(aop_playhead);
+        // Re-use the aop_playhead sampled at the top of the function when
+        // audio_active was true; for backward play (audio_active=false) we
+        // sample fresh — dir<0 takes a different correction path anyway.
+        int64_t aop_at = audio_active ? aop_playhead : m_aop->PlayheadTimeUS();
+        int64_t audio_time_us = m_clock.CurrentTimeUS(aop_at);
         int64_t video_time_us = (current * 1000000LL * m_fps_den) / m_fps_num;
         diff_seconds = static_cast<double>(video_time_us - audio_time_us) / 1000000.0;
         has_drift_measurement = true;
@@ -2000,6 +2166,7 @@ PlaybackController::DiagSummary PlaybackController::GetDiagSummary() const {
     s.cadence_p50_ms = pctd(cadences, 0.50);
     s.cadence_p95_ms = pctd(cadences, 0.95);
     s.cadence_p99_ms = pctd(cadences, 0.99);
+    s.cadence_max_ms = cadences.empty() ? 0.0 : cadences.back();  // worst single gap
     s.drift_p50_s = pctd(drifts, 0.50);
     s.drift_p95_s = pctd(drifts, 0.95);
     s.drift_p99_s = pctd(drifts, 0.99);

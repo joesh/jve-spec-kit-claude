@@ -605,14 +605,20 @@ static int lua_emp_pcm_gc(lua_State* L) {
 // TimelineMediaBuffer (TMB) bindings
 // ============================================================================
 
-// EMP.TMB_CREATE(pool_threads) -> tmb | nil, err
+// EMP.TMB_CREATE([pool_threads]) -> tmb | nil, err
+// Omit pool_threads to use the hardware-adaptive default (recommended).
+// Passing 0 = synchronous (no pool, tests only); >=3 = explicit size.
 static int lua_emp_tmb_create(lua_State* L) {
-    int pool_threads = static_cast<int>(luaL_optinteger(L, 1, 3));
-    if (pool_threads < 0 || (pool_threads != 0 && pool_threads < 3)) {
-        return luaL_error(L, "TMB_CREATE: pool_threads must be 0 (sync) or >= 3 (1 prep + 1 video + 1 audio), got %d", pool_threads);
+    std::unique_ptr<emp::TimelineMediaBuffer> tmb;
+    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
+        tmb = emp::TimelineMediaBuffer::Create();
+    } else {
+        int pool_threads = static_cast<int>(luaL_checkinteger(L, 1));
+        if (pool_threads < 0 || (pool_threads != 0 && pool_threads < 3)) {
+            return luaL_error(L, "TMB_CREATE: pool_threads must be 0 (sync) or >= 3 (1 prep + 1 video + 1 audio), got %d", pool_threads);
+        }
+        tmb = emp::TimelineMediaBuffer::Create(pool_threads);
     }
-
-    auto tmb = emp::TimelineMediaBuffer::Create(pool_threads);
     // Convert unique_ptr to shared_ptr for the global registry
     std::shared_ptr<emp::TimelineMediaBuffer> shared_tmb(std::move(tmb));
 
@@ -2164,6 +2170,8 @@ static int lua_playback_get_diag_summary(lua_State* L) {
     lua_setfield(L, -2, "cadence_p95_ms");
     lua_pushnumber(L, s.cadence_p99_ms);
     lua_setfield(L, -2, "cadence_p99_ms");
+    lua_pushnumber(L, s.cadence_max_ms);
+    lua_setfield(L, -2, "cadence_max_ms");
 
     lua_pushnumber(L, s.drift_p50_s);
     lua_setfield(L, -2, "drift_p50_s");

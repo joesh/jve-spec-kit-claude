@@ -115,11 +115,11 @@ std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create(int pool_thread
     return tmb;
 }
 
-// Single source of truth for the default async pool size. Lives next to
-// start_workers() — if the thread-role split changes, the minimum updates
-// here in the same diff as the assert.
+// Reserves 2 cores for main/UI/render; clamps to the pool-layout invariants.
 std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create() {
-    return Create(3);  // 1 prep + 1 video + 1 audio — see start_workers()
+    const int hw = static_cast<int>(std::thread::hardware_concurrency());
+    const int sized = std::clamp(hw - 2, MIN_POOL_THREADS, MAX_POOL_THREADS);
+    return Create(sized);
 }
 
 // ============================================================================
@@ -226,6 +226,7 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
                 warm.track = track;
                 warm.clip_id = c.clip_id;
                 warm.media_path = c.media_path;
+                warm.sequence_start = c.sequence_start;
                 submit_pre_buffer(warm);
             }
             // SPEED_DETECT probes are NOT submitted here — that's SetPlayhead's
@@ -285,6 +286,7 @@ void TimelineMediaBuffer::AddClips(TrackId track, std::vector<ClipInfo> clips) {
             warm.track = track;
             warm.clip_id = c.clip_id;
             warm.media_path = c.media_path;
+            warm.sequence_start = c.sequence_start;
             submit_pre_buffer(warm);
         }
         // Priority probe for un-probed video clips.
@@ -621,16 +623,17 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         return result;
     }
 
-    // ── Cache miss: nearest-frame fallback (cache_only) or sync decode ──
-
-    // During playback (cache_only), prefetch adaptive stride may have decoded
-    // a nearby frame but not this exact one. Search for the nearest cached
-    // frame from the same clip in the playback direction.
-    // Direction-aware: forward play only looks ahead, reverse only looks behind.
-    // This prevents showing a frame the viewer already passed (visual reversal).
-    // MAX_NEAREST_DISTANCE bounds the fallback: never show a frame from
-    // hundreds of frames away (would display wrong content during stalls).
-    static constexpr int64_t MAX_NEAREST_DISTANCE = 16;  // adaptive stride max (8) * 2
+    // Cache miss: search for the nearest cached frame in the playback
+    // direction (forward-only avoids visual reversal at normal play). At
+    // shuttle the producer-side stride scales with speed, so the cache is
+    // intentionally sparse; lift the consumer bound to match or the display
+    // freezes on a too-far cached frame.
+    static constexpr int64_t MAX_NEAREST_DISTANCE_BASE = MAX_STRIDE * 2;
+    const float speed_mag = std::abs(m_playhead_speed.load(std::memory_order_relaxed));
+    const bool shuttle_mode = speed_mag > SHUTTLE_FREE_RUN_SPEED;
+    const int64_t max_nearest_distance = shuttle_mode
+        ? INT64_MAX
+        : MAX_NEAREST_DISTANCE_BASE;
     if (cache_only) {
         const std::string& cid = clip->clip_id;
         auto lo = ts.video_cache.lower_bound(timeline_frame);
@@ -646,14 +649,20 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         if (dir >= 0 && lo != ts.video_cache.end()
             && lo->second.clip_id == cid && !lo->second.offline) {
             int64_t d = lo->first - timeline_frame;
-            if (d < best_dist && d <= MAX_NEAREST_DISTANCE) { best = &lo->second; best_dist = d; }
+            if (d < best_dist && d <= max_nearest_distance) { best = &lo->second; best_dist = d; }
         }
-        // Check entry before timeline_frame (preferred for reverse play)
-        if (dir <= 0 && lo != ts.video_cache.begin()) {
+        // Check entry before timeline_frame. Normal play: only for reverse
+        // (`dir <= 0`). Shuttle mode: ALSO for forward play — at >2× the
+        // decoder is behind the playhead by design and the latest decoded
+        // frame is BEFORE the requested timeline frame. The "already passed"
+        // concern that normally rules out look-behind in forward play
+        // doesn't apply: the user is scrubbing and expects "show me the
+        // closest thing the decoder has, choppy is OK."
+        if ((dir <= 0 || shuttle_mode) && lo != ts.video_cache.begin()) {
             auto prev = std::prev(lo);
             if (prev->second.clip_id == cid && !prev->second.offline) {
                 int64_t d = timeline_frame - prev->first;
-                if (d < best_dist && d <= MAX_NEAREST_DISTANCE) { best = &prev->second; best_dist = d; }
+                if (d < best_dist && d <= max_nearest_distance) { best = &prev->second; best_dist = d; }
             }
         }
         if (best) {
@@ -1473,8 +1482,9 @@ int TimelineMediaBuffer::stride_for_clip(const TrackId& track, const ClipInfo& c
     if (dit == m_decode_speed_cache.end()) return 1;
     if (dit->second <= 0) return 1;  // sentinel: first sample only, need second
 
-    // At higher playback speeds, frames pass faster → need wider stride.
-    // speed=2.0 means frame_period_ms is effectively halved.
+    // Higher speed → tighter effective_period → wider stride. Per-clip single-
+    // threaded (claim_track_for_prefetch); slower CPU shows up as higher
+    // decode_ms → wider stride, so graceful degradation falls out naturally.
     float speed = std::max(1.0f, std::abs(m_playhead_speed.load(std::memory_order_relaxed)));
     double frame_period_ms = 1000.0 * clip.rate_den / clip.rate_num;
     double effective_period = frame_period_ms / speed;
@@ -2279,7 +2289,7 @@ std::string TimelineMediaBuffer::snapshot_pool_state(const char* action, const T
 
 void TimelineMediaBuffer::start_workers(int count) {
     m_shutdown.store(false);
-    assert(count >= 3 && "start_workers: need >= 3 (1 prep + 1 video + 1 audio)");
+    assert(count >= MIN_POOL_THREADS && "start_workers: need >= MIN_POOL_THREADS (1 prep + 1 video + 1 audio)");
 
     // 1 prep worker (SPEED_DETECT, READER_WARM — can block on codec init).
     // N-2 video workers (prefetch only — never blocked by prep jobs).
@@ -2340,6 +2350,59 @@ void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
 }
 
 // ============================================================================
+// pick_proximity_warm_job — pure picker (no controller state, unit-testable)
+// ============================================================================
+//
+// Returns the index of the READER_WARM job whose `sequence_start` is closest
+// to `playhead` in `direction`. Two-pass:
+//   1. Prefer the closest job AHEAD of the playhead in `direction`.
+//   2. If every job is BEHIND, fall back to closest-by-abs-distance.
+// `direction==0` (park) treats all jobs by absolute distance, same code path.
+//
+// SPEED_DETECT jobs and any non-WARM jobs are ignored here — the caller
+// (`process_next_decode_prep_job`) drains SPEED_DETECT first.
+//
+// Fail-fast: any READER_WARM job missing `sequence_start` (default -1) is
+// a programmer error at the submission site, never silently ordered last.
+int TimelineMediaBuffer::pick_proximity_warm_job(
+    const std::vector<PreBufferJob>& jobs, int64_t playhead, int direction)
+{
+    int pick = -1;
+    int64_t best_dist = INT64_MAX;
+    for (int i = static_cast<int>(jobs.size()) - 1; i >= 0; --i) {
+        const auto& job = jobs[i];
+        if (job.type != PreBufferJob::READER_WARM) continue;
+        if (job.sequence_start < 0) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                "pick_proximity_warm_job: READER_WARM job missing "
+                "sequence_start (clip_id=%s) — submission site must set it",
+                job.clip_id.c_str());
+            JVE_ASSERT(false, buf);
+        }
+        int64_t signed_dist;
+        if (direction == 0) {
+            signed_dist = std::abs(job.sequence_start - playhead);
+        } else {
+            signed_dist = direction * (job.sequence_start - playhead);
+        }
+        if (signed_dist >= 0 && signed_dist < best_dist) {
+            best_dist = signed_dist; pick = i;
+        }
+    }
+    if (pick < 0) {
+        int64_t best_abs = INT64_MAX;
+        for (int i = static_cast<int>(jobs.size()) - 1; i >= 0; --i) {
+            const auto& job = jobs[i];
+            if (job.type != PreBufferJob::READER_WARM) continue;
+            int64_t d = std::abs(job.sequence_start - playhead);
+            if (d < best_abs) { best_abs = d; pick = i; }
+        }
+    }
+    return pick;
+}
+
+// ============================================================================
 // process_next_decode_prep_job — dequeue and execute one SPEED_DETECT or READER_WARM
 // ============================================================================
 
@@ -2350,15 +2413,25 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
         std::lock_guard<std::mutex> lock(m_jobs_mutex);
         if (m_jobs.empty()) return false;
 
-        // Priority: SPEED_DETECT first, then READER_WARM
+        // Priority: SPEED_DETECT first (these unblock stride decisions for the
+        // prefetcher), then READER_WARM by PROXIMITY to the current playhead in
+        // playback direction. The proximity-priority picker is load-bearing at
+        // shuttle speed: PlaybackController's speed-scaled prefetch horizon
+        // submits ~50 warm jobs per dispatch at 32× across a wide range; without
+        // proximity sort the imminent clip (the next boundary the playhead is
+        // about to cross) sits behind dozens of far-future ones in the queue
+        // and the single prep_worker grinds through them serially, producing a
+        // ~10s visible freeze at the boundary (live-confirmed). With proximity
+        // sort the imminent clip is warmed first; far-future clips wait
+        // harmlessly until the prep_worker drains earlier jobs.
         int pick = -1;
         for (int i = static_cast<int>(m_jobs.size()) - 1; i >= 0; --i) {
             if (m_jobs[i].type == PreBufferJob::SPEED_DETECT) { pick = i; break; }
         }
         if (pick < 0) {
-            for (int i = static_cast<int>(m_jobs.size()) - 1; i >= 0; --i) {
-                if (m_jobs[i].type == PreBufferJob::READER_WARM) { pick = i; break; }
-            }
+            const int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
+            const int direction    = m_playhead_direction.load(std::memory_order_relaxed);
+            pick = pick_proximity_warm_job(m_jobs, playhead, direction);
         }
         if (pick < 0) return false;
 
@@ -3097,13 +3170,37 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
             // Decode one frame, then return to let worker re-pick most urgent track
             decoded_this_call = true;
             int stride = stride_for_clip(track, *seg.clip);
+
+            // First encounter with this clip → decode its leading boundary
+            // regardless of stride. At shuttle, stride can exceed clip length
+            // and skip the clip entirely; this guarantees at least one frame.
+            int64_t decode_pos = cursor.pos;
+            {
+                std::lock_guard<std::mutex> lock(m_tracks_mutex);
+                auto it = m_tracks.find(track);
+                if (it != m_tracks.end()) {
+                    const auto& cache = it->second.video_cache;
+                    bool clip_cached = false;
+                    for (const auto& kv : cache) {
+                        if (kv.second.clip_id == seg.clip->clip_id) {
+                            clip_cached = true;
+                            break;
+                        }
+                    }
+                    if (!clip_cached) {
+                        decode_pos = (direction > 0)
+                            ? seg.clip->sequence_start
+                            : seg.clip->sequence_end() - 1;
+                    }
+                }
+            }
             {
                 char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
-                EMP_LOG_DEBUG("PREFETCH: %s tf=%lld stride=%d playhead=%lld dir=%d clip=%.8s",
-                    tbuf, (long long)cursor.pos, stride, (long long)playhead,
-                    direction, seg.clip->clip_id.c_str());
+                EMP_LOG_DEBUG("PREFETCH: %s tf=%lld decode=%lld stride=%d playhead=%lld dir=%d clip=%.8s",
+                    tbuf, (long long)cursor.pos, (long long)decode_pos, stride,
+                    (long long)playhead, direction, seg.clip->clip_id.c_str());
             }
-            decode_into_cache(track, seg, cursor.pos, stride, direction,
+            decode_into_cache(track, seg, decode_pos, stride, direction,
                               held_reader, held_clip_id, last_good_frame);
             cursor.advance(stride);
             set_already_fetched_video(track, cursor.pos, direction);
@@ -3222,6 +3319,7 @@ void TimelineMediaBuffer::prefetch_worker() {
       try {
         TrackId target{TrackType::Video, 0};
         if (pick_video_track(target)) {
+            discard_already_played_prefetch(target);
             fill_prefetch(target);
             continue;
         }

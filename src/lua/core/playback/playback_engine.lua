@@ -578,7 +578,7 @@ function PlaybackEngine:_create_tmb()
         "PlaybackEngine:_create_tmb: fps not set")
 
     local EMP = qt_constants.EMP
-    self._tmb = EMP.TMB_CREATE(7)
+    self._tmb = EMP.TMB_CREATE()  -- hardware-adaptive: clamp(cores-2, 3, 16)
     assert(self._tmb, "PlaybackEngine:_create_tmb: TMB_CREATE returned nil")
 
     EMP.TMB_SET_SEQUENCE_RATE(self._tmb, self.fps_num, self.fps_den)
