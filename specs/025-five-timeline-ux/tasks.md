@@ -32,9 +32,13 @@ Each test must be run with `cd tests && luajit test_harness.lua synthetic/lua/te
   - **Rule 2.32 assert paths**: `pcall()` IncrementTimecode with missing `sequence_id` → returns false AND error message contains function name; `pcall()` with missing `project_id` → same; validate messages are actionable
 
 - [x] T004 [P] Write `tests/synthetic/lua/test_exclusive_toggle_track_pref.lua`
-  - Covers FR-005: create sequence with 3 audio tracks (A1 muted=false, A2 muted=true, A3 muted=false); execute ExclusiveToggleTrackPreference on A1 with property="muted"; verify A1 muted=true, A2 muted=false, A3 muted=false; verify undo does NOT exist (undoable=false); verify video tracks are unaffected; verify single-track-only edge case (no other tracks)
+  - **As-built (2026-06-21):** covers FR-005 isolate semantics for M/S/lock —
+    exclusive MUTE on A1 = "mute everything except A1" (A1 un-muted, A2/A3 muted);
+    re-click clears all mutes (reversible); exclusive SOLO = "solo only this";
+    exclusive LOCK = "lock everything except this"; video/audio populations
+    independent; undoable=false; single-track solo-isolate solos the lone track.
   - **Rule 2.32 assert paths**: `pcall()` with invalid `property` (e.g., `"volume"`) → returns false AND error message contains function name + the bad value; `pcall()` with missing `track_id` → returns false AND error message actionable
-  - **Locked clicked track is a graceful no-op, NOT an assert** (decision 2): execute ExclusiveToggleTrackPreference on a locked track → command succeeds with no effect (clicked track NOT toggled, no other track modified) — assert state is unchanged. Do NOT expect a crash/error here.
+  - **Mute/Solo on a locked clicked track is a graceful no-op, NOT an assert** (decision 2): command succeeds with no effect — assert state unchanged. The LOCK gesture itself is always allowed (isolate-lock even a locked track).
   - Use non-trivial initial state (mixed mute states, not all-false)
 
 ---
@@ -74,6 +78,7 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
   - Assert both clips are non-nil with module+callsite name in message
   - No DB access — pure computation on clip property objects
   - Module-local, returns `M`
+  - **As-built correction (2026-06-21):** the master-track identity above was WRONG — `master_layer_track_id`/`master_audio_track_id` are NULL on every ordinary media clip (0 of 3603 clips across all real projects carry one), so that keying made the feature inert. Source identity is **`clip.sequence_id`** (the master sequence, the "source tape" resolved through `media_refs`→`media`); the master-layer ids are NULL-tolerant *angle* discriminators that only exclude a different **explicit** layer (multicam/split-channel). Predicate now: both `sequence_id` present + equal, master-layer match (NULL==NULL ok), flush, contiguous source, subframe. Gap/generator = nil `sequence_id` → false. Spec.md FR-001 §Detection Rule updated to match. Also fixed `split_clip.lua` dropping `master_audio_track_id` on the right half. The chevrons render vertically centered in the track band.
 
 - [x] T009 [P] Refactor `src/lua/core/playback/playback_engine_transport.lua` — FR-003 shuttle speed ladder
   - Add module-local constants `local SHUTTLE_STEP = 0.25` and `local SHUTTLE_STEP_MAX = 2.0`
@@ -107,7 +112,7 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
 - [x] T012 [P] Create `src/lua/core/commands/exclusive_toggle_track_preference.lua` — ExclusiveToggleTrackPreference
   - Depends on T012a (shared `track_preference.set`)
   - Non-undoable (`SPEC.undoable = false`)
-  - Executor: assert `track_id`, `property`, `project_id`, `sequence_id`; assert `property == "muted" or property == "soloed"`; load clicked track; **if `track.locked` → no-op return** (graceful refusal per FR-005 — no crash, no other tracks touched; NOT an assert); `new_state = not track[property]`; load all tracks of same type (`VIDEO`/`AUDIO`) in sequence; `track_preference.set(clicked, property, new_state)`; for each other track `track_preference.set(other, property, not new_state)`
+  - **As-built (2026-06-21):** executor asserts `track_id`/`property`/`project_id`/`sequence_id` and `ISOLATE_TARGET[property] ~= nil` (property ∈ {muted, soloed, locked}). Per-property isolate target — `{soloed=true, muted=false, locked=false}` — so clicked→target, others→`not target` ("solo only this" / "mute|lock everything except this"). If already isolated (clicked==target AND every other==`not target`, compared via a `flag()` 0/1↔bool normalizer), clear the whole population to false (reversible). **Mute/Solo on a locked clicked track → no-op return**; the **lock** gesture is always allowed. Writes via shared `track_preference.set`. NB: `is_already_isolated` uses explicit if/else (not `cond and target or …`, which mis-evaluates when target is false).
   - Direct model writes via the shared helper (not recursive command dispatch — atomic, no nested command_manager invocations)
   - Register in commands init
 
@@ -128,7 +133,11 @@ These unblock multiple Phase 3.3 tasks and must complete before them.
   - Add `find_edit_under_cursor(view, x, y, width, height)` → `{frame, track_id, left_clip_id, right_clip_id}` or nil; iterate visible track clip pairs, check `|cursor_x - cut_x| <= EDIT_HIT_TOLERANCE_PX` and cursor y within track vertical bounds
   - Add `show_edit_context_menu(view, edit_info)` — builds actions table with: existing left-clip actions (Reveal, Match Frame, Split, Delete…), separator, "Join Through Edit" (enabled iff `through_edit.is_through_edit(left, right, kind)` **and the track is unlocked**; tooltip "Not a through-edit" or "Track is locked" when grayed), "Join All Through Edits" (enabled when at least one joinable/unlocked through-edit exists in the sequence)
   - In the existing right-click handler: call `find_edit_under_cursor()` first; if found → `show_edit_context_menu()`; else → existing `find_clip_under_cursor()` → `show_clip_context_menu()` (unchanged path)
-  - **As-built:** rather than a separate menu, the two Join items are APPENDED (after a separator) to the existing clip context menu when the right-click lands on an edit point. `find_edit_point_at_cursor` reuses the existing edge-trim hit test (`pick_edges_for_track` → `edge_picker` boundary within `EDGE_ZONE_PX`, both sides non-gap) — no new tolerance constant. Enablement is pure + unit-tested: `M.join_one_state` (locked → 'Track is locked'; not-through-edit → 'Not a through-edit') and `M.any_through_edit_joinable`. Disabled-item tooltips via `qt_constants.PROPERTIES.SET_TOOLTIP`.
+  - **As-built:** `find_edit_point_at_cursor` reuses the existing edge-trim hit test (`pick_edges_for_track` → `edge_picker` boundary within `EDGE_ZONE_PX`, both sides non-gap) — no new tolerance constant. Enablement is pure + unit-tested: `M.join_one_state` (locked → 'Track is locked'; not-through-edit → 'Not a through-edit') and `M.any_through_edit_joinable`. Disabled-item tooltips via `qt_constants.PROPERTIES.SET_TOOLTIP`.
+  - **As-built revision (2026-06-21, Joe):** the original "append the two Join items to the clip menu" was WRONG — right-clicking an edit selected one of the adjacent clips and showed the clip menu. A right-clicked edit is now its OWN gesture: detected FIRST in the right-click branch, it shows a dedicated `show_edit_context_menu` (Join Through Edit + Join All only) and does NOT select/act on a clip. Clip menu only when the cursor is not on an edit point. Popup plumbing factored into shared `resolve_popup_xy` + `present_actions_menu` helpers. PLUS: select-an-edit-and-Delete now joins (see T014b below).
+
+- [x] T014b Select-an-edit + Delete → JoinThroughEdit (FR-001 §Select-and-Delete; added 2026-06-21, Joe) — `src/lua/core/commands/delete_selection.lua`
+  - Conventional NLE through-edit removal: select the cut (roll, both sides) and press Delete. New `join_selected_through_edit` helper in the `DeleteSelection` priority chain (after mark-range, before clip/gap delete): reads `get_selected_edges()`, recognizes a single roll cut (exactly two `trim_type=="roll"` edges, one `out` + one `in`), finds the LEFT clip (the `out` edge), gates on `through_edit.is_through_edit(left, right, kind)`, and dispatches one undoable `JoinThroughEdit`. A roll over a genuine cut falls through untouched (the predicate gate keeps it away from JoinThroughEdit's assert). Both Delete and Shift+Delete join. TDD `test_delete_joins_through_edit.lua` (join + undo + genuine-cut-untouched).
 
 ---
 
@@ -143,6 +152,20 @@ These tasks modify the same file and must run in order.
   - Regression test: `tests/synthetic/binding/test_025_sm_button_click_zone.lua`
     (spec-derived `sm_width >= 24` on both a video and an audio row; verified RED
     at 16, GREEN at 24). Existing header layout/alignment tests unaffected.
+  - **As-built revision (2026-06-21, Joe) — FINAL:** the buttons are stacked
+    top/bottom, so the easy miss is VERTICAL, not horizontal, and widening them is
+    explicitly unwanted. Two wrong turns first (both reverted): (1) widening to
+    24px — wrong axis, "didn't want them wider"; (2) a QSS `margin` and then a
+    transparent **halo** wrapper — the margin is dead on a QPushButton, and the
+    halo's bare `QWidget` didn't paint its region → graphic artifacts. CORRECT
+    FIX: ordinary QPushButtons, width kept compact (`HDR.SM=16`, NOT widened), but
+    given `SET_WIDGET_SIZE_POLICY("Fixed","Expanding")` so the VBox splits the full
+    header height 50/50 — M = top half, S = bottom half, each a big vertical click
+    target. `sm_container` is also `Expanding` vertically so it fills the header.
+    No halo, no artifacts; visible button == click zone (a plain QPushButton).
+    `build_sm_button()` helper; snapshot reports `sm_width` (compact); test asserts
+    `sm_width <= 16` (no widget-height getter exists, so the vertical fill is a
+    visual check). Spec FR-004 reworded: enlarge vertically, never widen.
 
 - [x] T016 `src/lua/ui/timeline/timeline_panel.lua` FR-002: TC entry field activation + apply extension
   - Depends on T011 (timecode_entry commands registered and emitting `tc_entry_activate` signal)

@@ -10,6 +10,7 @@
 -- @file delete_selection.lua
 local M = {}
 local log = require("core.logger").for_area("commands")
+local through_edit = require("core.through_edit")
 
 local SPEC = {
     undoable = false,
@@ -173,6 +174,50 @@ local function ripple_delete_selected_gap(timeline_state, command_manager)
     return true
 end
 
+-- Select-an-edit-and-Delete = remove a through-edit by joining it (the
+-- FCP7/Premiere gesture). A single cut selected as a roll puts exactly two
+-- "roll" edges in the edge selection: the left clip's out-edge and the right
+-- clip's in-edge. When that cut is a through-edit, Delete joins the pair (one
+-- undoable JoinThroughEdit on the left clip). A roll on a GENUINE cut is left
+-- to fall through untouched — JoinThroughEdit asserts the pair is a
+-- through-edit, so the predicate must gate the dispatch.
+local function join_selected_through_edit(timeline_state, command_manager)
+    local edges = timeline_state.get_selected_edges and timeline_state.get_selected_edges()
+    if not (edges and #edges == 2
+        and edges[1].trim_type == "roll" and edges[2].trim_type == "roll") then
+        return false
+    end
+
+    local left_id, right_id
+    for _, e in ipairs(edges) do
+        if e.edge_type == "out" then left_id = e.clip_id
+        elseif e.edge_type == "in" then right_id = e.clip_id end
+    end
+    if not (left_id and right_id) then return false end  -- not a single in/out cut
+
+    local strip = timeline_state.get_tab_strip()
+    local left_clip, right_clip = strip:clip_by_id(left_id), strip:clip_by_id(right_id)
+    if not (left_clip and right_clip) then return false end
+
+    local track = require("ui.timeline.state.track_state").get_by_id(left_clip.track_id)
+    local kind = (track and track.track_type == "AUDIO") and "audio" or "video"
+    if not through_edit.is_through_edit(left_clip, right_clip, kind) then
+        return false  -- a genuine cut: Delete on the roll does nothing here
+    end
+
+    local project_id = timeline_state.get_project_id()
+    assert(project_id and project_id ~= "",
+        "DeleteSelection: missing project_id for through-edit join")
+    local result = command_manager.execute("JoinThroughEdit", {
+        project_id  = project_id,
+        sequence_id = strip:active_sequence_id(),
+        clip_id     = left_id,
+    })
+    assert(result.success, string.format(
+        "DeleteSelection: JoinThroughEdit failed: %s", result.error_message or "unknown"))
+    return true
+end
+
 function M.register(executors, undoers, db)
     local function executor(command)
         local args = command:get_all_parameters()
@@ -194,6 +239,11 @@ function M.register(executors, undoers, db)
         local command_manager  = require("core.command_manager")
 
         if delete_mark_range(timeline_state, command_manager, ripple) then
+            return true
+        end
+
+        -- A selected through-edit (roll on an invisible cut) → join it.
+        if join_selected_through_edit(timeline_state, command_manager) then
             return true
         end
 

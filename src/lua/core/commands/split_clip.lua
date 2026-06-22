@@ -164,6 +164,7 @@ function M.execute(args)
             source_in_subframe    = right_source_in_sub,
             source_out_subframe   = right_source_out_sub,
             master_layer_track_id = clip.master_layer_track_id,
+            master_audio_track_id = clip.master_audio_track_id,
             fps_mismatch_policy   = clip.fps_mismatch_policy,
             enabled               = clip.enabled,
             volume                = clip.volume,

@@ -52,8 +52,11 @@ local function track_kind(track_id)
 end
 
 -- Map a V13 row to the property-object shape core.through_edit consumes.
+-- sequence_id is the source identity (the master sequence the clip was drawn
+-- from); the master layer ids only disambiguate explicit angle/stream picks.
 local function predicate_view(row)
     return {
+        sequence_id           = row.sequence_id,
         master_layer_track_id = row.master_layer_track_id,
         master_audio_track_id = row.master_audio_track_id,
         sequence_start        = row.sequence_start_frame,

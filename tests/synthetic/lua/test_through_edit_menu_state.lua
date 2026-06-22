@@ -14,11 +14,14 @@ local input = require("ui.timeline.view.timeline_view_input")
 
 print("=== test_through_edit_menu_state.lua ===")
 
-local function vclip(start, dur, src_in, src_out, master, is_gap)
+-- `source` is the master sequence (clip.sequence_id) the clip was drawn from
+-- — the source identity. Master layer ids stay NULL (ordinary default layer).
+local function vclip(start, dur, src_in, src_out, source, is_gap)
     return {
+        sequence_id = source,
         sequence_start = start, duration = dur,
         source_in = src_in, source_out = src_out,
-        master_layer_track_id = master, master_audio_track_id = nil,
+        master_layer_track_id = nil, master_audio_track_id = nil,
         is_gap = is_gap,
     }
 end

@@ -5,26 +5,35 @@
 --- from an uncut clip.
 ---
 --- Pure predicate over clip property objects (the in-memory Clip fields:
---- sequence_start, duration, source_in, source_out, the master track ids,
---- and the optional audio subframes). No DB access — usable identically by
---- the renderer (chevron drawing) and the join commands.
+--- sequence_start, duration, source_in, source_out, sequence_id, the master
+--- layer ids, and the optional audio subframes). No DB access — usable
+--- identically by the renderer (chevron drawing) and the join commands.
 ---
---- Same-source identity is the master *track* the clip was drawn from, not
---- merely the master sequence: two clips from the same master sequence but
---- different tracks (multicam angles, split channels) are NOT a through-edit.
---- The columns are `master_layer_track_id` (video) / `master_audio_track_id`
---- (audio); spec 021 later renames them to `source_video_track_id` /
---- `source_audio_track_id`.
+--- Same-source identity is the master *sequence* the clip was drawn from —
+--- `clip.sequence_id`, the "source tape" (resolved through
+--- `media_refs`→`media`). That is the field every ordinary media clip
+--- actually carries; a clip with no source sequence (gap / generator) never
+--- forms a through-edit.
+---
+--- `master_layer_track_id` (video) / `master_audio_track_id` (audio) are NOT
+--- source identity — they are per-clip *layer/angle selectors* within the
+--- master. NULL is the ordinary "use the default layer" value, so NULL==NULL
+--- is the same layer. They refine the match only to exclude two clips from
+--- the same master sequence drawn from *different explicit* tracks (multicam
+--- angles, split channels): a non-NULL mismatch is NOT a through-edit. (Spec
+--- 021 later renames these columns to `source_video_track_id` /
+--- `source_audio_track_id`.)
 
 local M = {}
 
---- The master source-track id for `clip` in a `kind` ("video"/"audio")
---- timeline track. Both clips in a candidate pair share a track, hence a
---- kind. Returns nil for a master-less clip (gap/generator).
-local function master_track_id(clip, kind)
+--- The explicit master layer/angle selector for `clip` on a `kind`
+--- ("video"/"audio") timeline track, or nil when the clip uses the master's
+--- default layer (the ordinary case). Both clips in a candidate pair share a
+--- track, hence a kind.
+local function master_layer_id(clip, kind)
     if kind == "video" then return clip.master_layer_track_id end
     if kind == "audio" then return clip.master_audio_track_id end
-    assert(false, "through_edit.master_track_id: unknown track kind " .. tostring(kind))
+    assert(false, "through_edit.master_layer_id: unknown track kind " .. tostring(kind))
 end
 
 --- True iff `clip_a` (left) and `clip_b` (right) form a through-edit on a
@@ -32,10 +41,16 @@ end
 function M.is_through_edit(clip_a, clip_b, kind)
     assert(clip_a and clip_b, "through_edit.is_through_edit: both clips required")
 
-    local master_a = master_track_id(clip_a, kind)
-    local master_b = master_track_id(clip_b, kind)
-    if not master_a or not master_b then return false end  -- gap/generator: never
-    if master_a ~= master_b then return false end          -- different source track
+    -- Same source: the master sequence the clip was drawn from. A clip with
+    -- no source sequence (gap/generator) never forms a through-edit.
+    if not clip_a.sequence_id or not clip_b.sequence_id then return false end
+    if clip_a.sequence_id ~= clip_b.sequence_id then return false end
+
+    -- Same layer/angle within that master. NULL==NULL (both on the default
+    -- layer) matches; a non-NULL mismatch is a different angle/stream.
+    if master_layer_id(clip_a, kind) ~= master_layer_id(clip_b, kind) then
+        return false
+    end
 
     -- Flush on the timeline: left ends exactly where right begins.
     if clip_a.sequence_start + clip_a.duration ~= clip_b.sequence_start then

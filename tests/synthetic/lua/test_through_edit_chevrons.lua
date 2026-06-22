@@ -28,12 +28,15 @@ local function install_capture()
     return calls
 end
 
--- A predicate-shaped clip on a video track.
-local function vclip(start, dur, src_in, src_out, master)
+-- A predicate-shaped clip on a video track. `source` is the master sequence
+-- the clip was drawn from (clip.sequence_id) — the source identity. Master
+-- layer ids are NULL (the ordinary default-layer case for media clips).
+local function vclip(start, dur, src_in, src_out, source)
     return {
+        sequence_id = source,
         sequence_start = start, duration = dur,
         source_in = src_in, source_out = src_out,
-        master_layer_track_id = master, master_audio_track_id = nil,
+        master_layer_track_id = nil, master_audio_track_id = nil,
     }
 end
 
@@ -97,7 +100,7 @@ end
 do
     local clips = {
         vclip(0,   100, 0,   100, "m1"),
-        vclip(100, 100, 100, 200, "m2"),   -- different master track
+        vclip(100, 100, 100, 200, "m2"),   -- different master sequence (source)
     }
     local calls = install_capture()
     renderer._render_through_edit_markers(make_ctx(clips, "record"))
