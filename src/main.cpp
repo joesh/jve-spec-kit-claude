@@ -296,6 +296,13 @@ int main(int argc, char *argv[])
         // default 1px border and bump the font.
         "QToolTip { border: none; color: #ffffff; background-color: #141414;"
         " font-size: 13px; padding: 1px 4px; }"
+        // QProgressBar: Fusion paints the chunk with QPalette::Highlight, but
+        // Highlight is intentionally near-black (#17181A) for Resolve-style
+        // selection rows — that rendered the relink progress bar black-on-black.
+        // Give the bar its own visible trough + accent-blue chunk.
+        "QProgressBar { background-color: #1e1e24; border: 1px solid #45454b;"
+        " border-radius: 2px; text-align: center; color: #ffffff; }"
+        "QProgressBar::chunk { background-color: #0a84ff; }"
     );
 
     // Set up application data directory
