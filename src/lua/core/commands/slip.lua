@@ -37,7 +37,7 @@ function M.execute(args)
     local delta = args.delta_source_frames
     assert(delta ~= 0, "Slip: delta_source_frames must be non-zero")
 
-    local clip = Clip.load_v13_row(args.clip_id)
+    local clip = Clip.load_row(args.clip_id)
     assert(clip, string.format("Slip: clip %s not found", args.clip_id))
     assert(clip.owner_sequence_id == args.sequence_id, string.format(
         "Slip: clip %s owner_sequence_id=%s != args.sequence_id=%s",
@@ -87,7 +87,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             return false, tostring(result_or_err)
         end
         command:set_parameter("prior_state", result_or_err.prior)
-        local fresh = Clip.load_v13_row(args.clip_id)
+        local fresh = Clip.load_row(args.clip_id)
         command:set_parameter("__timeline_mutations", {
             sequence_id = args.sequence_id,
             inserts = {}, deletes = {},

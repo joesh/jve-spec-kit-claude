@@ -35,7 +35,7 @@ local SAVEPOINT = "ripple_delete_atomic"
 -- The entry is a full V13 capture state so undo restores the clip exactly,
 -- including its link-group membership. Captures BEFORE any DB mutation.
 local function gather_delete_unit(primary_clip)
-    return { Clip.capture_v13_state(primary_clip.id) }
+    return { Clip.capture_state(primary_clip.id) }
 end
 
 function M.execute(args)
@@ -45,7 +45,7 @@ function M.execute(args)
     assert(args.clip_id and args.clip_id ~= "",
         "RippleDelete: clip_id required")
 
-    local primary = Clip.load_v13_row(args.clip_id)
+    local primary = Clip.load_row(args.clip_id)
     assert(primary, string.format(
         "RippleDelete: clip %s not found", args.clip_id))
     assert(primary.owner_sequence_id == args.sequence_id, string.format(
@@ -105,7 +105,7 @@ local SPEC = {
         clip_id     = { required = true },
     },
     persisted = {
-        prior_unit   = {},  -- list of capture_v13_state results
+        prior_unit   = {},  -- list of capture_state results
         ripple_plan  = {},  -- list of {track_id, from_frame, shift}
     },
 }
@@ -148,7 +148,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 Clip.ripple_track_forward(p.track_id, current_from, -p.shift)
             end
             for _, captured in ipairs(prior) do
-                Clip.restore_v13_state(captured)
+                Clip.restore_state(captured)
             end
         end)
         if not ok then

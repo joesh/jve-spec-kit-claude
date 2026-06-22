@@ -54,7 +54,7 @@ function M.execute(args)
         "ToggleClipChannel: channel_index must be a non-negative integer; got %s",
         tostring(channel_index)))
 
-    local clip = Clip.load_v13_row(clip_id)
+    local clip = Clip.load_row(clip_id)
     assert(clip, string.format(
         "ToggleClipChannel: clip %s not found", clip_id))
     assert(clip.owner_sequence_id == sequence_id, string.format(

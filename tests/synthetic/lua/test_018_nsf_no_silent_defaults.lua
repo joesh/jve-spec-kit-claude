@@ -43,7 +43,7 @@ local function expect_error(label, fn, pattern)
 end
 
 -- ===========================================================================
--- V1: Clip._create_v13_row must NOT silently default audio subframes to 0.
+-- V1: Clip._create_row must NOT silently default audio subframes to 0.
 -- Caller that omits source_in_subframe / source_out_subframe on an AUDIO
 -- clip is a bug — surface it loudly.
 -- ===========================================================================

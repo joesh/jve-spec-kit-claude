@@ -215,7 +215,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 }
             end
             for _, tr in ipairs(cap.trimmed) do
-                local fresh = Clip.load_v13_row(tr.id)
+                local fresh = Clip.load_row(tr.id)
                 bucket.updates[#bucket.updates + 1] = {
                     clip_id        = tr.id,
                     sequence_start = fresh.sequence_start_frame,
@@ -343,7 +343,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     bucket.deletes[#bucket.deletes + 1] = { clip_id = snid }
                 end
                 for _, tr in ipairs(cap.trimmed) do
-                    local row = Clip.load_v13_row(tr.id)
+                    local row = Clip.load_row(tr.id)
                     if row then
                         bucket.updates[#bucket.updates + 1] = {
                             -- Update consumers key by clip_id; insert by id.

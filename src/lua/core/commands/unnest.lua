@@ -44,7 +44,7 @@ end
 -- when the clip is missing, the sequence_id mismatches owner (rule 2.29),
 -- or the referenced sequence is a master (CT-C19).
 local function load_clip_and_nested(sequence_id, clip_id)
-    local clip = Clip.load_v13_row(clip_id)
+    local clip = Clip.load_row(clip_id)
     assert(clip, string.format("Unnest: clip %s not found", clip_id))
     assert(clip.owner_sequence_id == sequence_id, string.format(
         "Unnest: sequence_id mismatch — clip %s owner=%s args=%s (rule 2.29)",
@@ -131,7 +131,7 @@ function M.execute(args)
     local delta           = clip.sequence_start_frame - clip.source_in_frame
 
     -- Capture wrapper state for undo BEFORE deleting it.
-    local clip_capture = Clip.capture_v13_state(clip_id)
+    local clip_capture = Clip.capture_state(clip_id)
     -- Delete wrapper FIRST so inner-clip moves don't overlap against it.
     Clip.delete_by_ids({ clip_id })
 
@@ -184,7 +184,7 @@ function M.undo(capture)
     end
 
     -- (c) Restore the deleted unnested clip via its full V13 capture.
-    Clip.restore_v13_state(capture.clip_capture)
+    Clip.restore_state(capture.clip_capture)
 
     local Signals = require("core.signals")
     if capture.orphan_deleted then

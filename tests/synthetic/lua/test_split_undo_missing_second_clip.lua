@@ -9,7 +9,7 @@ print("\n=== B8: SplitClip undo with missing second clip ===")
 
 
 -- V13 split_clip undoer uses Clip.delete_one / Clip.update_bounds /
--- Clip.load_v13_row plus database savepoints and Signals.emit. Stub
+-- Clip.load_row plus database savepoints and Signals.emit. Stub
 -- each surface so the test can run without a real DB.
 package.loaded["core.command_helper"] = {
     add_delete_mutation = function() end,
@@ -36,7 +36,7 @@ package.loaded["models.clip"] = {
             c.source_out_frame = source_out
         end
     end,
-    load_v13_row = function(id)
+    load_row = function(id)
         local c = clip_store[id]
         if not c then return nil end
         return {

@@ -43,7 +43,7 @@ function M.execute(args)
     local clip_id     = require_string_arg(args, "clip_id")
     local track_id    = args.track_id  -- nullable: NULL means "inherit default"
 
-    local clip = Clip.load_v13_row(clip_id)
+    local clip = Clip.load_row(clip_id)
     assert(clip, string.format(
         "SetClipLayer: clip %s not found", tostring(clip_id)))
     assert(clip.owner_sequence_id == sequence_id, string.format(

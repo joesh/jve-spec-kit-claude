@@ -29,7 +29,7 @@
 ---        are a follow-up.
 ---     4. DELETE the source clip + its overrides + its link_group entry.
 ---
----   Undo: full restoration via Clip.restore_v13_state on the source +
+---   Undo: full restoration via Clip.restore_state on the source +
 ---   reverse of the above.
 ---
 --- @file expand_audio.lua
@@ -55,7 +55,7 @@ end
 -- not already expanded, and the nested sequence has ≥2 audio tracks.
 -- Returns the loaded clip row.
 local function validate_source_clip(sequence_id, clip_id)
-    local clip = Clip.load_v13_row(clip_id)
+    local clip = Clip.load_row(clip_id)
     assert(clip, string.format("ExpandAudio: clip %s not found", clip_id))
     assert(clip.owner_sequence_id == sequence_id, string.format(
         "ExpandAudio: sequence_id mismatch — clip %s owner=%s args=%s "
@@ -194,7 +194,7 @@ end
 -- ch=0 there. Out-of-bounds source channels are dropped (captured in
 -- undo via source_capture).
 local function project_source_overrides(source_capture, expanded_by_index)
-    -- capture_v13_state always populates overrides as an array.
+    -- capture_state always populates overrides as an array.
     assert(type(source_capture) == "table" and type(source_capture.overrides) == "table",
         "ExpandAudio: source_capture/overrides missing")
     for _, ov in ipairs(source_capture.overrides) do
@@ -230,7 +230,7 @@ function M.execute(args)
     local plan = build_placement_plan(clip, clip_id, sequence_id)
 
     -- Past the refusal gate: capture undo, materialize tracks, mutate.
-    local source_capture   = Clip.capture_v13_state(clip_id)
+    local source_capture   = Clip.capture_state(clip_id)
     local created_track_ids = auto_create_missing_tracks(plan, sequence_id)
     local source_lg        = ClipLink.get_link_group_id(clip_id)
 
@@ -265,7 +265,7 @@ function M.undo(capture)
     --      entries existed pre-expand, e.g. the V clip).
     --   2. DELETE auto-created owner A tracks. The tracks are empty by
     --      now (their only clips were the expanded ones, just deleted).
-    --   3. Restore the source via Clip.restore_v13_state — re-INSERTs
+    --   3. Restore the source via Clip.restore_state — re-INSERTs
     --      the row + overrides + the source's link_group entry.
     -- Execute always populates these arrays (possibly empty).
     Clip.delete_by_ids(capture.expanded_clip_ids)
@@ -274,7 +274,7 @@ function M.undo(capture)
         Track.delete(tid)
     end
 
-    Clip.restore_v13_state(capture.source_capture)
+    Clip.restore_state(capture.source_capture)
 
 end
 

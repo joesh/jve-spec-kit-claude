@@ -45,7 +45,7 @@ function M.execute(args)
         "SetClipChannelGain: gain_db must be a number; got %s",
         tostring(gain_db)))
 
-    local clip = Clip.load_v13_row(clip_id)
+    local clip = Clip.load_row(clip_id)
     assert(clip, string.format(
         "SetClipChannelGain: clip %s not found", clip_id))
     assert(clip.owner_sequence_id == sequence_id, string.format(

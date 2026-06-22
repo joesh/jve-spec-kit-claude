@@ -220,7 +220,7 @@ function M.create(fields)
         "Clip.create: fields table required")
     assert(fields.sequence_id ~= nil,
         "Clip.create: 'sequence_id' is required")
-    return M._create_v13_row(fields)
+    return M._create_row(fields)
 end
 
 -- Load clip from database
@@ -1170,18 +1170,18 @@ function M.subframe_defaults_for(db, track_id)
     return M.subframe_defaults_for_track_type(tt)
 end
 
--- (Internal) Same as above but called from _create_v13_row's audit path.
+-- (Internal) Same as above but called from _create_row's audit path.
 -- 018 (V11 / FR-013): subframe columns presence is driven by the
 -- clip's track_type. AUDIO requires both source_*_subframe non-NULL; VIDEO
 -- requires both NULL. Caller passes both explicitly — no silent default
 -- (rule 2.13).
 local function fetch_track_type(db, clip_id, track_id)
     local tstmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
-    assert(tstmt, "Clip._create_v13_row: prepare track_type query failed")
+    assert(tstmt, "Clip._create_row: prepare track_type query failed")
     tstmt:bind_value(1, track_id)
-    assert(tstmt:exec(), "Clip._create_v13_row: track_type query failed")
+    assert(tstmt:exec(), "Clip._create_row: track_type query failed")
     assert(tstmt:next(), string.format(
-        "Clip._create_v13_row: track not found for id=%s (clip=%s)",
+        "Clip._create_row: track not found for id=%s (clip=%s)",
         tostring(track_id), tostring(clip_id)))
     local tt = tstmt:value(0)
     tstmt:finalize()
@@ -1192,22 +1192,22 @@ local function subframe_for_kind(db, clip_id, fields)
     local tt = fetch_track_type(db, clip_id, fields.track_id)
     if tt == "AUDIO" then
         assert(fields.source_in_subframe ~= nil, string.format(
-            "Clip._create_v13_row: AUDIO clip %s missing source_in_subframe "
+            "Clip._create_row: AUDIO clip %s missing source_in_subframe "
             .. "(audio clips require non-NULL subframe per FR-013 — no silent default per rule 2.13)",
             tostring(clip_id)))
         assert(fields.source_out_subframe ~= nil, string.format(
-            "Clip._create_v13_row: AUDIO clip %s missing source_out_subframe "
+            "Clip._create_row: AUDIO clip %s missing source_out_subframe "
             .. "(audio clips require non-NULL subframe per FR-013 — no silent default per rule 2.13)",
             tostring(clip_id)))
         return fields.source_in_subframe, fields.source_out_subframe
     end
     assert(fields.source_in_subframe == nil and fields.source_out_subframe == nil,
-        string.format("Clip._create_v13_row: video clip %s must have NULL subframes (FR-013)",
+        string.format("Clip._create_row: video clip %s must have NULL subframes (FR-013)",
             tostring(clip_id)))
     return nil, nil
 end
 
-function M._create_v13_row(fields)
+function M._create_row(fields)
     assert(type(fields) == "table", "Clip.create (v13): fields table required")
     for _, col in ipairs(V13_REQUIRED) do
         assert(fields[col] ~= nil, string.format(
@@ -1235,7 +1235,7 @@ function M._create_v13_row(fields)
             created_at, modified_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
-    assert(stmt, "Clip._create_v13_row: prepare failed")
+    assert(stmt, "Clip._create_row: prepare failed")
     stmt:bind_value(1, id)
     stmt:bind_value(2, fields.project_id)
     stmt:bind_value(3, fields.owner_sequence_id)
@@ -1264,7 +1264,7 @@ function M._create_v13_row(fields)
     if not ok then err = stmt:last_error() end
     stmt:finalize()
     assert(ok, string.format(
-        "Clip._create_v13_row: INSERT failed for id=%s: %s (likely trigger: clips must be owned by a kind='sequence' sequence, or FK)",
+        "Clip._create_row: INSERT failed for id=%s: %s (likely trigger: clips must be owned by a kind='sequence' sequence, or FK)",
         id, tostring(err)))
     return id
 end
@@ -1952,8 +1952,8 @@ end
 --- Load a V9 clips row as a plain table (no legacy JOINs — purely this
 --- row's columns). Used by Insert's __timeline_mutations builder to
 --- re-read a freshly-inserted clip for the UI cache.
-function M.load_v13_row(id)
-    assert(id and id ~= "", "Clip.load_v13_row: id required")
+function M.load_row(id)
+    assert(id and id ~= "", "Clip.load_row: id required")
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
@@ -1964,9 +1964,9 @@ function M.load_v13_row(id)
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
         FROM clips WHERE id = ?
     ]])
-    assert(stmt, "Clip.load_v13_row: prepare failed")
+    assert(stmt, "Clip.load_row: prepare failed")
     stmt:bind_value(1, id)
-    assert(stmt:exec(), "Clip.load_v13_row: exec failed")
+    assert(stmt:exec(), "Clip.load_row: exec failed")
     local row
     if stmt:next() then
         row = {
@@ -1998,14 +1998,14 @@ end
 
 --- Capture the FULL V13 state of a clip for undo: the row, its
 --- clip_channel_override rows, and its clip_links membership (if any).
---- The returned table can be passed to Clip.restore_v13_state to
+--- The returned table can be passed to Clip.restore_state to
 --- recreate the clip exactly as it was. Loud-fail if clip is missing
 --- (capturing a non-existent clip is always a caller bug).
-function M.capture_v13_state(clip_id)
-    assert(clip_id and clip_id ~= "", "Clip.capture_v13_state: clip_id required")
-    local row = M.load_v13_row(clip_id)
+function M.capture_state(clip_id)
+    assert(clip_id and clip_id ~= "", "Clip.capture_state: clip_id required")
+    local row = M.load_row(clip_id)
     assert(row, string.format(
-        "Clip.capture_v13_state: clip %s not found", clip_id))
+        "Clip.capture_state: clip %s not found", clip_id))
 
     local db = require("core.database").get_connection()
 
@@ -2016,9 +2016,9 @@ function M.capture_v13_state(clip_id)
             FROM clip_channel_override WHERE clip_id = ?
             ORDER BY channel_index ASC
         ]])
-        assert(stmt, "Clip.capture_v13_state: override prepare failed")
+        assert(stmt, "Clip.capture_state: override prepare failed")
         stmt:bind_value(1, clip_id)
-        assert(stmt:exec(), "Clip.capture_v13_state: override exec failed")
+        assert(stmt:exec(), "Clip.capture_state: override exec failed")
         while stmt:next() do
             overrides[#overrides + 1] = {
                 channel_index = stmt:value(0),
@@ -2036,9 +2036,9 @@ function M.capture_v13_state(clip_id)
             FROM clip_links WHERE clip_id = ?
             LIMIT 1
         ]])
-        assert(stmt, "Clip.capture_v13_state: link prepare failed")
+        assert(stmt, "Clip.capture_state: link prepare failed")
         stmt:bind_value(1, clip_id)
-        assert(stmt:exec(), "Clip.capture_v13_state: link exec failed")
+        assert(stmt:exec(), "Clip.capture_state: link exec failed")
         if stmt:next() then
             link = {
                 link_group_id = stmt:value(0),
@@ -2057,17 +2057,17 @@ function M.capture_v13_state(clip_id)
     }
 end
 
---- Restore a clip from the state captured by Clip.capture_v13_state.
+--- Restore a clip from the state captured by Clip.capture_state.
 --- Re-INSERTs the clip row (owner-kind and source-window checks fire), the
 --- clip_channel_override rows, and the clip_links row (if it had one).
 --- The clip is assumed to be ABSENT before this call — restoring over
 --- a live clip is a caller bug.
-function M.restore_v13_state(state)
-    assert(type(state) == "table", "Clip.restore_v13_state: state table required")
-    assert(type(state.row) == "table", "Clip.restore_v13_state: state.row required")
+function M.restore_state(state)
+    assert(type(state) == "table", "Clip.restore_state: state table required")
+    assert(type(state.row) == "table", "Clip.restore_state: state.row required")
     local r = state.row
 
-    M._create_v13_row({
+    M._create_row({
         id                    = r.id,
         project_id            = r.project_id,
         owner_sequence_id     = r.owner_sequence_id,
@@ -2096,14 +2096,14 @@ function M.restore_v13_state(state)
             INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
             VALUES (?, ?, ?, ?)
         ]])
-        assert(stmt, "Clip.restore_v13_state: override prepare failed")
+        assert(stmt, "Clip.restore_state: override prepare failed")
         for _, o in ipairs(state.overrides) do
             stmt:bind_value(1, r.id)
             stmt:bind_value(2, o.channel_index)
             stmt:bind_value(3, o.enabled)
             stmt:bind_value(4, o.gain_db)
             assert(stmt:exec(),
-                "Clip.restore_v13_state: override exec failed")
+                "Clip.restore_state: override exec failed")
             stmt:reset()
         end
         stmt:finalize()
@@ -2115,14 +2115,14 @@ function M.restore_v13_state(state)
             INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
             VALUES (?, ?, ?, ?, ?)
         ]])
-        assert(stmt, "Clip.restore_v13_state: link prepare failed")
+        assert(stmt, "Clip.restore_state: link prepare failed")
         stmt:bind_value(1, state.link.link_group_id)
         stmt:bind_value(2, r.id)
         stmt:bind_value(3, state.link.role)
         stmt:bind_value(4, state.link.time_offset)
         stmt:bind_value(5, state.link.enabled and 1 or 0)
         assert(stmt:exec(),
-            "Clip.restore_v13_state: link exec failed")
+            "Clip.restore_state: link exec failed")
         stmt:finalize()
     end
 end

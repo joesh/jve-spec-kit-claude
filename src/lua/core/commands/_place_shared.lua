@@ -881,7 +881,7 @@ function M.split_track_at_insertion(track_id, owner_seq, position, split_pool)
                 e.source_in_frame, e.source_in_frame + source_offset)
 
             local right_id = split_pool:take()
-            Clip._create_v13_row({
+            Clip._create_row({
                 id                    = right_id,
                 project_id            = e.project_id,
                 owner_sequence_id     = e.owner_sequence_id,

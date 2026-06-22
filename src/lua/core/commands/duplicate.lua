@@ -49,7 +49,7 @@ function M.execute(args)
     assert(type(args.delta_frames) == "number",
         "Duplicate: delta_frames must be integer")
 
-    local clip = Clip.load_v13_row(args.clip_id)
+    local clip = Clip.load_row(args.clip_id)
     assert(clip, string.format("Duplicate: clip %s not found", args.clip_id))
     assert(clip.owner_sequence_id == args.sequence_id, string.format(
         "Duplicate: clip %s owner=%s != sequence_id=%s",
@@ -66,7 +66,7 @@ function M.execute(args)
     -- (the schema's video-overlap trigger raises before write on collision).
     assert(database.savepoint(SAVEPOINT), "Duplicate: savepoint failed")
     local ok, err = pcall(function()
-        Clip._create_v13_row({
+        Clip._create_row({
             id                    = new_id,
             project_id            = clip.project_id,
             owner_sequence_id     = clip.owner_sequence_id,
@@ -127,7 +127,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             return false, tostring(result_or_err)
         end
         command:set_parameter("new_clip_id", result_or_err.new_clip_id)
-        local new = Clip.load_v13_row(result_or_err.new_clip_id)
+        local new = Clip.load_row(result_or_err.new_clip_id)
         command:set_parameter("__timeline_mutations", {
             sequence_id = args.sequence_id,
             inserts = { {

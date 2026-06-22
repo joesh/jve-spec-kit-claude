@@ -278,7 +278,7 @@ local function build_executor_mutation_bucket(args, result)
             bucket.inserts[#bucket.inserts + 1] = entry
         end
         for _, tr in ipairs(cap.trimmed) do
-            local row = Clip.load_v13_row(tr.id)
+            local row = Clip.load_row(tr.id)
             assert(row, "Insert: could not re-read trimmed left-half "
                 .. tostring(tr.id))
             bucket.updates[#bucket.updates + 1] = {

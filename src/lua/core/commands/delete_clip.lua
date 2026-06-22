@@ -19,7 +19,7 @@
 -- Atomicity: SAVEPOINT wraps the delete unit so a mid-delete failure
 -- (e.g. a missing link group member) unwinds the entire operation.
 --
--- Undo restores every captured clip via Clip.restore_v13_state — the
+-- Undo restores every captured clip via Clip.restore_state — the
 -- row, its clip_channel_override rows, and its clip_links membership.
 -- Atomic via SAVEPOINT so a partial restore unwinds.
 --
@@ -41,7 +41,7 @@ local SAVEPOINT = "delete_clip_atomic"
 -- undo restores the clip exactly, including its link-group membership.
 -- Captures BEFORE any DB mutation.
 local function gather_delete_unit(primary_clip)
-    return { Clip.capture_v13_state(primary_clip.id) }
+    return { Clip.capture_state(primary_clip.id) }
 end
 
 function M.execute(args)
@@ -55,7 +55,7 @@ function M.execute(args)
         "DeleteClip: gap clip %s — gaps are derived state, not deletable",
         args.clip_id))
 
-    local primary = Clip.load_v13_row(args.clip_id)
+    local primary = Clip.load_row(args.clip_id)
     assert(primary, string.format(
         "DeleteClip: clip %s not found", args.clip_id))
     assert(primary.owner_sequence_id == args.sequence_id, string.format(
@@ -129,7 +129,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         assert(database.savepoint(SAVEPOINT), "Undo DeleteClip: savepoint failed")
         local ok, err = pcall(function()
             for _, captured in ipairs(prior) do
-                Clip.restore_v13_state(captured)
+                Clip.restore_state(captured)
             end
         end)
         if not ok then

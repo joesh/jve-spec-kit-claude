@@ -5,7 +5,7 @@
 --- producer-bug assert (pre-audit-pass-5 silent-skipped, leaving the cache
 --- stale relative to the DB until the next reload).
 ---
---- Use Clip.load (not load_v13_row) so the entry carries the joined
+--- Use Clip.load (not load_row) so the entry carries the joined
 --- frame_rate from the nested sequence row — consumers that read
 --- clip.frame_rate (batch_ripple_edit.fetch_base_clip,
 --- clipboard_actions.copy_mark_range) require it.

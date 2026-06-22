@@ -66,7 +66,7 @@ end
 local function load_selection(sequence_id, clip_ids)
     local selected, source_captures = {}, {}
     for _, cid in ipairs(clip_ids) do
-        local row = Clip.load_v13_row(cid)
+        local row = Clip.load_row(cid)
         assert(row, string.format("CollapseAudio: clip %s not found", cid))
         assert(row.owner_sequence_id == sequence_id, string.format(
             "CollapseAudio: clip %s owner=%s != args sequence_id %s (rule 2.29)",
@@ -81,7 +81,7 @@ local function load_selection(sequence_id, clip_ids)
             "CollapseAudio: clip %s is already composite "
             .. "(master_audio_track_id IS NULL); nothing to collapse.", cid))
         selected[#selected + 1] = { row = row, track_index = t.track_index }
-        source_captures[#source_captures + 1] = Clip.capture_v13_state(cid)
+        source_captures[#source_captures + 1] = Clip.capture_state(cid)
     end
     return selected, source_captures
 end
@@ -198,7 +198,7 @@ local function composite_state_for_source(source_clip, source_captures)
     local cap_overrides = {}
     for _, sc in ipairs(source_captures) do
         if sc.row.id == source_clip.id then
-            -- capture_v13_state always populates overrides as an array.
+            -- capture_state always populates overrides as an array.
             cap_overrides = sc.overrides
             break
         end
@@ -299,7 +299,7 @@ function M.undo(capture)
     -- Order:
     --   1. DELETE the composite clip — cascades clip_links + projected
     --      clip_channel_override rows for the composite.
-    --   2. Restore each captured selected clip via Clip.restore_v13_state
+    --   2. Restore each captured selected clip via Clip.restore_state
     --      — re-INSERTs row + overrides + link_links entry. The
     --      previously-existing link group survives (the V clip and any
     --      unselected siblings kept their entries through Collapse), so
@@ -310,7 +310,7 @@ function M.undo(capture)
     end
 
     for _, sc in ipairs(capture.source_captures) do
-        Clip.restore_v13_state(sc)
+        Clip.restore_state(sc)
     end
 
 end

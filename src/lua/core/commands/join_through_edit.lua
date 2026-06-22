@@ -102,7 +102,7 @@ local function perform_join(left_row, right_row, kind)
     local marker_shift = right_row.sequence_start_frame - left_row.sequence_start_frame
 
     -- Undo capture BEFORE any mutation.
-    local right_state  = Clip.capture_v13_state(right_row.id)
+    local right_state  = Clip.capture_state(right_row.id)
     local right_marker_ids = {}
     for _, mk in ipairs(ClipMarker.find_by_clip(right_row.id)) do
         right_marker_ids[#right_marker_ids + 1] = mk.id
@@ -149,7 +149,7 @@ local function revert_join(rec)
     Clip.update_bounds(rec.left_id,
         p.sequence_start_frame, p.duration_frames,
         p.source_in_frame, p.source_out_frame)
-    Clip.restore_v13_state(rec.right_state)
+    Clip.restore_state(rec.right_state)
     ClipMarker.reassign(rec.right_marker_ids, rec.right_id, -rec.marker_shift)
     if rec.right_had_grade then
         -- The pair are through-edit halves with an identical grade; the left
@@ -166,7 +166,7 @@ local function flush_right_neighbor(left_row)
         if row.track_id == left_row.track_id
             and row.sequence_start_frame == left_end
             and row.id ~= left_row.id then
-            return Clip.load_v13_row(row.id)  -- full row incl. master_audio_track_id
+            return Clip.load_row(row.id)  -- full row incl. master_audio_track_id
         end
     end
     return nil
@@ -181,7 +181,7 @@ function M.execute_one(args)
     assert(args.clip_id and args.clip_id ~= "",
         "JoinThroughEdit: clip_id required (the LEFT clip of the edit)")
 
-    local left = Clip.load_v13_row(args.clip_id)
+    local left = Clip.load_row(args.clip_id)
     assert(left, string.format("JoinThroughEdit: clip %s not found", args.clip_id))
     assert(left.owner_sequence_id == args.sequence_id, string.format(
         "JoinThroughEdit: clip %s owner=%s != sequence_id=%s",
@@ -231,8 +231,8 @@ function M.execute_all(args)
                         if row.track_id == track.id then clips[#clips + 1] = row end
                     end
                     for i = 1, #clips - 1 do
-                        local a = Clip.load_v13_row(clips[i].id)
-                        local b = Clip.load_v13_row(clips[i + 1].id)
+                        local a = Clip.load_row(clips[i].id)
+                        local b = Clip.load_row(clips[i + 1].id)
                         if a.sequence_start_frame + a.duration_frames == b.sequence_start_frame
                             and through_edit.is_through_edit(
                                 predicate_view(a), predicate_view(b), kind) then
@@ -280,11 +280,11 @@ end
 local function mutations_for(records, sequence_id, forward)
     local updates, inserts, deletes = {}, {}, {}
     for _, rec in ipairs(records) do
-        updates[#updates + 1] = mutation_entry(Clip.load_v13_row(rec.left_id))
+        updates[#updates + 1] = mutation_entry(Clip.load_row(rec.left_id))
         if forward then
             deletes[#deletes + 1] = { clip_id = rec.right_id }
         else
-            inserts[#inserts + 1] = mutation_entry(Clip.load_v13_row(rec.right_id))
+            inserts[#inserts + 1] = mutation_entry(Clip.load_row(rec.right_id))
         end
     end
     return {

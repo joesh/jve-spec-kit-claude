@@ -55,8 +55,8 @@ function M.execute(args)
     local N = args.delta_timeline_frames
     assert(N ~= 0, "Roll: delta_timeline_frames must be non-zero")
 
-    local a = Clip.load_v13_row(args.outgoing_clip_id)
-    local b = Clip.load_v13_row(args.incoming_clip_id)
+    local a = Clip.load_row(args.outgoing_clip_id)
+    local b = Clip.load_row(args.incoming_clip_id)
     assert(a, string.format("Roll: outgoing clip %s not found", args.outgoing_clip_id))
     assert(b, string.format("Roll: incoming clip %s not found", args.incoming_clip_id))
     assert(a.owner_sequence_id == args.sequence_id, string.format(
@@ -175,8 +175,8 @@ local SPEC = {
 }
 
 local function emit_mutations(command, args)
-    local a = Clip.load_v13_row(args.outgoing_clip_id)
-    local b = Clip.load_v13_row(args.incoming_clip_id)
+    local a = Clip.load_row(args.outgoing_clip_id)
+    local b = Clip.load_row(args.incoming_clip_id)
     command:set_parameter("__timeline_mutations", {
         sequence_id = args.sequence_id,
         inserts = {}, deletes = {},
@@ -221,7 +221,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         -- shared edge writes first so no transient video overlap trips
         -- the schema trigger. The undo direction is inferred from the
         -- prior vs. current outgoing-clip duration.
-        local cur_a = Clip.load_v13_row(args.outgoing_clip_id)
+        local cur_a = Clip.load_row(args.outgoing_clip_id)
         local restore_a = function()
             Clip.update_bounds(args.outgoing_clip_id,
                 prior.outgoing.sequence_start_frame, prior.outgoing.duration_frames,

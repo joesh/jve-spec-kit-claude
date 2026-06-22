@@ -254,7 +254,7 @@ local function place_clips(track_map, project_id, sequence_id)
         local def_sub_in, def_sub_out = Clip.subframe_defaults_for_track_type(role_track_type)
         local sub_in  = d.source_in_subframe  ~= nil and d.source_in_subframe  or def_sub_in
         local sub_out = d.source_out_subframe ~= nil and d.source_out_subframe or def_sub_out
-        Clip._create_v13_row({
+        Clip._create_row({
             id                    = clip_id,
             project_id            = project_id,
             owner_sequence_id     = sequence_id,

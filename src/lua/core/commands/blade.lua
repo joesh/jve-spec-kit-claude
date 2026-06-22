@@ -215,8 +215,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             bulk_shifts = {},
         }
         for _, s in ipairs(result_or_err.splits) do
-            local left  = Clip.load_v13_row(s.clip_id)
-            local right = Clip.load_v13_row(s.second_clip_id)
+            local left  = Clip.load_row(s.clip_id)
+            local right = Clip.load_row(s.second_clip_id)
             if left  then bucket.updates[#bucket.updates + 1] = mutation_entry(left)  end
             if right then bucket.inserts[#bucket.inserts + 1] = mutation_entry(right) end
         end
@@ -236,8 +236,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local ok, err = pcall(function()
             for i = #prior, 1, -1 do
                 local s = prior[i]
-                local left  = Clip.load_v13_row(s.clip_id)
-                local right = Clip.load_v13_row(s.second_clip_id)
+                local left  = Clip.load_row(s.clip_id)
+                local right = Clip.load_row(s.second_clip_id)
                 assert(left and right,
                     "Undo Blade: half clip missing — was the DB mutated outside the undo group?")
                 local restored_duration   = left.duration_frames + right.duration_frames
@@ -269,7 +269,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             bulk_shifts = {},
         }
         for _, s in ipairs(prior) do
-            local restored = Clip.load_v13_row(s.clip_id)
+            local restored = Clip.load_row(s.clip_id)
             assert(restored, string.format(
                 "Undo Blade: restored left half %s missing after update",
                 s.clip_id))

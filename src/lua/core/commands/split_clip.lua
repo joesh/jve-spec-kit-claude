@@ -79,7 +79,7 @@ function M.execute(args)
     assert(type(args.split_frame) == "number",
         "SplitClip: split_frame must be integer (owner-timeline frame)")
 
-    local clip = Clip.load_v13_row(args.clip_id)
+    local clip = Clip.load_row(args.clip_id)
     assert(clip, string.format("SplitClip: clip %s not found", args.clip_id))
     assert(clip.owner_sequence_id == args.sequence_id, string.format(
         "SplitClip: clip %s owner=%s != sequence_id=%s",
@@ -150,7 +150,7 @@ function M.execute(args)
             tostring(clip.source_out_subframe)))
         local right_source_in_sub  = clip.source_in_subframe
         local right_source_out_sub = clip.source_out_subframe
-        Clip._create_v13_row({
+        Clip._create_row({
             id                    = right_id,
             project_id            = clip.project_id,
             owner_sequence_id     = clip.owner_sequence_id,
@@ -231,8 +231,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("prior_state", result_or_err.prior)
         command:set_parameter("second_clip_id", result_or_err.second_clip_id)
 
-        local left  = Clip.load_v13_row(args.clip_id)
-        local right = Clip.load_v13_row(result_or_err.second_clip_id)
+        local left  = Clip.load_row(args.clip_id)
+        local right = Clip.load_row(result_or_err.second_clip_id)
         assert(left,  string.format("SplitClip executor: left half %s missing after create", args.clip_id))
         assert(right, string.format("SplitClip executor: right half %s missing after create", result_or_err.second_clip_id))
 
@@ -288,7 +288,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         assert(database.release_savepoint(SAVEPOINT),
             "Undo SplitClip: release savepoint failed")
 
-        local row = Clip.load_v13_row(args.clip_id)
+        local row = Clip.load_row(args.clip_id)
         assert(row, string.format("Undo SplitClip: left half %s missing after restore", args.clip_id))
         command:set_parameter("__timeline_mutations", {
             sequence_id = args.sequence_id,

@@ -67,7 +67,7 @@ local function seed_audio_clip(db, now, id, source_in, source_out, seq_start, du
 end
 
 local function read_subframes(clip_id)
-    local c = Clip.load_v13_row(clip_id)
+    local c = Clip.load_row(clip_id)
     assert(c, "read_subframes: clip " .. clip_id .. " missing")
     return c.source_in_subframe, c.source_out_subframe,
            c.source_in_frame, c.source_out_frame

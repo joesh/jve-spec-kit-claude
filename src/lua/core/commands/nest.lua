@@ -79,7 +79,7 @@ local function load_selected_clips(sequence_id, selected_ids)
     local clip_rows = {}
     local first_track_id
     for _, cid in ipairs(selected_ids) do
-        local row = Clip.load_v13_row(cid)
+        local row = Clip.load_row(cid)
         assert(row, string.format("Nest: clip %s not found", cid))
         assert(row.owner_sequence_id == sequence_id, string.format(
             "Nest: clip %s belongs to sequence %s, not the args sequence_id %s",

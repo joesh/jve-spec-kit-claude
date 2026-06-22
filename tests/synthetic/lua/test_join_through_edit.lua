@@ -19,7 +19,7 @@ local ClipMarker      = require("models.clip_marker")
 print("=== test_join_through_edit.lua ===")
 
 local function bounds(id)
-    local r = Clip.load_v13_row(id)
+    local r = Clip.load_row(id)
     if not r then return nil end
     return {
         start    = r.sequence_start_frame,
@@ -37,7 +37,7 @@ end
 -- The flush right neighbor of `clip_id` on its track (the right half a split
 -- just produced). Found by timeline adjacency, not by the command's internals.
 local function flush_right_id(clip_id)
-    local left = Clip.load_v13_row(clip_id)
+    local left = Clip.load_row(clip_id)
     local left_end = left.sequence_start_frame + left.duration_frames
     for _, row in ipairs(Clip.list_in_sequence(left.owner_sequence_id)) do
         if row.track_id == left.track_id
