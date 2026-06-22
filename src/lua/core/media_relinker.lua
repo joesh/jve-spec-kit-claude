@@ -717,6 +717,21 @@ local function probe_candidate_tc(probe_result)
     return nil, nil
 end
 
+-- Project a probe's duration into stored_rate frame units. When the
+-- probe's native rate matches stored_rate (or rate info is absent), the
+-- duration passes through. Otherwise rescale by (stored / probe). Every
+-- matcher comparison happens in stored_rate units, so all four callsites
+-- need this rescaling; centralizing it keeps the rounding policy
+-- consistent.
+local function probe_duration_in_stored_rate(probe_result, stored_rate)
+    local dur = probe_result.duration_frames
+    if not (probe_result.fps_num and probe_result.fps_den) then return dur end
+    local probe_rate = probe_result.fps_num / probe_result.fps_den
+    if math.abs(probe_rate - stored_rate) <= 0.01 then return dur end
+    return math.floor(dur * stored_rate
+        * probe_result.fps_den / probe_result.fps_num + 0.5)
+end
+
 function M.check_extent_containment(extent_start, extent_end, probe_result, stored_rate, tc_remap_offset)
     assert(extent_start and extent_end, "check_extent_containment: extent_start and extent_end required")
     assert(type(probe_result) == "table", "check_extent_containment: probe_result required")
@@ -744,15 +759,7 @@ function M.check_extent_containment(extent_start, extent_end, probe_result, stor
         cand_start = math.floor(cand_tc_value * stored_rate / cand_tc_rate + 0.5)
     end
 
-    local cand_dur = probe_result.duration_frames
-    if probe_result.fps_num and probe_result.fps_den then
-        local probe_rate = probe_result.fps_num / probe_result.fps_den
-        if math.abs(probe_rate - stored_rate) > 0.01 then
-            cand_dur = math.floor(probe_result.duration_frames * stored_rate * probe_result.fps_den / probe_result.fps_num + 0.5)
-        end
-    end
-
-    local cand_end = cand_start + cand_dur
+    local cand_end = cand_start + probe_duration_in_stored_rate(probe_result, stored_rate)
 
     return abs_start >= cand_start and abs_end <= cand_end
 end
@@ -1051,6 +1058,73 @@ local function compute_tc_remap_offset(media_info)
     return delta
 end
 
+-- When a media file has no embedded TC anchor (no bext time_reference,
+-- no tmcd) AND its candidate has none either, the trim's origin can't
+-- be read from the file. The only signal is the project's own usage:
+-- if the candidate is at least as long as the clips' used span but
+-- can't cover the used range from origin 0, infer that the trim's
+-- origin is min(source_in) = extent_start — exactly enough head was
+-- cut to put the earliest used frame at file 0. The existing origin-0
+-- convention is the degenerate case of this rule (used range starts at
+-- 0); the inference is the general form.
+--
+-- Strictly additive: returns nil unless origin 0 fails AND the used
+-- span fits. Risk (user trimmed past project usage → wrong content) is
+-- intrinsic to TC-less media; Joe acknowledged + accepted 2026-06-21.
+-- Returns (inferred_value, inferred_rate) on success.
+local function infer_no_tc_anchor(media_info, probe_result, stored_rate)
+    if not (probe_result and probe_result.duration_frames and stored_rate) then
+        return nil
+    end
+    -- start_tc_value=0 is the DRP "TC-less render" sentinel. >0 is a
+    -- real anchor we must not override. Note the latent ambiguity:
+    -- footage genuinely shot at TC 00:00:00:00 looks identical to the
+    -- sentinel — both arrive as 0 here. The matcher has no field to
+    -- distinguish them, so a Resolve-trimmed midnight-TC clip would
+    -- (incorrectly) take the inference path. No reports of this in
+    -- practice; tracked as a known edge case if it surfaces.
+    local stored_value = media_info.media_start_tc_value
+    if stored_value and stored_value > 0 then return nil end
+    -- Candidate carrying TC (V or audio) is authoritative — the
+    -- existing TC-clean / trimmed-media branches downstream handle it.
+    if probe_candidate_tc(probe_result) then return nil end
+
+    local s = media_info.source_extent_start
+    local e = media_info.source_extent_end
+    if not (s and e) then return nil end
+
+    local dur = probe_duration_in_stored_rate(probe_result, stored_rate)
+    if dur >= e then return nil end          -- origin 0 already works
+    if dur < (e - s) then return nil end     -- file too short for any anchor
+
+    return s, stored_rate
+end
+
+-- Return a copy of `cand` with the inferred TC stamped onto a fresh
+-- probe_result. probe_result instances are caller-owned and may be
+-- cached across passes — mutating the original would leak. The stamped
+-- probe flows through every downstream consumer (check_extent_containment,
+-- coverage_for_candidate, probed_tc_for_metadata) so the inferred origin
+-- becomes the media_ref's persisted TC. Shallow copy is sufficient
+-- because every probe_result field consumers read is scalar; assert it
+-- so a future probe schema change that adds a nested table trips here
+-- instead of silently aliasing the cache.
+local function stamp_inferred_tc(cand, inferred_value, inferred_rate)
+    local pr = {}
+    for k, v in pairs(cand.probe_result) do
+        assert(type(v) ~= "table", string.format(
+            "stamp_inferred_tc: probe_result.%s is a table — shallow copy "
+            .. "would alias the cached probe; deep-copy this field", k))
+        pr[k] = v
+    end
+    pr.start_tc_value = inferred_value
+    pr.start_tc_rate = inferred_rate
+    local out = {}
+    for k, v in pairs(cand) do out[k] = v end
+    out.probe_result = pr
+    return out
+end
+
 -- Partition candidates into full-extent matches and TC-offset trimmed-fit
 -- candidates. Rules:
 --   * A candidate without tc_mismatch (or without stored_rate context) is
@@ -1063,6 +1137,9 @@ end
 --   * A tc_mismatch that fails both is dropped — recorded in the third
 --     return value as {path, reason} so the failure diagnostics can tell
 --     the user the file WAS found and why it didn't qualify.
+--   * TC-less candidates whose project-side usage indicates a trimmed
+--     interior region get an inferred TC anchor up front (see
+--     infer_no_tc_anchor) before the above rules run.
 local function partition_candidates(media_info, candidates, stored_rate, tc_remap_offset)
     local viable, partial_fit, dropped = {}, {}, {}
 
@@ -1083,6 +1160,19 @@ local function partition_candidates(media_info, candidates, stored_rate, tc_rema
     end
 
     for _, cand in ipairs(candidates) do
+        -- No-TC anchor inference: a TC-less candidate whose project-side
+        -- usage points to an interior trim gets its TC stamped before
+        -- containment runs, so the rest of the pipeline sees the anchor
+        -- uniformly. infer_no_tc_anchor returns nil when origin 0 already
+        -- works, leaving the cand unchanged.
+        local iv, ir = infer_no_tc_anchor(media_info, cand.probe_result, stored_rate)
+        if iv then
+            log.event("  %s: no-TC anchor inferred at %d @%s "
+                .. "(file dur < extent_end, fits used span)",
+                get_filename(cand.path), iv, tostring(ir))
+            cand = stamp_inferred_tc(cand, iv, ir)
+        end
+
         if not (cand.tc_mismatch and stored_rate) then
             -- TC-clean candidate. Even a 1-frame extent shortfall must
             -- demote it to partial_fit so try_partial_fit / partial_coverage
@@ -1224,15 +1314,8 @@ local function log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
     local cand_start_str = tostring(cand_start)
     local cand_end_str = "?"
     if pr.duration_frames then
-        local cand_dur = pr.duration_frames
-        if pr.fps_num and pr.fps_den then
-            local probe_rate = pr.fps_num / pr.fps_den
-            if math.abs(probe_rate - stored_rate) > 0.01 then
-                cand_dur = math.floor(
-                    cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
-            end
-        end
-        cand_end_str = tostring(cand_start + cand_dur)
+        cand_end_str = tostring(cand_start
+            + probe_duration_in_stored_rate(pr, stored_rate))
     end
     local c0 = clips[1]
     log.event(
@@ -1275,14 +1358,7 @@ local function coverage_for_candidate(cand, stored_rate)
     local pr = cand.probe_result
     if not (pr and pr.duration_frames) then return nil end
 
-    local dur = pr.duration_frames
-    if pr.fps_num and pr.fps_den then
-        local probe_rate = pr.fps_num / pr.fps_den
-        if math.abs(probe_rate - stored_rate) > 0.01 then
-            dur = math.floor(
-                dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
-        end
-    end
+    local dur = probe_duration_in_stored_rate(pr, stored_rate)
 
     local cov_value, cov_rate = probe_candidate_tc(pr)
     if not cov_value then
