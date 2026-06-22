@@ -93,8 +93,15 @@ end
 
 --- Assert playback cadence quality from diag ring summary.
 -- Call after PLAYBACK.STOP — rings survive until next Play().
--- @param fps_num, fps_den: sequence frame rate (needed for cadence threshold)
-local function assert_diag_quality(pc_handle, label, has_audio_flag, fps_num, fps_den)
+-- @param fps_num, fps_den: sequence frame rate (cadence threshold floor)
+-- @param wall_ms: wall duration of the play loop (microseconds-to-ms scale OK).
+--   Used to derive the OBSERVED tick interval (wall_ms / tick_count). When
+--   CVDisplayLink succeeds, ticks come at ~60Hz and frame_period dominates the
+--   gate; when it falls back to manual TICK (--test mode without a window),
+--   tick interval is ~50ms and dominates instead. Without this, the gate
+--   measures the test driver's sleep jitter rather than engine cadence and
+--   false-positives in headless fallback.
+local function assert_diag_quality(pc_handle, label, has_audio_flag, fps_num, fps_den, wall_ms)
     local diag = PLAYBACK.GET_DIAG_SUMMARY(pc_handle)
     if diag.tick_count == 0 then
         print("    [diag] " .. label .. ": no ticks recorded (skip assertions)")
@@ -102,6 +109,9 @@ local function assert_diag_quality(pc_handle, label, has_audio_flag, fps_num, fp
     end
 
     local frame_period_ms = 1000.0 / (fps_num / fps_den)
+    assert(wall_ms and wall_ms > 0, "assert_diag_quality: wall_ms required")
+    local tick_interval_ms = wall_ms / diag.tick_count
+    local cadence_floor_ms = math.max(frame_period_ms, tick_interval_ms)
 
     -- Allow ≤2 under CI/headless: manual TICK under heavy CPU load can briefly
     -- starve the audio pump (buf=0 → audio-master), causing transient backward
@@ -117,9 +127,10 @@ local function assert_diag_quality(pc_handle, label, has_audio_flag, fps_num, fp
     check(diag.hold_count == 0,
         string.format("%s: no emergency holds (got %d)", label, diag.hold_count))
 
-    check(diag.cadence_p95_ms < 2 * frame_period_ms,
-        string.format("%s: cadence p95 %.1fms < %.0fms (2x frame period)",
-            label, diag.cadence_p95_ms, 2 * frame_period_ms))
+    check(diag.cadence_p95_ms < 2 * cadence_floor_ms,
+        string.format("%s: cadence p95 %.1fms < %.0fms (2x max(frame_period=%.0fms, tick_interval=%.0fms))",
+            label, diag.cadence_p95_ms, 2 * cadence_floor_ms,
+            frame_period_ms, tick_interval_ms))
 
     if has_audio_flag then
         check(diag.drift_p95_s < 0.15,
@@ -497,7 +508,8 @@ do
         frames_advanced, wall_seconds, measured_fps))
 
     -- Diag ring quality assertions (the exact symptom this fix addresses)
-    assert_diag_quality(pc, "Test 1 forward", has_audio, SEQ_FPS_NUM, SEQ_FPS_DEN)
+    assert_diag_quality(pc, "Test 1 forward", has_audio, SEQ_FPS_NUM, SEQ_FPS_DEN,
+        wall_seconds * 1000.0)
 end
 
 --------------------------------------------------------------------------------
@@ -560,9 +572,17 @@ do
     if has_audio then
         qt_constants.AOP.CLEAR_UNDERRUN(aop)
     end
-    for _ = 1, 18 do
-        poll_sleep(pc, 0.05)
+    -- Time the measured window only (exclude warm-up — warm-up cadence is
+    -- cold-start noise, not steady-state. assert_diag_quality divides this
+    -- by diag.tick_count to derive the observed tick interval).
+    -- Tick at ~60Hz (16ms) for ~1s — 60+ samples for stable p95. The earlier
+    -- 18×50ms gave only ~19 ticks total (incl warm-up), making p95 the 18th-
+    -- largest of 19, which natural sleep jitter blows past in headless mode.
+    local measured_wall_start = wall_us()
+    for _ = 1, 60 do
+        poll_sleep(pc, 0.016)
     end
+    local measured_wall_ms = (wall_us() - measured_wall_start) / 1000.0
     PLAYBACK.STOP(pc)
 
     local last_frame = PLAYBACK.CURRENT_FRAME(pc)
@@ -586,7 +606,8 @@ do
         RESUME_START, last_frame, last_frame - RESUME_START))
 
     -- Diag ring quality assertions
-    assert_diag_quality(pc, "Test 3 seek+resume", has_audio, SEQ_FPS_NUM, SEQ_FPS_DEN)
+    assert_diag_quality(pc, "Test 3 seek+resume", has_audio, SEQ_FPS_NUM, SEQ_FPS_DEN,
+        measured_wall_ms)
 end
 
 --------------------------------------------------------------------------------
