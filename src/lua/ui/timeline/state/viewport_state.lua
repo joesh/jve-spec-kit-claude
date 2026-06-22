@@ -149,13 +149,20 @@ local REGION_SCROLL_PADDING_FRACTION = 0.05
 -- the change region of the undone/redone command.
 --
 -- Rules:
---   1. If the union of [start_frame, end_frame] and the playhead fits
---      inside the viewport, center that union's midpoint. Playhead and
---      the change region are both visible.
+--   0. If the range overlaps the current viewport AND the playhead is
+--      inside it, the user can already see the edit locus — do not
+--      scroll. The mutation payload reports each affected clip's full
+--      extent (e.g. a Blade reports the whole pre-split clip), so a
+--      narrow on-screen edit routinely produces a wide region whose
+--      upstream edge sits off-screen; scrolling to that edge yanks the
+--      visible edit point away. (Domain rule, Joe 2026-06-22.)
+--   1. Else if the union of [start_frame, end_frame] and the playhead
+--      fits inside the viewport, center that union's midpoint. Playhead
+--      and the change region are both visible.
 --   2. Otherwise — the playhead is far from the region, or the region
---      itself is wider than the viewport — anchor the range's upstream
---      edge to the viewport's left side plus a small padding. The
---      playhead may fall outside; region wins.
+--      itself is wider than the viewport with no overlap — anchor the
+--      range's upstream edge to the viewport's left side plus a small
+--      padding. The playhead may fall outside; region wins.
 -- Viewport-guard-aware (skips when guarded, like surface_playhead).
 -- Coordinates are integer frames.
 function M.surface_range(start_frame, end_frame, persist_callback)
@@ -175,6 +182,16 @@ function M.surface_range(start_frame, end_frame, persist_callback)
     if type(duration) ~= "number" or duration <= 0 then return false end
 
     local playhead = cache.playhead_position
+    local vp_start = cache.viewport_start_time
+    local vp_end = vp_start + duration
+
+    -- Rule 0: edit locus already visible → don't move.
+    local region_overlaps_viewport = end_frame >= vp_start and start_frame <= vp_end
+    local playhead_in_viewport = playhead >= vp_start and playhead <= vp_end
+    if region_overlaps_viewport and playhead_in_viewport then
+        return false
+    end
+
     local union_start = math.min(start_frame, playhead)
     local union_end = math.max(end_frame, playhead)
     local union_width = union_end - union_start

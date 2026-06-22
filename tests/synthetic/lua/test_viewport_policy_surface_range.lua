@@ -101,4 +101,37 @@ do
     print("  5. upstream-edge clamped to content floor ✓")
 end
 
+-- -----------------------------------------------------------------------
+-- 6. Range wider than viewport BUT overlaps it, playhead inside viewport
+-- → no scroll. Real-world bug: Blade at frame 90550 splits 5 clips. The
+-- mutation payload reports each clip's full extent, so the change region
+-- becomes [90174, far_end] (much wider than the 245-frame viewport). The
+-- split frame (90550) is inside the viewport at [90393, 90638], the
+-- playhead is on it, the edit locus is visible. Undoing the Blade must
+-- NOT scroll — currently scrolls left to 90162 (upstream edge of the
+-- leftmost affected clip), yanking the visible edit point off-screen.
+-- (Repro 2026-06-22, terminal saved output 13:27:03–13:27:07.)
+-- -----------------------------------------------------------------------
+do
+    reset(90393, 245, 90550, 204390)
+    viewport_state.surface_range(90174, 100000)
+    assert(vp_start() == 90393,
+        string.format("region overlaps viewport + playhead inside → no scroll (got %d)", vp_start()))
+    print("  6. wide region overlaps viewport, playhead inside → no scroll ✓")
+end
+
+-- -----------------------------------------------------------------------
+-- 7. Region OFF-SCREEN to the right, playhead inside viewport → scroll
+-- to surface the region. Guards against an over-broad early-out from
+-- case 6: an off-screen region must still surface even if the playhead
+-- happens to be on screen.
+-- -----------------------------------------------------------------------
+do
+    reset(0, 1000, 500, 10000)
+    viewport_state.surface_range(5000, 5400)
+    assert(vp_start() ~= 0,
+        string.format("off-screen region must scroll even with on-screen playhead (got %d)", vp_start()))
+    print("  7. off-screen region + on-screen playhead → scroll ✓")
+end
+
 print("\n✅ test_viewport_policy_surface_range.lua passed")

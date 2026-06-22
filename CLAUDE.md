@@ -74,6 +74,14 @@ make install-hooks  # Run once per fresh clone — points git at tracked hooks/
 # or, for Finder/Dock launch with no args:
 open build/bin/jve.app
 
+# Live editor session log — the "Terminal Saved Output" / TSO convention
+# Joe launches with stdout+stderr teed to a stable path:
+#   JVE_LOG=all:detail ./build/bin/jve.app/Contents/MacOS/jve --control-socket /tmp/joes-jve.sock 2>&1 | tee ~/iDownloads/Terminal\ Saved\ Output.txt
+# When Joe says "look at the tso", "tso end", or "terminal saved output",
+# read the tail of ~/iDownloads/Terminal Saved Output.txt — that's where
+# the live editor log lives, not a /tmp file. In-code citations like
+# "(TSO 2026-06-15)" point at the same file as of that date.
+
 # Smoke-runner Accessibility grant (one-time, macOS)
 # The L3 keypress smokes deliver keys via osascript `keystroke`. The
 # .app bundle + setActivationPolicy:Regular in main.cpp makes JVE a
