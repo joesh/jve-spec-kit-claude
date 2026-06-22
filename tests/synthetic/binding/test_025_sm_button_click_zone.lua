@@ -1,16 +1,17 @@
---- T-FR004 (025) — M/S button click-zone width (spec 025 FR-004).
+--- T-FR004 (025) — M/S button width stays compact (spec 025 FR-004).
 ---
---- The Mute (M) and Solo (S) buttons in the track header were too narrow
---- to click reliably. FR-004 widens their click zone to a 24px target
---- (label text size unchanged, toggle behavior unchanged).
+--- The Mute (M) and Solo (S) buttons are stacked vertically, so the reliable
+--- way to make them easier to hit is to grow the click zone DOWNWARD (each
+--- fills half the header height), NOT to widen them. FR-004 explicitly does
+--- not widen these buttons.
 ---
---- Domain assertion: every track's M/S button click zone is at least the
---- FR-004 target width. 24 is the spec value, NOT read from the code — a
---- regression that shrinks the buttons back toward the old 16px must fail
---- this test.
+--- Domain assertion: every track's M/S button width stays at the compact value
+--- — a regression that widens it (the earlier mistake) must fail this test. The
+--- vertical fill (each button takes half the header) is verified visually; there
+--- is no widget-height getter to assert it black-box here.
 ---
---- Runs in --test mode against the real binary so the real header layout
---- code runs and we read the actual configured button geometry.
+--- Runs in --test mode against the real binary so the real header layout code
+--- runs and we read the actual configured button geometry.
 
 require('test_env')
 local ui = require("synthetic.integration.ui_test_env")
@@ -19,8 +20,9 @@ print("=== test_025_sm_button_click_zone ===")
 
 local Track = require("models.track")
 
--- FR-004 target click-zone width (px). Spec-derived, not code-derived.
-local FR004_MIN_SM_WIDTH = 24
+-- FR-004 cap on the M/S button width (px): kept compact, never widened. The
+-- click zone grows vertically (each button fills half the header), not sideways.
+local FR004_MAX_SM_WIDTH = 16
 
 local DB = "/tmp/jve/test_025_sm_button_click_zone.jvp"
 local _, project_info = ui.launch({
@@ -54,12 +56,12 @@ for _, tr in ipairs(TRACKS) do
         "%s: no header layout snapshot (track not loaded?)", tr.label))
     assert(type(layout.sm_width) == "number", string.format(
         "%s: header layout did not report sm_width", tr.label))
-    assert(layout.sm_width >= FR004_MIN_SM_WIDTH, string.format(
-        "%s: M/S button click zone is %dpx — FR-004 requires >= %dpx so the "
-        .. "buttons are reliably clickable", tr.label, layout.sm_width,
-        FR004_MIN_SM_WIDTH))
-    print(string.format("  PASS: %s M/S click zone = %dpx (>= %d)",
-        tr.label, layout.sm_width, FR004_MIN_SM_WIDTH))
+    assert(layout.sm_width <= FR004_MAX_SM_WIDTH, string.format(
+        "%s: M/S button is %dpx wide — FR-004 keeps these compact (<= %dpx); "
+        .. "the click zone grows vertically, not by widening", tr.label,
+        layout.sm_width, FR004_MAX_SM_WIDTH))
+    print(string.format("  PASS: %s M/S button width = %dpx (<= %d, compact)",
+        tr.label, layout.sm_width, FR004_MAX_SM_WIDTH))
 end
 
 print("✅ test_025_sm_button_click_zone.lua passed")

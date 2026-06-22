@@ -1271,7 +1271,7 @@ local HDR = {
     REC  = 28,   -- rec-id patch button
     LOCK = 20,   -- lock toggle
     SYNC = 24,   -- sync-mode toggle (slightly wider to fit larger glyph)
-    SM   = 24,   -- each solo/mute button (stacked vertically); spec 025 FR-004 widened the click zone (16→24) — label text size unchanged
+    SM   = 16,   -- each solo/mute button (stacked vertically)
     WAVE = TRAILING_ALIGNMENT_PX,  -- waveform toggle (audio only)
 }
 
@@ -1367,30 +1367,47 @@ end
 -- style) and would double-render every click.
 local command_dispatch = require("core.command_dispatch")
 
-local function wire_toggle_preference(btn, track_id, property, _active_color)
-    local handler = register_track_btn_handler(function()
+-- FR-005: Option/Alt+click on ANY track-header toggle button isolates: the
+-- clicked button toggles (or cycles) like a plain click, then every other
+-- same-kind track's button is set to the CLICKED button's PRIOR state.
+-- Covers every header toggle the user can click — M, S, Lock, W, Sync.
+-- A QPushButton click carries no modifier flags, so read the live keyboard
+-- state at click time.
+local EXCLUSIVE_TOGGLE_PROPS = {
+    muted = true, soloed = true, locked = true,
+    waveform_display = true, sync_mode = true,
+}
+
+-- Single dispatch chokepoint shared by every header toggle. When Alt is held,
+-- route through ExclusiveToggleTrackPreference (which knows the per-property
+-- storage path + signals); otherwise call the property's own plain-click
+-- dispatcher.
+local function header_button_click(track_id, property, plain_dispatch)
+    local mods = qt_constants.INPUT.GET_KEYBOARD_MODIFIERS()
+    if mods.alt and EXCLUSIVE_TOGGLE_PROPS[property] then
         local track = Track.load(track_id)
         assert(track, string.format(
-            "wire_toggle_preference: track %s not found", tostring(track_id)))
+            "header_button_click: track %s not found", tostring(track_id)))
         local project_id = timeline_state.get_project_id()
-        assert(project_id, "wire_toggle_preference: no project_id")
+        assert(project_id, "header_button_click: no project_id")
+        command_dispatch.execute_or_fail("ExclusiveToggleTrackPreference", {
+            track_id = track_id, property = property,
+            project_id = project_id, sequence_id = track.sequence_id,
+        }, "track-header " .. property .. " Option+click")
+    else
+        plain_dispatch()
+    end
+end
 
-        -- FR-005: Option/Alt+click on M or S sets this track and the OPPOSITE
-        -- state on every other track of the same kind ("solo only this" / "mute
-        -- everything except this"). Lock has no exclusive variant. A
-        -- QPushButton click carries no modifier flags, so read the live
-        -- keyboard state at click time.
-        local mods = qt_constants.INPUT.GET_KEYBOARD_MODIFIERS()
-        if mods.alt and (property == "muted" or property == "soloed") then
-            command_dispatch.execute_or_fail("ExclusiveToggleTrackPreference", {
-                track_id = track_id, property = property,
-                project_id = project_id, sequence_id = track.sequence_id,
-            }, "track-header " .. property .. " Option+click")
-        else
+local function wire_toggle_preference(btn, track_id, property, _active_color)
+    local handler = register_track_btn_handler(function()
+        header_button_click(track_id, property, function()
+            local project_id = timeline_state.get_project_id()
+            assert(project_id, "wire_toggle_preference: no project_id")
             command_dispatch.execute_or_fail("ToggleTrackPreference", {
                 track_id = track_id, property = property, project_id = project_id,
             }, "track-header " .. property .. " click")
-        end
+        end)
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
     return handler
@@ -1402,12 +1419,14 @@ end
 -- command fires (rule 3.0 — pull-on-signal).
 local function wire_waveform_display_toggle(btn, track_id)
     local handler = register_track_btn_handler(function()
-        local project_id = timeline_state.get_project_id()
-        assert(project_id, "wire_waveform_display_toggle: no project_id (track_id="
-            .. tostring(track_id) .. ")")
-        command_dispatch.execute_or_fail("ToggleTrackWaveformDisplay", {
-            track_id = track_id, project_id = project_id,
-        }, "waveform-display btn click")
+        header_button_click(track_id, "waveform_display", function()
+            local project_id = timeline_state.get_project_id()
+            assert(project_id, "wire_waveform_display_toggle: no project_id (track_id="
+                .. tostring(track_id) .. ")")
+            command_dispatch.execute_or_fail("ToggleTrackWaveformDisplay", {
+                track_id = track_id, project_id = project_id,
+            }, "waveform-display btn click")
+        end)
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
     return handler
@@ -1418,17 +1437,19 @@ end
 -- dispatches.
 local function wire_sync_mode_cycle(btn, track_id)
     local handler = register_track_btn_handler(function()
-        local t = Track.load(track_id)
-        assert(t, string.format("wire_sync_mode_cycle: track %s not found", tostring(track_id)))
-        local next_mode = SYNC_CYCLE[t.sync_mode]
-        assert(next_mode, string.format(
-            "wire_sync_mode_cycle: unrecognised sync_mode '%s' on track %s",
-            tostring(t.sync_mode), tostring(track_id)))
-        local project_id = timeline_state.get_project_id()
-        assert(project_id, "wire_sync_mode_cycle: no project_id")
-        command_dispatch.execute_or_fail("SetSyncMode", {
-            track_id = track_id, sync_mode = next_mode, project_id = project_id,
-        }, "sync-mode cycle click")
+        header_button_click(track_id, "sync_mode", function()
+            local t = Track.load(track_id)
+            assert(t, string.format("wire_sync_mode_cycle: track %s not found", tostring(track_id)))
+            local next_mode = SYNC_CYCLE[t.sync_mode]
+            assert(next_mode, string.format(
+                "wire_sync_mode_cycle: unrecognised sync_mode '%s' on track %s",
+                tostring(t.sync_mode), tostring(track_id)))
+            local project_id = timeline_state.get_project_id()
+            assert(project_id, "wire_sync_mode_cycle: no project_id")
+            command_dispatch.execute_or_fail("SetSyncMode", {
+                track_id = track_id, sync_mode = next_mode, project_id = project_id,
+            }, "sync-mode cycle click")
+        end)
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
     return handler
@@ -2206,7 +2227,7 @@ local function build_track_header_row(track, track_type, header_color)
         cells            = cells,
         lock_kind        = "icon",
         label_text       = track.name,
-        sm_width         = HDR.SM,   -- M/S button click-zone width (spec 025 FR-004)
+        sm_width         = HDR.SM,        -- M/S button width — compact (FR-004: not widened)
         header_widget    = header,
         base_header_color = header_color,
     }
@@ -4074,18 +4095,18 @@ end
 --- @param track_id string
 --- @return table|nil { cells = {string...}, lock_kind = string,
 ---                    label_text = string, sm_width = integer } or nil if
----                    track not loaded. sm_width is the M/S button click-zone
----                    width in px (spec 025 FR-004).
+---                    track not loaded. sm_width is the M/S button width in px
+---                    (spec 025 FR-004 — kept compact, not widened).
 function M.get_track_header_layout_for_test(track_id)
     assert(track_id and track_id ~= "",
         "get_track_header_layout_for_test: track_id required")
     local refs = track_button_refs[track_id]
     if not refs then return nil end
     return {
-        cells      = refs.cells,
-        lock_kind  = refs.lock_kind,
-        label_text = refs.label_text,
-        sm_width   = refs.sm_width,
+        cells           = refs.cells,
+        lock_kind       = refs.lock_kind,
+        label_text      = refs.label_text,
+        sm_width        = refs.sm_width,
     }
 end
 

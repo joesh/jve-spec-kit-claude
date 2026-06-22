@@ -1343,7 +1343,8 @@ local function render_through_edit_markers(ctx)
                     local cut = b.sequence_start
                     if cut >= ctx.viewport_start and cut <= ctx.viewport_end then
                         local cx = state_module.time_to_pixel(cut, ctx.width)
-                        local top = layout.y + 4
+                        -- Center the chevrons vertically in the track band.
+                        local top = layout.y + (layout.height - CHEVRON_H) / 2
                         local mid = top + CHEVRON_H / 2
                         local bot = top + CHEVRON_H
                         -- Left clip's right edge: rightward triangle, tip on the cut.

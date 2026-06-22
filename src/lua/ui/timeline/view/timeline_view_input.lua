@@ -359,29 +359,110 @@ local function find_edit_point_at_cursor(view, x, y, width, height)
     }
 end
 
+-- Resolve the screen-global popup origin for a context menu from the event's
+-- global coords, falling back to widget→global mapping, then to local coords.
+local function resolve_popup_xy(view, x, y, event)
+    local global_x = event and event.global_x and math.floor(event.global_x) or nil
+    local global_y = event and event.global_y and math.floor(event.global_y) or nil
+    if (not global_x or not global_y) and qt_constants.WIDGET and qt_constants.WIDGET.MAP_TO_GLOBAL then
+        global_x, global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(view.widget, math.floor(x), math.floor(y))
+    end
+    if not global_x or not global_y then
+        global_x, global_y = math.floor(x), math.floor(y)
+    end
+    return math.floor(global_x), math.floor(global_y)
+end
+
+-- Build a Qt popup from an `actions` list ({label, shortcut?, enabled?,
+-- tooltip?, handler} or {separator=true}) and show it at the global origin.
+-- No-op on an empty list. The timeline's OpenGL widget is a poor menu parent,
+-- so reuse the project_browser tree when present (known-good parent).
+local function present_actions_menu(view, actions, global_x, global_y)
+    if #actions == 0 then return end
+    local parent = view.widget
+    local ok, project_browser = pcall(require, "ui.project_browser")
+    if ok and project_browser and project_browser.tree then
+        parent = project_browser.tree
+    end
+    local menu = qt_constants.MENU.CREATE_MENU(parent, "TimelineClipContext")
+    for _, action_def in ipairs(actions) do
+        if action_def.separator then
+            qt_constants.MENU.ADD_MENU_SEPARATOR(menu)
+        else
+            local label = action_def.label
+            if action_def.shortcut then
+                label = label .. "\t" .. action_def.shortcut
+            end
+            local qt_action = qt_constants.MENU.CREATE_MENU_ACTION(menu, label)
+            if action_def.enabled == false then
+                qt_constants.MENU.SET_ACTION_ENABLED(qt_action, false)
+                if action_def.tooltip then
+                    qt_constants.PROPERTIES.SET_TOOLTIP(qt_action, action_def.tooltip)
+                end
+            else
+                qt_constants.MENU.CONNECT_MENU_ACTION(qt_action, function()
+                    action_def.handler()
+                end)
+            end
+        end
+    end
+    qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
+end
+
+-- Build the through-edit join actions for a right-clicked edit point (spec
+-- 025 FR-001). "Join Through Edit" is grayed (with a reason tooltip) unless
+-- the pair is a through-edit on an unlocked track; "Join All Through Edits"
+-- is grayed when nothing is joinable.
+local function through_edit_actions(state, edit_point)
+    local actions = {}
+    local one_enabled, one_tooltip = M.join_one_state(
+        edit_point.left_clip, edit_point.right_clip, edit_point.kind, edit_point.track_locked)
+    table.insert(actions, {
+        label = "Join Through Edit",
+        enabled = one_enabled,
+        tooltip = one_tooltip,
+        handler = function()
+            command_manager.execute_interactive("JoinThroughEdit", {
+                project_id  = state.get_project_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
+                clip_id     = edit_point.left_clip_id,
+            })
+        end
+    })
+    table.insert(actions, {
+        label = "Join All Through Edits",
+        enabled = M.any_through_edit_joinable(displayed_tracks_with_clips(state)),
+        handler = function()
+            command_manager.execute_interactive("JoinAllThroughEdits", {
+                project_id  = state.get_project_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
+            })
+        end
+    })
+    return actions
+end
+
+--- Context menu for a right-clicked EDIT POINT (cut between two real clips).
+-- An edit is its own gesture: it shows the through-edit operations and does
+-- NOT select or act on a clip (spec 025 FR-001; research Q "the right-click
+-- target is the edit point, not a clip body").
+-- @param event The mouse event object (may contain global_x, global_y)
+-- @param edit_point find_edit_point_at_cursor result
+local function show_edit_context_menu(view, x, y, event, edit_point)
+    local global_x, global_y = resolve_popup_xy(view, x, y, event)
+    present_actions_menu(view, through_edit_actions(view.state, edit_point), global_x, global_y)
+end
+
 --- Show context menu for timeline clips
 -- @param view Timeline view
 -- @param x Mouse x position (widget-local)
 -- @param y Mouse y position (widget-local)
 -- @param clicked_clip The clip under cursor (or nil)
 -- @param event The mouse event object (may contain global_x, global_y)
-local function show_clip_context_menu(view, x, y, clicked_clip, event, edit_point)
+local function show_clip_context_menu(view, x, y, clicked_clip, event)
     local state = view.state
 
-    -- Get global mouse position for popup
-    -- First check if event has global coordinates (like project_browser)
-    local global_x = event and event.global_x and math.floor(event.global_x) or nil
-    local global_y = event and event.global_y and math.floor(event.global_y) or nil
-
-    -- Fall back to coordinate conversion
-    if (not global_x or not global_y) and qt_constants.WIDGET and qt_constants.WIDGET.MAP_TO_GLOBAL then
-        global_x, global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(view.widget, math.floor(x), math.floor(y))
-    end
-
-    -- Last resort: use local coords (won't be positioned correctly)
-    if not global_x or not global_y then
-        global_x, global_y = math.floor(x), math.floor(y)
-    end
+    local global_x, global_y = resolve_popup_xy(view, x, y, event)
 
     -- If right-clicking on a clip that's not selected, select it first
     local selected_clips = state.get_selected_clips and state.get_selected_clips() or {}
@@ -400,8 +481,8 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event, edit_poin
         end
     end
 
-    if #selected_clips == 0 and not edit_point then
-        return  -- No clips selected and not on an edit point → no menu
+    if #selected_clips == 0 then
+        return  -- No clips selected → no clip menu (edit points route elsewhere)
     end
 
     local actions = {}
@@ -491,74 +572,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event, edit_poin
         end
     })
 
-    -- Through-edit join (spec 025 FR-001): only when the right-click landed on
-    -- an edit point (cut between two real clips). "Join Through Edit" is grayed
-    -- (with a reason tooltip) unless the pair is a through-edit on an unlocked
-    -- track; "Join All Through Edits" is grayed when nothing is joinable.
-    if edit_point then
-        table.insert(actions, { separator = true })
-        local one_enabled, one_tooltip = M.join_one_state(
-            edit_point.left_clip, edit_point.right_clip, edit_point.kind, edit_point.track_locked)
-        table.insert(actions, {
-            label = "Join Through Edit",
-            enabled = one_enabled,
-            tooltip = one_tooltip,
-            handler = function()
-                command_manager.execute_interactive("JoinThroughEdit", {
-                    project_id  = state.get_project_id(),
-                    sequence_id = state.get_tab_strip():active_sequence_id(),
-                    clip_id     = edit_point.left_clip_id,
-                })
-            end
-        })
-        table.insert(actions, {
-            label = "Join All Through Edits",
-            enabled = M.any_through_edit_joinable(displayed_tracks_with_clips(state)),
-            handler = function()
-                command_manager.execute_interactive("JoinAllThroughEdits", {
-                    project_id  = state.get_project_id(),
-                    sequence_id = state.get_tab_strip():active_sequence_id(),
-                })
-            end
-        })
-    end
-
-    if #actions == 0 then
-        return
-    end
-
-    -- Create and show the menu
-    -- The timeline's custom OpenGL widget may not work as a menu parent.
-    -- Use the project_browser's tree widget which is known to work.
-    local parent = view.widget
-    local ok, project_browser = pcall(require, "ui.project_browser")
-    if ok and project_browser and project_browser.tree then
-        parent = project_browser.tree
-    end
-    local menu = qt_constants.MENU.CREATE_MENU(parent, "TimelineClipContext")
-    for _, action_def in ipairs(actions) do
-        if action_def.separator then
-            qt_constants.MENU.ADD_MENU_SEPARATOR(menu)
-        else
-            local label = action_def.label
-            if action_def.shortcut then
-                label = label .. "\t" .. action_def.shortcut
-            end
-            local qt_action = qt_constants.MENU.CREATE_MENU_ACTION(menu, label)
-            if action_def.enabled == false then
-                qt_constants.MENU.SET_ACTION_ENABLED(qt_action, false)
-                if action_def.tooltip then
-                    qt_constants.PROPERTIES.SET_TOOLTIP(qt_action, action_def.tooltip)
-                end
-            else
-                qt_constants.MENU.CONNECT_MENU_ACTION(qt_action, function()
-                    action_def.handler()
-                end)
-            end
-        end
-    end
-
-    qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
+    present_actions_menu(view, actions, global_x, global_y)
 end
 
 function M.handle_mouse(view, event_type, x, y, button, modifiers)
@@ -590,12 +604,17 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         if focus_manager and focus_manager.set_focused_panel then pcall(focus_manager.set_focused_panel, "timeline") end
         if qt_set_focus then pcall(qt_set_focus, view.widget) end
 
-        -- Right-click: show context menu. An edit-point click (cut between two
-        -- real clips) appends the through-edit join items (spec 025 FR-001).
+        -- Right-click: an edit point (cut between two real clips) is its own
+        -- gesture — show the through-edit operations and DON'T select/act on a
+        -- clip (spec 025 FR-001). Otherwise show the clip context menu.
         if button == RIGHT_MOUSE_BUTTON then
-            local clicked_clip = find_clip_under_cursor(view, x, y, width, height)
             local edit_point = find_edit_point_at_cursor(view, x, y, width, height)
-            show_clip_context_menu(view, x, y, clicked_clip, modifiers, edit_point)  -- modifiers is the event object
+            if edit_point then
+                show_edit_context_menu(view, x, y, modifiers, edit_point)  -- modifiers is the event object
+            else
+                local clicked_clip = find_clip_under_cursor(view, x, y, width, height)
+                show_clip_context_menu(view, x, y, clicked_clip, modifiers)
+            end
             return
         end
 
