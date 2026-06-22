@@ -82,6 +82,9 @@ __pycache__/
 tests/captures/
 tests/**/captures/
 
+# Skill runtime captures (regenerated on each invocation)
+.claude/skills/run-jve-editor/screenshot.png
+
 # Event journals (runtime artifacts)
 :memory:.events/
 **/events.jsonl
