@@ -1242,11 +1242,22 @@ function SequenceMonitor:_create_tc_row(parent_layout)
     end
     qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._tc_playhead_label)
 
-    -- Grade status / sync-pending, centered between the two timestamps.
-    qt_constants.LAYOUT.ADD_STRETCH(row_layout)
-    self._grade_status = qt_constants.WIDGET.CREATE_LABEL("")
+    -- Grade status / sync-pending: fills the slot between the two timecodes
+    -- and elides ("…") at the end rather than widening the monitor when the
+    -- message is longer than the gap. ElidingLabel pairs the clip with a
+    -- tooltip carrying the full string (see binding_macros.h::ElidingLabel)
+    -- so the user can hover to read the clipped tail. Centered within the
+    -- slot — when the message fits, it reads as a centered status; when
+    -- clipped, the visible head sits left-of-center with the ellipsis just
+    -- past it (Qt::ElideRight always keeps the start).
+    self._grade_status = qt_constants.WIDGET.CREATE_ELIDING_LABEL("")
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(self._grade_status, "Expanding", "Fixed")
+    if qt_constants.PROPERTIES.SET_ALIGNMENT then
+        qt_constants.PROPERTIES.SET_ALIGNMENT(
+            self._grade_status, qt_constants.PROPERTIES.ALIGN_CENTER)
+    end
     qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._grade_status)
-    qt_constants.LAYOUT.ADD_STRETCH(row_layout)
+    qt_constants.LAYOUT.SET_STRETCH_FACTOR(row_layout, self._grade_status, 1)
 
     -- Duration (right-aligned)
     self._tc_duration_label = qt_constants.WIDGET.CREATE_LABEL("--")

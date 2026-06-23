@@ -154,6 +154,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_text_generic); lua_setfield(L, -2, "SET_TEXT");
     lua_pushcfunction(L, lua_get_text_generic); lua_setfield(L, -2, "GET_TEXT");
     lua_pushcfunction(L, lua_set_tooltip); lua_setfield(L, -2, "SET_TOOLTIP");
+    lua_pushcfunction(L, lua_get_tooltip); lua_setfield(L, -2, "GET_TOOLTIP");
     lua_pushcfunction(L, lua_set_checked); lua_setfield(L, -2, "SET_CHECKED");
     lua_pushcfunction(L, lua_get_checked); lua_setfield(L, -2, "GET_CHECKED");
     lua_pushcfunction(L, lua_add_combobox_item); lua_setfield(L, -2, "ADD_COMBOBOX_ITEM");

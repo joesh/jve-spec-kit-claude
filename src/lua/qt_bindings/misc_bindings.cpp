@@ -705,6 +705,25 @@ int lua_set_tooltip(lua_State* L) {
     return 0;
 }
 
+// Symmetric reader for lua_set_tooltip. Returns nil on a destroyed/missing
+// widget (consistent with lua_get_text_generic), raises on wrong-typed object
+// (consistent with lua_set_tooltip's dispatch). Used by ElidingLabel tests to
+// verify the widget's intrinsic elide+tooltip pairing.
+int lua_get_tooltip(lua_State* L) {
+    void* ptr = lua_to_widget(L, 1);
+    if (!ptr) { lua_pushnil(L); return 1; }
+
+    QObject* obj = static_cast<QObject*>(ptr);
+    if (QWidget* w = qobject_cast<QWidget*>(obj)) {
+        lua_pushstring(L, w->toolTip().toUtf8().constData());
+    } else if (QAction* a = qobject_cast<QAction*>(obj)) {
+        lua_pushstring(L, a->toolTip().toUtf8().constData());
+    } else {
+        return luaL_error(L, "qt_get_tooltip: object is neither a QWidget nor a QAction");
+    }
+    return 1;
+}
+
 int lua_get_widget_property(lua_State* L) {
     QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_get_widget_property: widget required");

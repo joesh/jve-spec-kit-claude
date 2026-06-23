@@ -79,6 +79,15 @@ public:
 // the Inspector header) can never dictate the panel width. Set text via
 // setFullText (the SET_TEXT binding routes here through a dynamic_cast). QSS
 // background/padding still render because QLabel's own paintEvent is kept.
+//
+// Elide + tooltip are paired: when the rendered text differs from the full
+// text (i.e. clipping occurred) the full string is published as the widget's
+// tooltip so a user who can't read the clipped tail can hover to see it. When
+// the text fits, the tooltip is cleared — no hover noise for unclipped labels.
+// The pairing is intrinsic to the widget (resize events never reach Lua, so
+// no call site could keep this in sync from the outside) — every caller of
+// CREATE_ELIDING_LABEL gets it for free; do not set a custom tooltip on an
+// ElidingLabel, it will be overwritten on the next reelide.
 class ElidingLabel : public QLabel {
 public:
     using QLabel::QLabel;
@@ -95,8 +104,10 @@ protected:
 private:
     void reelide() {
         const QFontMetrics fm(fontMetrics());
-        QLabel::setText(fm.elidedText(
-            m_full, Qt::ElideRight, std::max(0, contentsRect().width())));
+        const QString shown = fm.elidedText(
+            m_full, Qt::ElideRight, std::max(0, contentsRect().width()));
+        QLabel::setText(shown);
+        setToolTip(shown == m_full ? QString() : m_full);
     }
     QString m_full;
 };
