@@ -27,6 +27,7 @@ local database          = require("core.database")
 local ClipGrade         = require("models.clip_grade")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local sync_grades       = require("core.commands.sync_grades_from_resolve")
+local command_manager   = require("core.command_manager")
 
 local pass, fail = 0, 0
 local function check(label, cond)
@@ -85,6 +86,8 @@ identity_ledger.upsert("dbid_clip_a",
 identity_ledger.upsert("uuid_blade_b",
     { resolve_item_id = "live_uid_222" }, db)
 
+command_manager.init("s", "p")
+
 -- ─── Helper response shape (post-fix): keyed on resolve_item_id ─────
 -- Helper has no JVE state (FR-021) — it returns its native ids.
 local CDL_A = {
@@ -110,7 +113,7 @@ local response = {
     },
 }
 
-local captured = sync_grades.apply(response, "s", db, now + 60)
+sync_grades.apply(response, "s", db, now + 60)
 
 -- ─── Attribution lands on the right clips via the ledger ────────────
 local grade_a = ClipGrade.load("dbid_clip_a", db)
@@ -129,11 +132,12 @@ check("clip A source = resolve",
 check("clip B source = resolve",
     grade_b and grade_b.source == "resolve")
 
--- ─── Restore undoes apply ──────────────────────────────────────────
-sync_grades.restore(captured, db)
-check("restore removes clip A grade row (was ungraded before)",
+-- ─── Undo via command_manager unwinds apply ───────────────────────
+local undo_result = command_manager.undo()
+check("command_manager.undo() succeeds", undo_result and undo_result.success)
+check("undo removes clip A grade row (was ungraded before)",
     ClipGrade.load("dbid_clip_a", db) == nil)
-check("restore removes clip B grade row (was ungraded before)",
+check("undo removes clip B grade row (was ungraded before)",
     ClipGrade.load("uuid_blade_b", db) == nil)
 
 -- ─── Unmatched-from-Resolve: a helper row whose resolve_item_id has
@@ -150,18 +154,20 @@ local response_with_unknown = {
           fidelity = "primary", lut = nil },
     },
 }
-local cap2 = sync_grades.apply(response_with_unknown, "s", db, now + 120)
+local summary2 = sync_grades.apply(response_with_unknown, "s", db, now + 120)
 check("known resolve_item_id still attributed",
     ClipGrade.load("dbid_clip_a", db) ~= nil)
 check("unknown resolve_item_id surfaced as unmatched",
-    type(cap2.unmatched_resolve_items) == "table"
-        and #cap2.unmatched_resolve_items == 1
-        and cap2.unmatched_resolve_items[1] == "live_uid_999")
+    type(summary2.unmatched_resolve_items) == "table"
+        and #summary2.unmatched_resolve_items == 1
+        and summary2.unmatched_resolve_items[1] == "live_uid_999")
 
--- restore unwinds known apply; unmatched are no-ops on undo (nothing
--- was written for them).
-sync_grades.restore(cap2, db)
-check("restore after unmatched-mixed batch clears the known clip's row",
+-- Undo unwinds known apply; unmatched are no-ops on undo (nothing was
+-- written for them).
+local undo2 = command_manager.undo()
+check("undo after unmatched-mixed batch succeeds",
+    undo2 and undo2.success)
+check("undo after unmatched-mixed batch clears the known clip's row",
     ClipGrade.load("dbid_clip_a", db) == nil)
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))

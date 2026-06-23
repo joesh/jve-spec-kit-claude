@@ -19,6 +19,7 @@ local database          = require("core.database")
 local ClipGrade         = require("models.clip_grade")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local sync_grades       = require("core.commands.sync_grades_from_resolve")
+local command_manager   = require("core.command_manager")
 
 local pass, fail = 0, 0
 local function check(label, cond)
@@ -70,6 +71,8 @@ db:exec(string.format([[
 identity_ledger.upsert("c_graded", { resolve_item_id = "live_g" }, db)
 identity_ledger.upsert("c_naked",  { resolve_item_id = "live_n" }, db)
 
+command_manager.init("s", "p")
+
 -- Prior grade for c_graded only.
 local PRIOR_CDL = {
     slope_r = 1.05, slope_g = 0.98, slope_b = 0.92,
@@ -92,7 +95,7 @@ local response = {
         { resolve_item_id = "live_n", fidelity = "none" },
     },
 }
-local captured = sync_grades.apply(response, "s", db, now + 60)
+sync_grades.apply(response, "s", db, now + 60)
 
 -- ─── c_graded's prior grade was dropped (re-sync overwrite per FR-014) ──
 check("c_graded grade row dropped after fidelity=none",
@@ -101,25 +104,15 @@ check("c_graded grade row dropped after fidelity=none",
 check("c_naked stays ungraded after fidelity=none (no prior row)",
     ClipGrade.load("c_naked", db) == nil)
 
--- ─── Captured carries the prior c_graded row so undo restores it ──
-local has_graded_capture = false
-for _, e in ipairs(captured.entries) do
-    if e.clip_id == "c_graded" and e.before ~= nil
-        and e.before.cdl
-        and e.before.cdl.slope_r == PRIOR_CDL.slope_r then
-        has_graded_capture = true
-    end
-end
-check("apply captured c_graded's prior CDL for undo",
-    has_graded_capture)
-
--- ─── Restore brings the prior grade back ──────────────────────────
-sync_grades.restore(captured, db)
+-- ─── Undo via command_manager: SetClipGrades captured the prior CDL
+-- for c_graded in _before, so undo restores it. ────────────────────
+local undo_result = command_manager.undo()
+check("command_manager.undo() succeeds", undo_result and undo_result.success)
 local restored = ClipGrade.load("c_graded", db)
-check("restore brings c_graded's prior CDL back",
+check("undo brings c_graded's prior CDL back",
     restored ~= nil and restored.cdl
         and restored.cdl.slope_r == PRIOR_CDL.slope_r)
-check("restore leaves c_naked still ungraded",
+check("undo leaves c_naked still ungraded",
     ClipGrade.load("c_naked", db) == nil)
 
 -- ─── Mixed batch: one fidelity=none, one fidelity=primary ─────────
@@ -141,7 +134,7 @@ local mixed = {
           fidelity = "primary" },
     },
 }
-local cap2 = sync_grades.apply(mixed, "s", db, now + 120)
+sync_grades.apply(mixed, "s", db, now + 120)
 check("mixed batch: c_graded grade row dropped",
     ClipGrade.load("c_graded", db) == nil)
 local naked_after = ClipGrade.load("c_naked", db)
@@ -149,10 +142,19 @@ check("mixed batch: c_naked picks up the primary CDL",
     naked_after ~= nil and naked_after.cdl
         and naked_after.cdl.saturation == NEW_CDL.saturation)
 
--- Restore undoes both branches.
-sync_grades.restore(cap2, db)
-check("mixed batch undo: c_graded restored to PRIOR_CDL",
-    ClipGrade.load("c_graded", db) ~= nil)
+-- Undo via command_manager: both branches share one batch → one Cmd-Z.
+local undo_mixed = command_manager.undo()
+check("mixed batch undo: command_manager.undo() succeeds",
+    undo_mixed and undo_mixed.success)
+-- Assert PRIOR_CDL values actually restored — checking != nil alone
+-- would pass even if undo restored an empty/zeroed grade.
+local restored_graded = ClipGrade.load("c_graded", db)
+check("mixed batch undo: c_graded restored to PRIOR_CDL slope_r",
+    restored_graded ~= nil and restored_graded.cdl
+        and restored_graded.cdl.slope_r == PRIOR_CDL.slope_r)
+check("mixed batch undo: c_graded restored to PRIOR_CDL saturation",
+    restored_graded ~= nil and restored_graded.cdl
+        and restored_graded.cdl.saturation == PRIOR_CDL.saturation)
 check("mixed batch undo: c_naked back to ungraded",
     ClipGrade.load("c_naked", db) == nil)
 

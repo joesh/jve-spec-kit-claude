@@ -1,25 +1,27 @@
 --- SyncGradesFromResolve — pull grades back from Resolve into JVE
 --- (spec 023, T031, FR-013/FR-014/FR-015/FR-017).
 ---
---- Three entry points:
+--- Two entry points:
 ---   M.apply(response, sequence_id, db, synced_at)
----       Pure data path: takes the helper's `read_grades` result, upserts
----       clip_grade rows for matched clips, updates the identity_ledger
----       grade_fingerprint, AND marks any ledger-linked clip in
----       `sequence_id` whose Resolve item was absent from the response
----       with stale=1 (FR-013a — never silently cleared, never shown as
----       current). Returns a captured-state table for undo.
----   M.restore(captured, db)
----       Reverts the rows apply() touched: re-upserts the prior grade
----       row for clips that had one; deletes the row for clips that
----       didn't. Idempotent against further state.
----   M.execute(args, on_complete)
+---       Takes the helper's `read_grades` result, computes the per-clip
+---       set/clear operations (including FR-013a stale walk for ledger-
+---       linked clips absent from the response — never silently cleared,
+---       never shown as current), and dispatches ONE synchronous
+---       undoable `SetClipGrades` batch command covering all affected
+---       clips. command_manager records a single undo entry; one Cmd-Z
+---       reverts the whole sync.
+---   M.execute(args, db, _command)
 ---       Full command: pulls via helper_supervisor → applies → invokes
 ---       on_complete with success / structured error.
 ---
---- This separation makes apply()/restore() unit-testable without the
---- helper running (T030), while M.execute is integration-level (T034 once
---- T029 lands). FR-022 — no mocks; tests pass real data structures.
+--- The outer SyncGradesFromResolve command is non-undoable: undoing the
+--- async outer command was the source of the original assert (a late
+--- `set_parameter` on the in-memory command after the async response
+--- never reached the DB-rehydrated undoer). The inner `SetClipGrades`
+--- command is fully synchronous — it captures before-state for every
+--- clip in the batch at execute() and command_manager persists it to
+--- command_args before any undo can reach it. Mirrors
+--- SyncEditsFromResolve's outer-non-undoable + inner-undoable pattern.
 
 local M = {}
 
@@ -30,6 +32,7 @@ local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local discovery         = require("core.resolve_bridge.discovery")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
 local bridge_command    = require("core.commands.bridge_command")
+local command_manager   = require("core.command_manager")
 local Signals           = require("core.signals")
 local log               = require("core.logger").for_area("commands")
 
@@ -50,21 +53,7 @@ local OP = bridge_command.declare(
     "SyncGradesFromResolve", "sync_grades_from_resolve_completed")
 local notify = OP.notify
 
-local function load_existing_row(clip_id, db)
-    return ClipGrade.load(clip_id, db)
-end
-
-local function delete_grade(clip_id, db)
-    local stmt = assert(db:prepare(
-        "DELETE FROM clip_grade WHERE clip_id = ?"),
-        "sync_grades: prepare DELETE failed")
-    stmt:bind_value(1, clip_id)
-    local ok = stmt:exec()
-    stmt:finalize()
-    assert(ok, "sync_grades: DELETE failed for clip " .. clip_id)
-end
-
--- Helper response row shape (post-FR-021 architectural fix): keyed on
+-- Helper response item shape (post-FR-021 architectural fix): keyed on
 -- the helper's NATIVE id (`resolve_item_id`), NOT on jve_guid. The
 -- helper holds no JVE state (FR-021); attribution to a JVE clip_id is
 -- a Lua-side join through `identity_ledger` (populated by the
@@ -74,8 +63,8 @@ end
 -- fidelity closed set: primary | partial | unrepresentable | none.
 -- "none" — Resolve item is PRESENT but observed to have no CDL block
 -- AND no LUT AND no non-CDL tools. Distinct from FR-013a item-absent
--- (row omitted from response). Apply DROPS any prior clip_grade row
--- for the matched clip (FR-014 re-sync overwrite).
+-- (item omitted from response). Apply DROPS any prior clip_grade
+-- entry for the matched clip (FR-014 re-sync overwrite).
 local FIDELITIES = {
     primary = true, partial = true,
     unrepresentable = true, none = true,
@@ -229,41 +218,124 @@ local function new_grade_from_response_row(row, row_index, synced_at)
     }
 end
 
--- FR-013a stale walk: any ledger-linked clip in `sequence_id` whose
--- Resolve item was absent from the read_grades response keeps its
--- last-synced grade but is marked stale=1. Captures the prior row so
--- restore() can revert.
-local function walk_ledger_for_stale(sequence_id, seen_clip_ids, db,
-                                      captured)
-    -- Rule 2.5: Use centralized iterator for sequence links (review item #1).
+-- FR-013a stale walk: collect operations for any ledger-linked clip in
+-- `sequence_id` whose Resolve item was absent from the read_grades
+-- response. The clip keeps its last-synced grade values but is marked
+-- stale=1 so it's never silently shown as current. Returns ops folded
+-- into the batch as action="set" with the staled grade; ledger
+-- fingerprint is untouched (no new_grade_fingerprint).
+local function collect_stale_walk_ops(sequence_id, seen_clip_ids, db)
+    local ops = {}
     local links = identity_ledger.iter_links_for_sequence(sequence_id, db)
     for _, link in ipairs(links) do
         local clip_id = link.clip_id
         if seen_clip_ids[clip_id] == nil then
-            local before = load_existing_row(clip_id, db)
+            local before = ClipGrade.load(clip_id, db)
             if before ~= nil and before.stale == 0 then
-                captured.entries[#captured.entries + 1] = {
-                    clip_id = clip_id,
-                    before  = before,
+                ops[#ops + 1] = {
+                    clip_id   = clip_id,
+                    action    = "set",
+                    new_grade = {
+                        cdl          = before.cdl,
+                        lut_ref      = before.lut_ref,
+                        fidelity     = before.fidelity,
+                        reproduction = before.reproduction,
+                        source       = before.source,
+                        stale        = 1,
+                        synced_at    = before.synced_at,
+                    },
                 }
-                local staled = {
-                    cdl          = before.cdl,
-                    lut_ref      = before.lut_ref,
-                    fidelity     = before.fidelity,
-                    reproduction = before.reproduction,
-                    source       = before.source,
-                    stale        = 1,
-                    synced_at    = before.synced_at,
-                }
-                ClipGrade.upsert(clip_id, staled, db)
             end
         end
     end
+    return ops
 end
 
---- Apply a helper read_grades response. Returns a captured table that
---- restore() consumes to undo the change. `sequence_id` scopes the
---- FR-013a stale walk to the sequence the call was about.
+-- Filter wire response items down to those whose shape passes
+-- validate_grade_wire_item. Malformed items are dropped with a log.warn
+-- so the rest of apply can assert internal invariants without crashing
+-- on bad external data (rule 1.14 / rule 2.32).
+local function filter_valid_grades(grades)
+    local valid = {}
+    for i, row in ipairs(grades) do
+        local field_err = validate_grade_wire_item(row, i)
+        if field_err ~= nil then
+            log.warn(field_err)
+        else
+            valid[#valid + 1] = row
+        end
+    end
+    return valid
+end
+
+-- Translate validated wire items into per-clip ops for the SetClipGrades batch.
+-- Returns ops, unmatched_resolve_items, no_carrier_count, seen_clip_ids.
+-- Pure: reads ledger + existing grade rows but writes nothing.
+local function plan_matched_ops(valid_grades, db, synced_at)
+    local ops, unmatched = {}, {}
+    local no_carrier_count = 0
+    local seen_clip_ids = {}
+    for i, row in ipairs(valid_grades) do
+        -- Ledger-driven attribution (FR-021): helper emits its native
+        -- resolve_item_id; JVE owns the join to clip.id. A row whose
+        -- resolve_item_id has no ledger entry is REPORTED, not silently
+        -- dropped — symmetric with FR-011c unmatched-JVE-clip discipline.
+        local clip_id = identity_ledger.lookup_clip_id(
+            row.resolve_item_id, db)
+        if clip_id == nil then
+            unmatched[#unmatched + 1] = row.resolve_item_id
+        else
+            seen_clip_ids[clip_id] = true
+            local link_before = identity_ledger.load(clip_id, db)
+            assert(link_before, string.format(
+                "sync_grades.apply: lookup_clip_id %q→%q but "
+                .. "load(%q) returned nil — identity_ledger "
+                .. "consistency violation",
+                row.resolve_item_id, clip_id, clip_id))
+
+            if row.fidelity == "none" then
+                -- FR-014 re-sync overwrite: drop any prior grade row.
+                -- UNGRADED_FINGERPRINT records the ungraded baseline so
+                -- the next sync's drift detection is right.
+                ops[#ops + 1] = {
+                    clip_id               = clip_id,
+                    action                = "clear",
+                    new_grade_fingerprint = UNGRADED_FINGERPRINT,
+                }
+            else
+                local new_grade = new_grade_from_response_row(
+                    row, i, synced_at)
+                if new_grade.fidelity ~= "primary"
+                        and new_grade.lut_ref == nil then
+                    no_carrier_count = no_carrier_count + 1
+                end
+                ops[#ops + 1] = {
+                    clip_id               = clip_id,
+                    action                = "set",
+                    new_grade             = new_grade,
+                    -- FR-025: subsequent SyncGrades compares the stored
+                    -- fingerprint against the live state to detect
+                    -- Resolve-side drift vs JVE-local edits.
+                    new_grade_fingerprint = ClipGrade.fingerprint(new_grade),
+                }
+            end
+        end
+    end
+    return ops, unmatched, no_carrier_count, seen_clip_ids
+end
+
+--- Apply a helper read_grades response. Computes the per-clip set/clear
+--- operations (matched grades + FR-013a stale walk) and dispatches them
+--- as ONE batch SetClipGrades command. One command_manager entry, one
+--- undo step, one grades_changed signal — at sync scale (1000+ clips on
+--- a real timeline) N per-clip commands paid full command_manager
+--- overhead each (state_hash, command:save, notify, signal) and turned
+--- a one-shot sync into minutes of serialised work.
+---
+--- Returns a summary table: { applied_count, stale_marked,
+--- unmatched_resolve_items, no_carrier_count }. The shape is
+--- intentionally distinct from the pre-refactor `captured` table — the
+--- inner batch command owns its own captured state.
 function M.apply(response, sequence_id, db, synced_at)
     assert_response_shape(response)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
@@ -272,171 +344,59 @@ function M.apply(response, sequence_id, db, synced_at)
     assert(type(synced_at) == "number" and synced_at >= 0,
         "sync_grades.apply: synced_at unix timestamp required")
 
-    -- Wire-boundary filter: drop malformed items with log.warn so the
-    -- rest of apply can assert internal invariants without crashing on
-    -- bad external data (rule 1.14 / rule 2.32).
-    local valid_grades = {}
-    for i, row in ipairs(response.grades) do
-        local field_err = validate_grade_wire_item(row, i)
-        if field_err ~= nil then
-            log.warn(field_err)
-        else
-            valid_grades[#valid_grades + 1] = row
-        end
+    local seq = Sequence.load(sequence_id)
+    assert(seq, "sync_grades.apply: sequence not found: " .. sequence_id)
+    assert(type(seq.project_id) == "string" and seq.project_id ~= "",
+        "sync_grades.apply: sequence missing project_id "
+        .. "(schema invariant)")
+    local project_id = seq.project_id
+
+    local valid_grades = filter_valid_grades(response.grades)
+    local ops, unmatched, no_carrier_count, seen_clip_ids =
+        plan_matched_ops(valid_grades, db, synced_at)
+    local stale_ops = collect_stale_walk_ops(sequence_id, seen_clip_ids, db)
+
+    -- Concatenate matched ops + stale-walk ops into one batch. Stale-walk
+    -- ops never overlap matched ops (the walk skips clips in
+    -- seen_clip_ids), so order is purely descriptive.
+    local batch = {}
+    for _, op in ipairs(ops)       do batch[#batch + 1] = op end
+    for _, op in ipairs(stale_ops) do batch[#batch + 1] = op end
+
+    if #batch > 0 then
+        local result = command_manager.execute("SetClipGrades", {
+            project_id  = project_id,
+            sequence_id = sequence_id,
+            clips       = batch,
+        })
+        assert(result and result.success, string.format(
+            "sync_grades.apply: SetClipGrades batch failed: %s",
+            result and result.error_message or "no result"))
     end
 
-    local captured = {
-        entries                 = {},
-        unmatched_resolve_items = {},
-        -- Carrier-less grades: fidelity partial/unrepresentable with
-        -- no lut_ref — view_grade_pull returns nil for these, so the
-        -- clip displays UNGRADED despite a grade existing in Resolve.
-        -- Normal cause: the Resolve-side LUT bake failed (e.g. the
-        -- user left the Color page mid-bake — 2026-06-10 incident:
-        -- 623 clips silently affected). Counted here, warned below.
-        no_carrier_count        = 0,
-    }
-    local seen_clip_ids = {}
-    for i, row in ipairs(valid_grades) do
-        -- Ledger-driven attribution (FR-021): helper emits its native
-        -- resolve_item_id; JVE owns the join to clip.id. The ledger is
-        -- populated by the auto-discovery that ran at the start of
-        -- this same sync (positional per FR-011c, or by marker). A row
-        -- whose resolve_item_id has no ledger entry is REPORTED, not
-        -- silently dropped — symmetric with the FR-011c unmatched-JVE-
-        -- clip discipline. Typical cause: a Resolve item with no JVE
-        -- counterpart at its position (colorist-added clip whose
-        -- content matches nothing in the sequence).
-        local clip_id = identity_ledger.lookup_clip_id(
-            row.resolve_item_id, db)
-        if clip_id == nil then
-            captured.unmatched_resolve_items[
-                #captured.unmatched_resolve_items + 1] = row.resolve_item_id
-        else
-            seen_clip_ids[clip_id] = true
-            local before      = load_existing_row(clip_id, db)
-            local link_before = identity_ledger.load(clip_id, db)
-            assert(link_before, string.format(
-                "sync_grades.apply: lookup_clip_id %q→%q but "
-                .. "load(%q) returned nil — identity_ledger "
-                .. "consistency violation",
-                row.resolve_item_id, clip_id, clip_id))
-            captured.entries[#captured.entries + 1] = {
-                clip_id     = clip_id,
-                before      = before,       -- nil if clip had no grade
-                link_before = link_before,  -- for ledger revert on undo
-            }
-
-            if row.fidelity == "none" then
-                -- Resolve item present + observed ungraded.
-                -- FR-014 re-sync overwrite: drop any prior grade row.
-                -- restore() handles before==nil (no-op) and
-                -- before~=nil (re-upsert) symmetrically. Clear ledger
-                -- grade_fingerprint so the next sync sees the
-                -- baseline change (Resolve grade went from X to none).
-                if before ~= nil then
-                    delete_grade(clip_id, db)
-                end
-                -- identity_ledger.upsert preserves existing
-                -- grade_fingerprint when the key is omitted; passing
-                -- "<none>" explicitly records the ungraded baseline
-                -- so the next sync's drift detection is right.
-                identity_ledger.upsert(clip_id, {
-                    resolve_item_id   = link_before.resolve_item_id,
-                    grade_fingerprint = UNGRADED_FINGERPRINT,
-                    edit_fingerprint  = link_before.edit_fingerprint,
-                }, db)
-            else
-                local new_grade = new_grade_from_response_row(row, i, synced_at)
-                if new_grade.fidelity ~= "primary"
-                        and new_grade.lut_ref == nil then
-                    captured.no_carrier_count =
-                        captured.no_carrier_count + 1
-                end
-                ClipGrade.upsert(clip_id, new_grade, db)
-
-                -- Update ledger fingerprint so subsequent SyncGrades can
-                -- detect whether Resolve drifted vs JVE-local edits (FR-025).
-                identity_ledger.upsert(clip_id, {
-                    resolve_item_id   = link_before.resolve_item_id,
-                    grade_fingerprint = ClipGrade.fingerprint(new_grade),
-                    edit_fingerprint  = link_before.edit_fingerprint,
-                }, db)
-            end
-        end
-    end
-
-    walk_ledger_for_stale(sequence_id, seen_clip_ids, db, captured)
-
-    -- Stash sequence_id so restore() can emit grades_changed for the same
-    -- scope without the caller having to thread it back through.
-    captured.sequence_id = sequence_id
-
-    -- Accounting (FR-011c report-not-skip discipline):
-    --   applied      = response rows whose resolve_item_id is in the ledger.
-    --   stale_marked = FR-013a walk added (ledger-linked clip absent from response).
-    --   unmatched    = helper rows with no ledger entry even after this
-    --                  sync's auto-discovery (Resolve item matches no
-    --                  JVE clip by marker or position/content).
-    local applied      = #valid_grades - #captured.unmatched_resolve_items
-    local stale_marked = #captured.entries - applied
+    -- Accounting (FR-011c report-not-skip discipline).
+    local applied = #ops
+    local stale_marked = #stale_ops
     log.event("SyncGradesFromResolve.apply: %d grade(s) applied, "
         .. "%d stale-marked, %d unmatched resolve_item_id(s)",
-        applied, stale_marked, #captured.unmatched_resolve_items)
+        applied, stale_marked, #unmatched)
     -- warn (default-visible), not event: each of these clips has a
     -- grade in Resolve but displays UNGRADED in JVE — user-visible
     -- damage that was silent in the 2026-06-10 incident (623 clips).
-    if captured.no_carrier_count > 0 then
+    if no_carrier_count > 0 then
         log.warn("SyncGradesFromResolve.apply: %d grade(s) have no "
             .. "displayable carrier (LUT bake failed Resolve-side?) — "
             .. "those clips display ungraded; re-run Sync Grades with "
             .. "Resolve left undisturbed during the bake",
-            captured.no_carrier_count)
+            no_carrier_count)
     end
 
-    -- FR-016: the View pulls grades from model state. Until now nothing
-    -- told a parked monitor that its model row changed; the next
-    -- _on_show_frame only fires on playback or content_changed, so the
-    -- viewer kept the pre-sync grade. Emit so subscribers can re-pull.
-    Signals.emit("grades_changed", sequence_id)
-
-    return captured
-end
-
---- Restore the state captured by apply().
-function M.restore(captured, db)
-    assert(type(captured) == "table"
-        and type(captured.entries) == "table",
-        "sync_grades.restore: captured.entries required")
-    assert(type(captured.sequence_id) == "string"
-        and captured.sequence_id ~= "",
-        "sync_grades.restore: captured.sequence_id required "
-        .. "(apply() stashes it for the grades_changed emit)")
-    assert(db, "sync_grades.restore: db required")
-
-    for _, entry in ipairs(captured.entries) do
-        if entry.before == nil then
-            delete_grade(entry.clip_id, db)
-        else
-            ClipGrade.upsert(entry.clip_id, entry.before, db)
-        end
-        -- Revert ledger fingerprint alongside the grade row so the next
-        -- SyncGrades compares against the correct pre-apply baseline.
-        -- stale-walk entries (no ledger write in apply) have no link_before.
-        if entry.link_before ~= nil then
-            identity_ledger.upsert(entry.clip_id, {
-                resolve_item_id   = entry.link_before.resolve_item_id,
-                grade_fingerprint = entry.link_before.grade_fingerprint,
-                edit_fingerprint  = entry.link_before.edit_fingerprint,
-            }, db)
-        end
-    end
-    log.event("SyncGradesFromResolve.restore: %d grade(s) reverted",
-        #captured.entries)
-
-    -- Symmetric to apply(): undo of a sync rewinds clip_grade rows; the
-    -- View pulls from those rows, so notify it (FR-016 / FR-017).
-    Signals.emit("grades_changed", captured.sequence_id)
+    return {
+        applied_count           = applied,
+        stale_marked            = stale_marked,
+        unmatched_resolve_items = unmatched,
+        no_carrier_count        = no_carrier_count,
+    }
 end
 
 -- Forward declaration: defined after execute() (below), called from
@@ -447,21 +407,15 @@ local request_and_apply_grades
 --- Full command path: pulls grades from helper, applies them, fires
 --- on_complete. Non-blocking — on_complete carries success/error.
 ---
---- `command` is the live Command object that command_manager holds in
---- the undo stack. The async read_grades response handler persists the
---- captured-state snapshot back onto it via
---- `command:set_parameter("captured", captured)` BEFORE notify() fires
---- — without this, the undoer's args.captured is nil and undo asserts
---- (contract break, not silent no-op; see register's undoer body).
-function M.execute(args, db, command)
+--- The outer command is non-undoable (SPEC.undoable=false); the single
+--- SetClipGrades batch command dispatched from M.apply carries the undo
+--- entry, so one Cmd-Z reverts the whole sync. `_command` accepted for
+--- register_executor's executor signature; not used here.
+function M.execute(args, db, _command)
     assert(type(args) == "table", "SyncGradesFromResolve: args required")
     assert(db, "SyncGradesFromResolve: db required (passed by "
         .. "register's executor closure; SQL isolation policy keeps "
         .. "the global DB lookup out of commands)")
-    assert(command and command.set_parameter,
-        "SyncGradesFromResolve: command handle required (passed by "
-        .. "register_executor's closure; needed to persist captured "
-        .. "state back onto the command before undo is reachable)")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "SyncGradesFromResolve: sequence_id required (FR-013a scope)")
     assert(args.on_complete == nil or type(args.on_complete) == "function",
@@ -508,7 +462,7 @@ function M.execute(args, db, command)
                 discovery.log_discovery_warnings(
                     report, "SyncGradesFromResolve")
                 request_and_apply_grades(client, args, report, db,
-                    command, bake_lut_dir)
+                    bake_lut_dir)
             end)
     end)
 end
@@ -517,7 +471,7 @@ end
 -- execute() reads as the algorithm it is (discover → pull → apply).
 -- `report` is discovery's result, folded into the notify payload so
 -- callers see what got (un)linked alongside what got applied.
-request_and_apply_grades = function(client, args, report, db, command,
+request_and_apply_grades = function(client, args, report, db,
                                     bake_lut_dir)
     local helper_args = { bake_lut_dir = bake_lut_dir }
     if args.item_ids then helper_args.item_ids = args.item_ids end
@@ -559,27 +513,16 @@ request_and_apply_grades = function(client, args, report, db, command,
         for _, w in ipairs(response.result.warnings) do
             log.warn("read_grades: %s", w)
         end
-        local captured = M.apply(response.result, sequence_id, db,
+        local summary = M.apply(response.result, sequence_id, db,
             os.time())
-        -- Persist captured onto the live command so the undoer can find
-        -- it. command_manager holds this same command-object reference
-        -- in the undo stack; a late set_parameter from the async
-        -- response handler is visible to the undoer when the user
-        -- eventually presses undo. Without this, undo would hit the
-        -- undoer's "args.captured required" assert (contract break per
-        -- 2.13/2.32 — fail-loud is correct; a silent no-op would leave
-        -- the user with a broken "undo did nothing" state).
-        command:set_parameter("captured", captured)
         -- applied_count = response rows that landed on a JVE clip (via
-        -- ledger). Subtract unmatched so callers see the count that
-        -- actually mutated state, not the raw helper row count (which
-        -- can include unmatched resolve_item_ids per FR-011c
-        -- report-not-skip).
+        -- ledger). Excludes unmatched resolve_item_ids surfaced per
+        -- FR-011c report-not-skip discipline.
         return {
-            applied_count           = #response.result.grades
-                - #captured.unmatched_resolve_items,
-            unmatched_resolve_items = captured.unmatched_resolve_items,
-            captured                = captured,
+            applied_count           = summary.applied_count,
+            stale_marked            = summary.stale_marked,
+            unmatched_resolve_items = summary.unmatched_resolve_items,
+            no_carrier_count        = summary.no_carrier_count,
             -- What auto-discovery (FR-011c) just (un)linked — the
             -- counterpart of applied_count for identity. Callers and
             -- tests see matching outcomes per-sync instead of via a
@@ -631,8 +574,15 @@ request_and_apply_grades = function(client, args, report, db, command,
 end
 
 local SPEC = {
-    undoable      = true,
-    mutates_clips = false,  -- mutates clip_grade, not clips table
+    -- The outer command is non-undoable: undo flows through the single
+    -- SetClipGrades batch command M.apply dispatches. One Cmd-Z reverts
+    -- the whole sync. Mirrors SyncEditsFromResolve.
+    undoable      = false,
+    -- Inner SetClipGrades touches clip_grade / resolve_bridge_link only
+    -- (never the clips table) and drives UI via grades_changed; the
+    -- clip-cache reload safety net in command_manager is correctly
+    -- skipped — same rationale as SetClipGrades' own mutates_clips=false.
+    mutates_clips = false,
     args = {
         sequence_id = { required = true,  kind = "string" },
         item_ids    = { required = false, kind = "table" },
@@ -640,27 +590,6 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, command_undoers, db, set_last_error)
-    local registered = OP.make_register(M.execute, SPEC)(
-        command_executors, command_undoers, db, set_last_error)
-    command_undoers[OP.op_name] = function(command)
-        -- captured is produced by the async on_complete in M.execute and
-        -- must be persisted onto the command before undo. A missing
-        -- captured means the command was logged before apply() ran, or
-        -- the framework didn't merge the on_complete result back —
-        -- either is a contract break, not a silent no-op (rule 2.13/2.32).
-        local args = command:get_all_parameters()
-        assert(args.captured, "SyncGradesFromResolve undoer: args.captured "
-            .. "required (apply() must persist captured before undo is "
-            .. "reachable — see todo_sync_grades_undo_capture)")
-        M.restore(args.captured, db)
-        return true
-    end
-    return {
-        executor = registered.executor,
-        undoer   = command_undoers[OP.op_name],
-        spec     = SPEC,
-    }
-end
+M.register = OP.make_register(M.execute, SPEC)
 
 return M

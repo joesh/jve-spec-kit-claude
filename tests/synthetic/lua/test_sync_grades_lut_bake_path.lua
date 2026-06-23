@@ -13,6 +13,7 @@ local ClipGrade         = require("models.clip_grade")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local sync_grades       = require("core.commands.sync_grades_from_resolve")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
+local command_manager   = require("core.command_manager")
 
 local pass, fail = 0, 0
 local function check(label, cond)
@@ -77,6 +78,8 @@ db:exec(string.format([[
 identity_ledger.upsert("clip_partial",
     { resolve_item_id = "live_partial" }, db)
 
+command_manager.init("seq_one", "proj_alpha")
+
 -- ─── apply: response row with lut.ref → clip_grade.lut_ref written ──
 -- The cube carries a REAL transform → reproduction 'approximate' (JVE
 -- shows part of the grade via the bake).
@@ -91,7 +94,7 @@ local response = {
         },
     },
 }
-local captured = sync_grades.apply(response, "seq_one", db, now + 60)
+local summary = sync_grades.apply(response, "seq_one", db, now + 60)
 local g = ClipGrade.load("clip_partial", db)
 check("partial row written", g ~= nil and g.fidelity == "partial")
 check("lut_ref stored verbatim from row.lut.ref",
@@ -99,8 +102,8 @@ check("lut_ref stored verbatim from row.lut.ref",
 check("real-transform LUT → reproduction 'approximate'",
     g and g.reproduction == "approximate")
 check("carrier present -> no_carrier_count is 0",
-    captured.no_carrier_count == 0)
-sync_grades.restore(captured, db)
+    summary.no_carrier_count == 0)
+assert(command_manager.undo().success)
 
 -- ─── apply: partial/unrepresentable WITHOUT lut.ref = clip with no
 -- displayable carrier (renders ungraded; view_grade_pull returns nil).
@@ -135,7 +138,7 @@ local no_carrier_response = {
         },
     },
 }
-local captured2 = sync_grades.apply(no_carrier_response, "seq_one", db,
+local summary2 = sync_grades.apply(no_carrier_response, "seq_one", db,
     now + 120)
 check("carrier-less unrepresentable row still written",
     (function()
@@ -146,8 +149,8 @@ check("carrier-less unrepresentable row still written",
 check("carrier-less grade → reproduction 'not_shown'",
     (ClipGrade.load("clip_partial2", db) or {}).reproduction == "not_shown")
 check("no_carrier_count counts exactly the carrier-less row",
-    captured2.no_carrier_count == 1)
-sync_grades.restore(captured2, db)
+    summary2.no_carrier_count == 1)
+assert(command_manager.undo().success)
 
 -- ─── apply: a SPATIAL grade (power window / sizing) bakes to an IDENTITY
 -- cube — the carrier exists but is passthrough. reproduction must be
@@ -168,7 +171,7 @@ identity_ledger.upsert("clip_spatial",
     { resolve_item_id = "live_spatial" }, db)
 local identity_lut = "/tmp/jve/test_sync_grades_lut_bake_path_identity.cube"
 write_cube(identity_lut, false)
-local spatial_captured = sync_grades.apply({
+sync_grades.apply({
     grades = {
         {
             resolve_item_id = "live_spatial",
@@ -181,7 +184,7 @@ local gs = ClipGrade.load("clip_spatial", db)
 check("spatial grade: lut_ref still stored", gs and gs.lut_ref == identity_lut)
 check("identity-cube carrier → reproduction 'not_shown'",
     gs and gs.reproduction == "not_shown")
-sync_grades.restore(spatial_captured, db)
+assert(command_manager.undo().success)
 
 -- ─── M.execute: helper_args MUST carry bake_lut_dir derived from
 -- ~/.jve/resolve_bake/<project_id>/ ─────────────────────────────────
@@ -211,11 +214,8 @@ end
 local orig_with_client = supervisor.with_client
 supervisor.with_client = function(_notify, _args, fn) fn(fake_client) end
 
-local fake_command = { parameters = { sequence_id = "seq_one" } }
-function fake_command:get_all_parameters() return self.parameters end
-function fake_command:set_parameter(k, v) self.parameters[k] = v end
-
-sync_grades.execute({ sequence_id = "seq_one" }, db, fake_command)
+sync_grades.execute(
+    { sequence_id = "seq_one", project_id = "proj_alpha" }, db, nil)
 supervisor.with_client = orig_with_client
 
 check("helper_args captured", captured_helper_args ~= nil)

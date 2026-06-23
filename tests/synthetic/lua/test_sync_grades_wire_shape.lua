@@ -12,6 +12,7 @@ local database          = require("core.database")
 local ClipGrade         = require("models.clip_grade")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local sync_grades       = require("core.commands.sync_grades_from_resolve")
+local command_manager   = require("core.command_manager")
 
 local pass, fail = 0, 0
 local function check(label, cond)
@@ -56,6 +57,8 @@ db:exec(string.format([[
 
 identity_ledger.upsert("c", { resolve_item_id = "live_c" }, db)
 
+command_manager.init("s", "p")
+
 -- Helper wire shape per contracts/helper-protocol.md §read_grades:
 --   { grades: [{ resolve_item_id,
 --                cdl?: { slope:[r,g,b], offset:[r,g,b], power:[r,g,b], sat },
@@ -78,7 +81,7 @@ local response = {
     },
 }
 
-local captured = sync_grades.apply(response, "s", db, now + 60)
+sync_grades.apply(response, "s", db, now + 60)
 
 local g = ClipGrade.load("c", db)
 check("primary grade row was created", g ~= nil and g.cdl ~= nil)
@@ -103,9 +106,10 @@ check("power_b picked up from wire power[3]",
 check("saturation picked up from wire sat",
     g and g.cdl and g.cdl.saturation == 0.85)
 
--- Restore unwinds cleanly.
-sync_grades.restore(captured, db)
-check("restore drops the synced row (clip had no prior grade)",
+-- Undo via the SetClipGrades batch unwinds cleanly.
+local undo_result = command_manager.undo()
+check("command_manager.undo() succeeds", undo_result and undo_result.success)
+check("undo drops the synced row (clip had no prior grade)",
     ClipGrade.load("c", db) == nil)
 
 -- lut wire validation: bad shapes must warn + skip, never crash.
