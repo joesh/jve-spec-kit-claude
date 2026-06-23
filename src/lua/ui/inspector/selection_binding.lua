@@ -46,6 +46,18 @@ local function item_key(item)
 end
 M._item_key = item_key
 
+-- Map a raw selection-item's item_type to its inspectable schema id.
+-- timeline_clip/master_clip → "clip"; timeline_sequence/timeline → "sequence".
+-- Anything else returns nil — caller treats unmapped items as schema-less.
+local function schema_for_item_type(item_type)
+    if item_type == "timeline_clip" or item_type == "master_clip" then
+        return "clip"
+    elseif item_type == "timeline_sequence" or item_type == "timeline" then
+        return "sequence"
+    end
+    return nil
+end
+
 --- Compute active schema from the current selection (majority, tiebreak on
 --- newly-clicked items not present in previous selection). Stable when the
 --- set of schemas present is unchanged (FR-005a).
@@ -112,25 +124,14 @@ local function compute_active_schema(items, schema_counts, prev_schemas, prev_ac
     for _, item in ipairs(items) do
         local key = item_key(item)
         if not prev_ids[key] then
-            -- item_type determines the schema; map.
-            local schema = nil
-            if item.item_type == "timeline_clip" or item.item_type == "master_clip" then
-                schema = "clip"
-            elseif item.item_type == "timeline_sequence" or item.item_type == "timeline" then
-                schema = "sequence"
-            end
+            local schema = schema_for_item_type(item.item_type)
             if schema and tied_schemas[schema] then return schema end
         end
     end
 
     -- Full overlap or no tied schema in new items — fall back to items[1]'s schema.
     for _, item in ipairs(items) do
-        local schema = nil
-        if item.item_type == "timeline_clip" or item.item_type == "master_clip" then
-            schema = "clip"
-        elseif item.item_type == "timeline_sequence" or item.item_type == "timeline" then
-            schema = "sequence"
-        end
+        local schema = schema_for_item_type(item.item_type)
         if schema and tied_schemas[schema] then return schema end
     end
 
@@ -280,9 +281,7 @@ end
 
 local function load_single(schema_view, inspectable)
     for key, entry in pairs(schema_view.field_widgets) do
-        local ok, value = pcall(inspectable.get, inspectable, key)
-        if not ok then value = nil end
-        entry:set_value(value)
+        entry:set_value(inspectable:get(key))
     end
 end
 
@@ -301,9 +300,7 @@ local function refresh_only_clean_fields(schema_view, inspectables, size)
     for key, entry in pairs(schema_view.field_widgets) do
         if not entry.dirty then
             if size == 1 then
-                local ok, value = pcall(inspectables[1].get, inspectables[1], key)
-                if not ok then value = nil end
-                entry:set_value(value)
+                entry:set_value(inspectables[1]:get(key))
             else
                 local first, all_same = detect_mixed_values(inspectables, key)
                 if all_same then entry:set_value(first) else entry:set_mixed(true) end
@@ -421,6 +418,16 @@ function M.update_selection(items, source_panel_id, ui_state)
     assert(ui_state, "selection_binding.update_selection: ui_state required")
 
     if source_panel_id == "inspector" then return end
+
+    -- Preserve in-progress edits: an auto re-pick (`_implied=true`) is
+    -- dropped while any field is dirty. Explicit selections are not
+    -- tagged `_implied` and always flow through (existing FR-013a path
+    -- below discards pending).
+    local incoming_is_implied = items[1] and items[1]._implied == true
+    if incoming_is_implied and ui_state.active_schema_view
+        and any_dirty(ui_state.active_schema_view) then
+        return
+    end
 
     -- Discard any pending un-Applied edits from the previous mode (FR-013a).
     if ui_state.active_schema_view then

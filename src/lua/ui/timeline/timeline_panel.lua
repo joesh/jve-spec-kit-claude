@@ -22,6 +22,8 @@ local track_dim   = require("ui.timeline.track_dim_logic")
 local drop_naming = require("ui.timeline.drop_naming")
 local routing_pref  = require("ui.source_routing_view_pref")
 local routing_state = require("ui.source_routing_view_state")
+local implied_target = require("ui.inspector.implied_target")
+local find_chrome = require("ui.find_chrome")
 
 -- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
 -- luacheck: globals qt_set_scroll_area_h_scroll_handler
@@ -489,51 +491,99 @@ local function create_timecode_header()
     return wrapper
 end
 
-local function normalize_timeline_selection(clips)
-    local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
-    local sequence_id = timeline_state.get_tab_strip():active_sequence_id()
-    assert(project_id and project_id ~= "", "timeline_panel.normalize_timeline_selection: missing active project_id")
-    assert(sequence_id and sequence_id ~= "", "timeline_panel.normalize_timeline_selection: missing active sequence_id")
+-- `_implied = true` tells selection_binding.update_selection to preserve
+-- pending dirty edits across an auto re-pick (playhead motion, clip
+-- add/delete, track enable toggle). Without the tag the binding would
+-- treat the re-pick as a real selection change and discard pending edits
+-- per FR-013a.
+local function pick_implied_timeline_clip(project_id)
+    local playhead = timeline_state.get_playhead_position()
+    if type(playhead) ~= "number" then return nil end
+
+    local displayed_seq_id = timeline_state.get_displayed_tab_id()
+    if not (displayed_seq_id and displayed_seq_id ~= "") then return nil end
+
+    local tracks = {}
+    for _, t in ipairs(timeline_state.get_video_tracks()) do table.insert(tracks, t) end
+    for _, t in ipairs(timeline_state.get_audio_tracks()) do table.insert(tracks, t) end
+
+    local clips_at_ph = timeline_state.get_tab_strip():clips_at_time(playhead)
+    local picked = implied_target.pick(tracks, clips_at_ph)
+    if not picked then return nil end
+
+    local inspectable = inspectable_factory.clip({
+        clip_id     = picked.id,
+        project_id  = project_id,
+        sequence_id = displayed_seq_id,
+        clip        = picked,
+    })
+    return {
+        item_type    = "timeline_clip",
+        clip         = picked,
+        inspectable  = inspectable,
+        schema       = inspectable:get_schema_id(),
+        display_name = picked.label or picked.name or picked.id,
+        project_id   = project_id,
+        sequence_id  = displayed_seq_id,
+        clip_id      = picked.id,
+        _implied     = true,
+    }
+end
+
+local function normalize_timeline_selection(clips, implied_item_override)
+    local project_id = timeline_state.get_project_id()
+    assert(project_id and project_id ~= "",
+        "timeline_panel.normalize_timeline_selection: missing active project_id")
 
     if not clips or #clips == 0 then
-        local ok, inspectable = pcall(inspectable_factory.sequence, {
+        -- Caller may have already resolved the implied pick (dedup signature
+        -- needs the clip id) — reuse it instead of re-picking.
+        local implied_item = implied_item_override or pick_implied_timeline_clip(project_id)
+        if implied_item then return { implied_item } end
+    end
+
+    -- Both remaining paths (sequence fallback, explicit clip items) target
+    -- the active record sequence. The implied-clip path above bypasses
+    -- this — it lives on the displayed tab, which may be a Source tab in
+    -- a no-active-record session.
+    local sequence_id = timeline_state.get_tab_strip():active_sequence_id()
+    assert(sequence_id and sequence_id ~= "",
+        "timeline_panel.normalize_timeline_selection: missing active sequence_id")
+
+    if not clips or #clips == 0 then
+        local inspectable = inspectable_factory.sequence({
             sequence_id = sequence_id,
             project_id = project_id
         })
-        if ok and inspectable then
-            return {{
-                item_type = "timeline_sequence",
-                sequence_id = sequence_id,
-                inspectable = inspectable,
-                schema = inspectable:get_schema_id(),
-                display_name = inspectable:get("name") or "Timeline",
-                project_id = project_id
-            }}
-        end
-        return {}
+        return {{
+            item_type = "timeline_sequence",
+            sequence_id = sequence_id,
+            inspectable = inspectable,
+            schema = inspectable:get_schema_id(),
+            display_name = inspectable:get("name") or "Timeline",
+            project_id = project_id
+        }}
     end
 
     local normalized = {}
     for _, clip in ipairs(clips) do
-        if clip and clip.id then
-            local ok, inspectable = pcall(inspectable_factory.clip, {
-                clip_id = clip.id,
-                project_id = project_id,
-                sequence_id = sequence_id,
-                clip = clip
-            })
-            if ok and inspectable then
-                table.insert(normalized, {
-                    item_type = "timeline_clip",
-                    clip = clip,
-                    inspectable = inspectable,
-                    schema = inspectable:get_schema_id(),
-                    display_name = clip.label or clip.name or clip.id,
-                    project_id = project_id,
-                    sequence_id = sequence_id
-                })
-            end
-        end
+        assert(clip and clip.id and clip.id ~= "",
+            "timeline_panel.normalize_timeline_selection: clip missing id")
+        local inspectable = inspectable_factory.clip({
+            clip_id = clip.id,
+            project_id = project_id,
+            sequence_id = sequence_id,
+            clip = clip
+        })
+        table.insert(normalized, {
+            item_type = "timeline_clip",
+            clip = clip,
+            inspectable = inspectable,
+            schema = inspectable:get_schema_id(),
+            display_name = clip.label or clip.name or clip.id,
+            project_id = project_id,
+            sequence_id = sequence_id
+        })
     end
     return normalized
 end
@@ -2542,44 +2592,53 @@ function M.create(opts)
     -- selection inspectable for. normalize_timeline_selection asserts on a
     -- present sequence_id; the boundary handles the absent-sequence case by
     -- broadcasting an empty selection so the inspector clears.
-    local function broadcast_selection(selected_clips)
+    local function broadcast_selection(selected_clips, implied_item)
         local sid = timeline_state.get_tab_strip():active_sequence_id()
         if not (sid and sid ~= "") then
             selection_hub.update_selection("timeline", {})
             return
         end
-        selection_hub.update_selection("timeline", normalize_timeline_selection(selected_clips))
+        selection_hub.update_selection("timeline",
+            normalize_timeline_selection(selected_clips, implied_item))
     end
 
     state.set_on_selection_changed(broadcast_selection)
     local initial_selection = state.get_selected_clips and state.get_selected_clips() or {}
     broadcast_selection(initial_selection)
 
-    -- Re-broadcast when DISPLAYED marks change (not active marks). The
-    -- inspector shows the currently-rendered tab's sequence when nothing is
-    -- selected, so a mark change on the SourceTab while it's displayed must
-    -- repaint the inspector even if the active record sequence is unchanged
-    -- (FR-038 / display-aware marks per CLAUDE.md key pattern).
-    local last_mark_signature = nil
+    -- selection_hub dedupes on items_signature (clip_id-based), but it
+    -- can't tell the difference between two implied re-picks of the same
+    -- clip with different mark state. Local sig threads marks AND the
+    -- implied-clip id so a mark change still repaints (FR-038 display-
+    -- aware marks) and we skip the resolve_inspectables roundtrip when
+    -- nothing observable to the empty-selection inspectable has changed.
+    local function empty_selection_pick()
+        local mark_in  = state.get_display_mark_in()
+        local mark_out = state.get_display_mark_out()
+        local project_id = timeline_state.get_project_id()
+        assert(project_id and project_id ~= "",
+            "timeline_panel.empty_selection_pick: missing project_id")
+        local implied = pick_implied_timeline_clip(project_id)
+        local implied_id = implied and implied.clip and implied.clip.id or nil
+        local sig = string.format("%s:%s:%s",
+            tostring(mark_in), tostring(mark_out), tostring(implied_id))
+        return sig, implied
+    end
+
+    local last_empty_signature = nil
     if #initial_selection == 0 then
-        local mark_in = state.get_display_mark_in and state.get_display_mark_in() or nil
-        local mark_out = state.get_display_mark_out and state.get_display_mark_out() or nil
-        last_mark_signature = tostring(mark_in) .. ":" .. tostring(mark_out)
+        last_empty_signature = empty_selection_pick()
     end
     state.add_listener(profile_scope.wrap("timeline_panel.selection_listener", function()
         local selected = state.get_selected_clips and state.get_selected_clips() or {}
-
-        -- Re-broadcast selection when only the timeline itself is selected and marks change.
         if #selected == 0 then
-            local mark_in = state.get_display_mark_in and state.get_display_mark_in() or nil
-            local mark_out = state.get_display_mark_out and state.get_display_mark_out() or nil
-            local signature = tostring(mark_in) .. ":" .. tostring(mark_out)
-            if signature ~= last_mark_signature then
-                last_mark_signature = signature
-                broadcast_selection(selected)
+            local sig, implied = empty_selection_pick()
+            if sig ~= last_empty_signature then
+                last_empty_signature = sig
+                broadcast_selection(selected, implied)
             end
         else
-            last_mark_signature = nil
+            last_empty_signature = nil
         end
     end))
 
@@ -2672,6 +2731,17 @@ function M.create(opts)
     qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_left_arrow)
     qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_scroll)
     qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_right_arrow)
+
+    -- Magnifying-glass affordance for the Find command. Timeline's Find
+    -- surface today is the floating find_dialog (see find_clips.lua); the
+    -- icon is the discoverability entry-point for that same command, with
+    -- the matching tooltip + style as the project_browser / inspector
+    -- chromes.
+    local find_btn = find_chrome.make_title_toggle_btn({
+        panel_name = "Timeline",
+        on_click   = function() command_manager.execute("Find", {}) end,
+    })
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, find_btn)
 
     -- Main row: [headers_column | drag_edge | timeline_area]. HBox + a
     -- thin vertical drag edge replaces what used to be a QSplitter.
