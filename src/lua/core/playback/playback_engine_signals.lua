@@ -73,6 +73,31 @@ function PlaybackEngine:_on_content_changed_signal(seq_id)
     log.event("Edit detected: invalidated clip windows")
 end
 
+--- Handler: a clip's grade row changed (SetClipGrades / SyncGradesFromResolve).
+--- Re-pull and re-push every clip the engine currently has in TMB so the
+--- next clip-boundary transition during playback sees the new look.
+--- Spec 023 FR-016 playback path — pairs with SequenceMonitor's existing
+--- grades_changed handler which covers the park-mode View pull.
+function PlaybackEngine:_on_grades_changed_signal(seq_id)
+    assert(type(seq_id) == "string" and seq_id ~= "", string.format(
+        "PlaybackEngine:_on_grades_changed_signal: seq_id must be non-empty string, got %s",
+        type(seq_id)))
+    if seq_id ~= self.loaded_sequence_id then return end
+    if not self._playback_controller then return end
+    -- _clip_info_by_id is the canonical set of video clips the engine has
+    -- handed to TMB. Re-push each one — view_grade_pull will return nil
+    -- for clips that no longer have a grade row, and SET_CLIP_GRADE
+    -- treats nil cdl+nil lut as "clear this clip's snapshot to
+    -- passthrough" — so a delete-grade path lands cleanly without a
+    -- separate clear protocol.
+    local count = 0
+    for clip_id, _ in pairs(self._clip_info_by_id) do
+        self:_push_clip_grade_snapshot(clip_id)
+        count = count + 1
+    end
+    log.event("grades_changed: re-pushed snapshots for %d clips", count)
+end
+
 --- Handler: media file at `path` had its bytes rewritten in place.
 --- Status didn't flip (still online), so the clip list is still valid —
 --- we just need TMB to drop decoder state keyed on this path.

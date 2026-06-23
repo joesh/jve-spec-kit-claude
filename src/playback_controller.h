@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -10,7 +11,11 @@
 #include <string>
 #include <thread>
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
+
+#include "editor_media_platform/emp_cdl.h"
+#include "editor_media_platform/emp_lut3d.h"
 
 // Forward declarations
 class GPUVideoSurface;
@@ -233,7 +238,12 @@ public:
     AudioPump();
     ~AudioPump();
 
-    // Start pump thread with dependencies
+    // Start pump thread with dependencies. The caller is responsible for
+    // having already prefilled the audio path (Flush + Reset + SetTarget +
+    // push initial PCM + AOP.Start) on the main thread BEFORE calling this.
+    // The pump's first cycle claims SSE owner via SetOwnerThread and begins
+    // refilling. Subsequent mid-play state changes go through RequestFlush
+    // (which performs a main-side handoff — see RequestFlush docs).
     void Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* sse,
                aop::AudioOutput* aop, PlaybackClock* clock,
                int32_t sample_rate, int32_t channels,
@@ -256,6 +266,35 @@ public:
 
     // Set sequence end time so pump can push remaining audio near the end
     void SetEndTimeUS(int64_t us);
+
+    // Install the flush+prefill handler. RequestFlush runs this on the
+    // CALLING (main) thread between releasing and re-claiming SSE owner
+    // on the pump. The controller's prefillAudioAtTime is the canonical
+    // handler — see PlaybackController::SetSpeed / FlushAudioForMixChange.
+    // Must be set before Start().
+    using FlushHandler = std::function<void(int64_t time_us, int direction, float abs_speed)>;
+    void SetFlushHandler(FlushHandler handler);
+
+    // Synchronously hand off SSE ownership from pump → caller, run the
+    // installed flush handler on the caller's thread (which performs
+    // Flush + Reset + SetTarget + prefill + Start using the caller's
+    // already-owned QAudioSink), then return ownership to pump. Caller
+    // blocks for the full handshake. Pre: pump is running and a flush
+    // handler is installed. Asserts otherwise.
+    //
+    // Why main-side: QAudioSink on macOS cannot live on a non-main thread
+    // (QDarwinAudioSink requires a Qt event loop on its owner thread —
+    // pump has none). See specs/017-refactor-playback-engine/
+    // audio-stack-lessons-and-future.md for the constraint + rationale.
+    void RequestFlush(int64_t time_us, int direction, float abs_speed);
+
+    // Same handshake as RequestFlush but runs an arbitrary work lambda
+    // on the caller's thread with SSE ownership transferred in. Use for
+    // mid-play SSE touches that are NOT a full flush — the JKL shuttle
+    // lightweight SetSpeed path is the canonical caller (one m_sse->SetSpeed
+    // write, no AOP teardown). Latency: one pump-cycle worst case
+    // (PUMP_INTERVAL_OK_MS = 15 ms), typically much less.
+    void WithSseOwnerOnMain(std::function<void()> work);
 
     // Per-cycle render cap (independent of buffer sizing).
     static constexpr int MAX_RENDER_FRAMES = 4096;
@@ -297,6 +336,36 @@ private:
     // Diagnostics
     DiagRing<PumpMetric, DIAG_AUDIO_RING_SIZE>* m_diag{nullptr};
     int64_t m_underrun_count{0};
+
+    // ── Flush handoff (main ↔ pump, pump-pause variant) ───────────────────
+    // Pump owns SSE during play. A mid-play state change on main needs to
+    // touch SSE (Reset/SetTarget/prefill) AND AOP (Flush/Start). AOP must
+    // stay on main (QAudioSink + Qt event loop, see header comment on
+    // RequestFlush).
+    //
+    // Monotonic generation counters drive a 4-stage protocol so back-to-back
+    // calls cannot race a pump wake-up (the boolean-flag design earlier in
+    // this work deadlocked under JKL shuttle rapid SetSpeed because main's
+    // next stage 1 reset a flag the pump was about to re-check).
+    //
+    //   request_gen   — ++ by main on each new handoff
+    //   released_gen  — = request_gen after pump releases SSE
+    //   completed_gen — = released_gen after main finishes work
+    //   resumed_gen   — = completed_gen after pump reclaims SSE
+    //
+    // Invariant: request_gen ≥ released_gen ≥ completed_gen ≥ resumed_gen.
+    // No counter ever decreases — the next caller's "wait for idle" reads
+    // monotonically-rising values, not boolean reuse.
+    FlushHandler m_flush_handler;
+    std::mutex m_flush_mutex;
+    std::condition_variable m_handoff_idle_cv;      // main waits; pump signals after resuming
+    std::condition_variable m_handoff_request_cv;   // pump waits at cycle end; main signals on new request
+    std::condition_variable m_handoff_released_cv;  // main waits; pump signals after releasing SSE owner
+    std::condition_variable m_handoff_resume_cv;    // pump waits; main signals after work completes
+    uint64_t m_handoff_request_gen{0};              // guarded by m_flush_mutex
+    uint64_t m_handoff_released_gen{0};             // guarded by m_flush_mutex
+    uint64_t m_handoff_completed_gen{0};            // guarded by m_flush_mutex
+    uint64_t m_handoff_resumed_gen{0};              // guarded by m_flush_mutex
 };
 
 #ifdef __APPLE__
@@ -373,6 +442,32 @@ public:
 
     // Clip prefetch: clear TMB + reset + re-prefetch after timeline edits.
     void reloadAllClips();
+
+    // Per-clip CDL/LUT grade snapshot (spec 023 FR-016 playback path).
+    //
+    // The View's per-show-frame pull (SequenceMonitor:_on_show_frame →
+    // SURFACE_SET_GRADE/SURFACE_SET_LUT3D) only fires in park mode. During
+    // playback, deliverFrame pushes frames directly to the surface — no Lua
+    // roundtrip — so without this snapshot the surface would keep the
+    // previously-set CDL across clip boundaries. PlaybackEngine pushes one
+    // entry per clip it provides to TMB (and re-pushes on grades_changed);
+    // deliverFrame applies the matching snapshot to the surface BEFORE
+    // setFrame on every clip-boundary transition.
+    //
+    // cdl.enabled == 0 means "no CDL on this clip" (passthrough).
+    // lut.enabled == 0 means "no LUT on this clip" (passthrough).
+    void SetClipGradeSnapshot(const std::string& clip_id,
+                              const emp::CdlParams& cdl,
+                              const emp::Lut3d& lut);
+    void ClearAllClipGrades();
+
+    // Per-clip CDL/LUT snapshot — public so file-scope grade helpers in the
+    // .mm can name it. Identity is by clip_id; cdl/lut .enabled==0 means
+    // passthrough at that stage.
+    struct GradeSnapshot {
+        emp::CdlParams cdl{};
+        emp::Lut3d     lut{};
+    };
 
     // Video mute/solo: the set of video track indices that composite into the
     // output, resolved by Lua (renderer.compute_effective_video_indices). Only
@@ -480,11 +575,18 @@ private:
     int64_t m_repeat_streak{0};         // consecutive frame repeats (deliverFrame early-return logic)
 
     // ---- Audio-master: bypass PLL when audio clock stalls ----
-    bool m_audio_master_position{false};      // true when PLL should be bypassed
+    // Writers: pump thread (prefillAudioAtTime — called via AudioPump's flush
+    // handler) AND CVDisplayLink (advancePosition — increments dry/healthy
+    // counters every frame). Reader: same DisplayLink + diagnostic getter.
+    // Plain int/bool reads/writes don't formally compose under the C++
+    // memory model with two writer threads; relaxed atomics are correct
+    // and have no cost on x86/ARM64. The hysteresis tolerates the rare
+    // "read sees stale" — next DisplayLink tick reconciles.
+    std::atomic<bool> m_audio_master_position{false};  // true when PLL should be bypassed
 
     // Audio stall detection — engage audio-master when AOP buffer empties
-    int m_consecutive_audio_dry{0};
-    int m_consecutive_audio_healthy{0};
+    std::atomic<int> m_consecutive_audio_dry{0};
+    std::atomic<int> m_consecutive_audio_healthy{0};
     static constexpr int AUDIO_DRY_CONSECUTIVE = 3;       // 3 ticks of buf=0 → audio-master
     static constexpr int AUDIO_HEALTHY_CONSECUTIVE = 10;  // 10 ticks of buf>0 → back to PLL
 
@@ -593,6 +695,28 @@ private:
     std::vector<int> m_effective_video_tracks;
     bool m_effective_video_tracks_valid{false};
     std::mutex m_effective_video_mutex;
+
+    // Per-clip CDL/LUT snapshot (FR-016 playback path). Written from Lua
+    // main thread via SetClipGradeSnapshot; read from deliverFrame on the
+    // CVDisplayLink tick thread (a single map.find on every clip-boundary
+    // transition — negligible). Mutex serializes.
+    std::unordered_map<std::string, GradeSnapshot> m_clip_grades;
+    mutable std::mutex m_clip_grades_mutex;
+
+    // Copy out the snapshot for `clip_id` under the mutex. Empty clip_id
+    // or unknown id ⇒ returns false (caller clears both stages).
+    bool lookupClipGrade(const std::string& clip_id, GradeSnapshot& out) const;
+
+    // Push the snapshot for `clip_id` to the surface(s). Main-thread only
+    // (asserts) — used on the synchronous Seek path. Empty/unknown clip_id
+    // ⇒ clear both stages (passthrough).
+    void applyClipGradeOnMainThread(const std::string& clip_id);
+
+    // Async grade dispatch for the CVDisplayLink-tick path. Resolves the
+    // snapshot + surface pointers NOW, then enqueues a block that owns
+    // copies of both — the block never dereferences `this`, so it is safe
+    // against a PLAYBACK.CLOSE racing the main-queue drain.
+    void dispatchClipGradeToMainThread(const std::string& clip_id);
 
     // Position report interval (100ms coalescing)
     static constexpr int64_t REPORT_INTERVAL_MS = 100;

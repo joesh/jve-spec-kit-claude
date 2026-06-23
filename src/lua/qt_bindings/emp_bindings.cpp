@@ -1586,6 +1586,37 @@ static int lua_emp_surface_on_error(lua_State* L) {
     return 0;
 }
 
+// Decode the CDL table on the Lua stack at `idx` into `cdl`. Every field
+// is required and must be numeric; missing/non-numeric raises luaL_error
+// prefixed with `caller` for callsite identification. enabled is set to 1
+// on success. Shared by EMP.SURFACE_SET_GRADE and PLAYBACK.SET_CLIP_GRADE
+// — single source of truth for the `clip_grade.cdl` shape.
+static void cdl_from_lua_table(lua_State* L, int idx, const char* caller,
+                                emp::CdlParams& cdl) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    auto get_num = [&](const char* key) -> float {
+        lua_getfield(L, idx, key);
+        if (!lua_isnumber(L, -1)) {
+            lua_pop(L, 1);
+            luaL_error(L, "%s: cdl.%s must be number", caller, key);
+        }
+        float v = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        return v;
+    };
+    cdl.slope[0]  = get_num("slope_r");
+    cdl.slope[1]  = get_num("slope_g");
+    cdl.slope[2]  = get_num("slope_b");
+    cdl.offset[0] = get_num("offset_r");
+    cdl.offset[1] = get_num("offset_g");
+    cdl.offset[2] = get_num("offset_b");
+    cdl.power[0]  = get_num("power_r");
+    cdl.power[1]  = get_num("power_g");
+    cdl.power[2]  = get_num("power_b");
+    cdl.saturation = get_num("saturation");
+    cdl.enabled = 1;
+}
+
 // EMP.SURFACE_SET_GRADE(surface_widget, grade_table|nil)
 // Push the View-pulled CDL params to the surface's color stage (spec
 // 023 T032 / FR-016). grade_table is `{slope_r, slope_g, slope_b,
@@ -1612,29 +1643,8 @@ static int lua_emp_surface_set_grade(lua_State* L) {
         return 0;
     }
 
-    luaL_checktype(L, 2, LUA_TTABLE);
     emp::CdlParams cdl{};
-    auto get_num = [&](const char* key) -> float {
-        lua_getfield(L, 2, key);
-        if (!lua_isnumber(L, -1)) {
-            lua_pop(L, 1);
-            luaL_error(L, "EMP.SURFACE_SET_GRADE: cdl.%s must be number", key);
-        }
-        float v = static_cast<float>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
-        return v;
-    };
-    cdl.slope[0]  = get_num("slope_r");
-    cdl.slope[1]  = get_num("slope_g");
-    cdl.slope[2]  = get_num("slope_b");
-    cdl.offset[0] = get_num("offset_r");
-    cdl.offset[1] = get_num("offset_g");
-    cdl.offset[2] = get_num("offset_b");
-    cdl.power[0]  = get_num("power_r");
-    cdl.power[1]  = get_num("power_g");
-    cdl.power[2]  = get_num("power_b");
-    cdl.saturation = get_num("saturation");
-    cdl.enabled = 1;
+    cdl_from_lua_table(L, 2, "EMP.SURFACE_SET_GRADE", cdl);
 
     if (gpu_surface) gpu_surface->setGrade(cdl);
     if (cpu_surface) cpu_surface->setGrade(cdl);
@@ -2035,6 +2045,78 @@ static int lua_playback_set_effective_video_tracks(lua_State* L) {
     }
     controller->setEffectiveVideoTracks(indices);
     return 0;
+}
+
+// PLAYBACK.SET_CLIP_GRADE(controller, clip_id, cdl_table_or_nil, lut_path_or_nil)
+// Push the per-clip CDL/LUT snapshot that the C++ deliverFrame applies on each
+// clip-boundary transition during playback (spec 023 FR-016). Cdl table shape
+// matches SURFACE_SET_GRADE's; nil means "no CDL on this clip" (passthrough
+// stage). lut_path nil means "no LUT". The .cube load happens once here, not
+// on every transition — the parsed Lut3d travels in the snapshot.
+static int lua_playback_set_clip_grade(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    size_t id_len = 0;
+    const char* id_cstr = luaL_checklstring(L, 2, &id_len);
+    if (id_len == 0) {
+        return luaL_error(L, "PLAYBACK.SET_CLIP_GRADE: clip_id must be a non-empty string");
+    }
+    std::string clip_id(id_cstr, id_len);
+
+    emp::CdlParams cdl{};  // .enabled = 0 by default
+    if (!lua_isnil(L, 3)) {
+        cdl_from_lua_table(L, 3, "PLAYBACK.SET_CLIP_GRADE", cdl);
+    }
+
+    emp::Lut3d lut{};  // .enabled = 0 by default
+    if (!lua_isnil(L, 4)) {
+        const char* path = luaL_checkstring(L, 4);
+        std::string err;
+        if (!emp::load_cube_file(path, lut, err)) {
+            return luaL_error(L,
+                "PLAYBACK.SET_CLIP_GRADE: lut load failed for %s: %s",
+                path, err.c_str());
+        }
+    }
+
+    controller->SetClipGradeSnapshot(clip_id, cdl, lut);
+    return 0;
+}
+
+// PLAYBACK.CLEAR_CLIP_GRADES(controller)
+// Drop every per-clip snapshot. PlaybackEngine calls this on sequence load /
+// teardown so a stale snapshot can't follow into a fresh clip set.
+static int lua_playback_clear_clip_grades(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    controller->ClearAllClipGrades();
+    return 0;
+}
+
+// EMP.SURFACE_GET_GRADE_SLOPE(surface) → {r=float, g=float, b=float} or nil
+// Test-only readback: returns the live CDL slope uniform on the surface, or
+// nil when the CDL stage is disabled. Used by the playback grade-transition
+// regression test to assert the controller pushed the new clip's grade to
+// the surface before its first frame drew.
+static int lua_emp_surface_get_grade_slope(lua_State* L) {
+    QWidget* qwidget = get_widget<QWidget>(L, 1);
+    if (!qwidget) return luaL_error(L,
+        "EMP.SURFACE_GET_GRADE_SLOPE: widget is null or destroyed");
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    CPUVideoSurface* cpu_surface = qobject_cast<CPUVideoSurface*>(qwidget);
+    if (!gpu_surface && !cpu_surface) {
+        return luaL_error(L,
+            "EMP.SURFACE_GET_GRADE_SLOPE: widget is not a video surface");
+    }
+    const emp::CdlParams& cdl = gpu_surface ? gpu_surface->grade() : cpu_surface->grade();
+    if (!cdl.enabled) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    lua_pushnumber(L, cdl.slope[0]); lua_setfield(L, -2, "r");
+    lua_pushnumber(L, cdl.slope[1]); lua_setfield(L, -2, "g");
+    lua_pushnumber(L, cdl.slope[2]); lua_setfield(L, -2, "b");
+    return 1;
 }
 
 // PLAYBACK.ACTIVATE_AUDIO(controller, aop, sse, sample_rate, channels)
@@ -2822,6 +2904,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_LUT3D_SIZE");
     lua_pushcfunction(L, lua_emp_surface_set_grade);
     lua_setfield(L, -2, "SURFACE_SET_GRADE");
+    lua_pushcfunction(L, lua_emp_surface_get_grade_slope);
+    lua_setfield(L, -2, "SURFACE_GET_GRADE_SLOPE");
     lua_pushcfunction(L, lua_emp_surface_set_rotation);
     lua_setfield(L, -2, "SURFACE_SET_ROTATION");
     lua_pushcfunction(L, lua_emp_surface_set_par);
@@ -2919,6 +3003,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "RELOAD_ALL_CLIPS");
     lua_pushcfunction(L, lua_playback_set_effective_video_tracks);
     lua_setfield(L, -2, "SET_EFFECTIVE_VIDEO_TRACKS");
+    lua_pushcfunction(L, lua_playback_set_clip_grade);
+    lua_setfield(L, -2, "SET_CLIP_GRADE");
+    lua_pushcfunction(L, lua_playback_clear_clip_grades);
+    lua_setfield(L, -2, "CLEAR_CLIP_GRADES");
     lua_pushcfunction(L, lua_playback_set_clip_transition_callback);
     lua_setfield(L, -2, "SET_CLIP_TRANSITION_CALLBACK");
     lua_pushcfunction(L, lua_playback_activate_audio);

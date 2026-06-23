@@ -32,6 +32,7 @@ local Sequence = require("models.sequence")
 local helpers = require("core.playback.playback_helpers")
 local Signals = require("core.signals")
 local tmb_clip_builder = require("core.playback.tmb_clip_builder")
+local view_grade_pull = require("core.view_grade_pull")
 
 -- Output channel count threaded through TMB → SSE → AOP. Stereo today;
 -- multichannel output requires plumbing Sequence.count_master_audio_channels
@@ -667,6 +668,14 @@ end
 function PlaybackEngine:_reset_clip_snapshots()
     self._clip_info_by_id = {}
     self._active_media_paths = {}
+    -- Spec 023 FR-016 (playback path): the per-clip CDL/LUT snapshots
+    -- pushed into the controller are keyed by clip_id; on a clip-set
+    -- reload the controller's TMB clip list is also cleared, so the
+    -- snapshots must follow or stale entries would survive a blade /
+    -- delete / re-edit that re-keys identity.
+    if self._playback_controller then
+        qt_constants.PLAYBACK.CLEAR_CLIP_GRADES(self._playback_controller)
+    end
 end
 
 --- Public: invalidate clip cache + re-feed TMB after timeline edits.
@@ -751,6 +760,8 @@ function PlaybackEngine:_setup_playback_controller()
            "_on_media_status_changed_signal")
     rewire("_track_preference_conn",       "track_preference_changed",
            "_on_track_preference_changed_signal")
+    rewire("_grades_changed_conn",         "grades_changed",
+           "_on_grades_changed_signal")
 
     log.event("PlaybackController created and configured")
 end
@@ -825,9 +836,36 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
                 source_in  = entry.source_in,
                 source_out = entry.source_out,
             }
+            -- Spec 023 FR-016 (playback path): project the per-clip CDL/LUT
+            -- into the C++ controller so deliverFrame applies it on the
+            -- clip-boundary transition. Video-only — audio has no surface.
+            self:_push_clip_grade_snapshot(clip.clip_id)
         end
         register_track_index(indices, entry.track_index, dispatch.index_sort_cmp)
     end
+end
+
+--- Project the per-clip display grade (CDL + LUT) into the C++
+--- PlaybackController so deliverFrame applies it synchronously at each
+--- clip-boundary transition (spec 023 FR-016 playback path).
+---
+--- The View's per-show-frame pull (SequenceMonitor:_on_show_frame) only
+--- fires in park mode. During playback the C++ deliverFrame pushes frames
+--- directly to the surface with no Lua roundtrip; without this snapshot
+--- the surface would keep the previously-set CDL across clip boundaries.
+---
+--- Pulled fresh every call — no Lua-side grade cache (the per-clip indexed
+--- SELECT is dwarfed by decode cost; see view_grade_pull header).
+function PlaybackEngine:_push_clip_grade_snapshot(clip_id)
+    assert(type(clip_id) == "string" and clip_id ~= "",
+        "PlaybackEngine:_push_clip_grade_snapshot: clip_id required")
+    assert(self._playback_controller,
+        "PlaybackEngine:_push_clip_grade_snapshot: called without a playback controller")
+    local stages = view_grade_pull.pull_for_clip(clip_id)
+    local cdl     = stages and stages.cdl
+    local lut_ref = stages and stages.lut_ref
+    qt_constants.PLAYBACK.SET_CLIP_GRADE(
+        self._playback_controller, clip_id, cdl, lut_ref)
 end
 
 --- Position callback from C++: update UI playhead.
@@ -1172,6 +1210,10 @@ local function disconnect_signal_handlers(self)
         Signals.disconnect(self._track_preference_conn)
         self._track_preference_conn = nil
     end
+    if self._grades_changed_conn then
+        Signals.disconnect(self._grades_changed_conn)
+        self._grades_changed_conn = nil
+    end
 end
 
 --- Destroy engine: close TMB + PlaybackController + stop audio.
@@ -1206,9 +1248,9 @@ function PlaybackEngine.teardown_engine(engine)
     assert(engine ~= nil, "PlaybackEngine.teardown_engine: engine is nil")
 
     -- Shed signal handlers so stale signals (content_changed, media_*,
-    -- track_preference_changed, track_mix) don't fire on this engine
-    -- between teardown and the next load_sequence — and don't leak if
-    -- no new sequence loads at all (e.g. close-all-projects flow).
+    -- track_preference_changed, track_mix, grades_changed) don't fire on
+    -- this engine between teardown and the next load_sequence — and don't
+    -- leak if no new sequence loads at all (e.g. close-all-projects flow).
     disconnect_signal_handlers(engine)
 
     -- Release C++ objects (PlaybackController, TMB) before nilling the

@@ -364,20 +364,32 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
             pumpLoop();
         } catch (const JveAssertError& e) {
             JVE_LOG_ERROR(Audio, "AudioPump terminated by assert: %s", e.what());
-            m_running.store(false, std::memory_order_relaxed);
         } catch (const std::exception& e) {
             fprintf(stderr, "[audio] ERROR: AudioPump thread exception: %s\n", e.what());
-            m_running.store(false, std::memory_order_relaxed);
         } catch (...) {
             fprintf(stderr, "[audio] ERROR: AudioPump thread unknown exception\n");
-            m_running.store(false, std::memory_order_relaxed);
         }
+        // ALWAYS release SSE owner before the thread dies — an exception
+        // mid-pumpLoop must not leave the SSE asserting against a dead
+        // owner tid (the next Play's prefillAudio would trip the owner
+        // assert). pumpLoop's normal exit also calls ClearOwnerThread;
+        // the double-clear is idempotent.
+        if (m_sse) m_sse->ClearOwnerThread();
+        m_running.store(false, std::memory_order_relaxed);
     });
     JVE_LOG_EVENT(Audio, "AudioPump: started");
 }
 
 void AudioPump::Stop() {
     m_stop_requested.store(true, std::memory_order_relaxed);
+
+    // Wake every CV either side may be parked on. All wait predicates also
+    // check m_stop_requested so the sleeper exits regardless of counter
+    // values. No flag mutation needed — the gen counters are append-only.
+    m_handoff_idle_cv.notify_all();
+    m_handoff_request_cv.notify_all();
+    m_handoff_released_cv.notify_all();
+    m_handoff_resume_cv.notify_all();
 
     // Join UNCONDITIONALLY of m_running: a pump thread that self-terminated
     // (caught exception sets m_running=false) is still joinable, and both
@@ -391,6 +403,79 @@ void AudioPump::Stop() {
         m_running.store(false, std::memory_order_relaxed);
         JVE_LOG_EVENT(Audio, "AudioPump: stopped");
     }
+}
+
+void AudioPump::SetFlushHandler(FlushHandler handler) {
+    JVE_ASSERT(static_cast<bool>(handler),
+               "AudioPump::SetFlushHandler: handler must not be empty");
+    JVE_ASSERT(!m_running.load(std::memory_order_relaxed),
+               "AudioPump::SetFlushHandler: must be set before Start");
+    m_flush_handler = std::move(handler);
+}
+
+void AudioPump::WithSseOwnerOnMain(std::function<void()> work) {
+    JVE_ASSERT(m_running.load(std::memory_order_relaxed),
+               "AudioPump::WithSseOwnerOnMain: pump is not running");
+    JVE_ASSERT(m_sse, "AudioPump::WithSseOwnerOnMain: SSE pointer is null");
+    JVE_ASSERT(static_cast<bool>(work),
+               "AudioPump::WithSseOwnerOnMain: work lambda must not be empty");
+
+    // Stage 1 — wait for any prior handoff to be fully resumed, then ++ the
+    // request gen. The idle-wait blocks back-to-back callers from racing a
+    // pump wake-up. Each call captures its own generation; subsequent waits
+    // are predicated on THIS gen being reached, immune to flag reuse.
+    uint64_t my_gen;
+    {
+        std::unique_lock<std::mutex> lock(m_flush_mutex);
+        m_handoff_idle_cv.wait(lock, [this]() {
+            return m_handoff_resumed_gen == m_handoff_request_gen
+                || m_stop_requested.load(std::memory_order_relaxed);
+        });
+        if (m_stop_requested.load(std::memory_order_relaxed)) return;
+        my_gen = ++m_handoff_request_gen;
+    }
+    m_handoff_request_cv.notify_one();
+
+    // Stage 2 — wait for pump to release SSE owner at this gen or later.
+    {
+        std::unique_lock<std::mutex> lock(m_flush_mutex);
+        m_handoff_released_cv.wait(lock, [this, my_gen]() {
+            return m_handoff_released_gen >= my_gen
+                || m_stop_requested.load(std::memory_order_relaxed);
+        });
+    }
+    if (m_stop_requested.load(std::memory_order_relaxed)) return;
+
+    // Stage 3 — run work on THIS thread with SSE ownership transferred.
+    // Pump is parked at the resume_cv wait, so SSE has exactly one writer.
+    m_sse->SetOwnerThread(std::this_thread::get_id());
+    work();
+    m_sse->ClearOwnerThread();
+
+    // Stage 4 — advance completed gen to signal pump to resume.
+    {
+        std::lock_guard<std::mutex> lock(m_flush_mutex);
+        JVE_ASSERT(m_handoff_completed_gen < my_gen,
+            "WithSseOwnerOnMain: completed_gen invariant violation");
+        m_handoff_completed_gen = my_gen;
+    }
+    m_handoff_resume_cv.notify_one();
+}
+
+void AudioPump::RequestFlush(int64_t time_us, int direction, float abs_speed) {
+    JVE_ASSERT(static_cast<bool>(m_flush_handler),
+               "AudioPump::RequestFlush: no flush handler installed");
+    JVE_ASSERT(direction == 1 || direction == -1,
+               "AudioPump::RequestFlush: direction must be +1 or -1");
+    JVE_ASSERT(abs_speed > 0.0f,
+               "AudioPump::RequestFlush: abs_speed must be positive");
+
+    // The handler does the full Flush + Reset + SetTarget + prefill + Start.
+    // QAudioSink work inside the handler stays on main where the sink
+    // lives (macOS Qt event-loop affinity, see header doc).
+    WithSseOwnerOnMain([this, time_us, direction, abs_speed]() {
+        m_flush_handler(time_us, direction, abs_speed);
+    });
 }
 
 bool AudioPump::IsRunning() const {
@@ -423,9 +508,54 @@ void AudioPump::pumpLoop() {
     int64_t stalled_cycles = 0;
     int64_t last_media_time = -1;
 
+    // Take ownership of SSE: every public SSE method now asserts the
+    // calling thread matches. The pump is the only legitimate writer
+    // during play; anyone else (main, DisplayLink, Lua bindings) trips
+    // the assert with a stack trace at the violating callsite.
+    m_sse->SetOwnerThread(std::this_thread::get_id());
+
     int cycle_count = 0;
     while (!m_stop_requested.load(std::memory_order_relaxed)) {
         cycle_count++;
+
+        // 0. Service any pending handoff BEFORE doing the cycle's regular
+        //    work. Pump-pause: release SSE owner, signal main, wait for
+        //    main to finish, re-claim SSE owner, notify idle so the next
+        //    caller can proceed. Counters are monotonic; this generation
+        //    is captured so subsequent waits cannot confuse handoffs.
+        uint64_t my_gen = 0;
+        bool servicing = false;
+        {
+            std::lock_guard<std::mutex> lock(m_flush_mutex);
+            if (m_handoff_released_gen < m_handoff_request_gen) {
+                my_gen = m_handoff_released_gen + 1;
+                servicing = true;
+            }
+        }
+        if (servicing) {
+            m_sse->ClearOwnerThread();
+            {
+                std::lock_guard<std::mutex> lock(m_flush_mutex);
+                m_handoff_released_gen = my_gen;
+            }
+            m_handoff_released_cv.notify_all();
+
+            {
+                std::unique_lock<std::mutex> lock(m_flush_mutex);
+                m_handoff_resume_cv.wait(lock, [this, my_gen]() {
+                    return m_handoff_completed_gen >= my_gen
+                        || m_stop_requested.load(std::memory_order_relaxed);
+                });
+            }
+            if (m_stop_requested.load(std::memory_order_relaxed)) break;
+            m_sse->SetOwnerThread(std::this_thread::get_id());
+            {
+                std::lock_guard<std::mutex> lock(m_flush_mutex);
+                m_handoff_resumed_gen = my_gen;
+            }
+            m_handoff_idle_cv.notify_all();
+        }
+
         // 1. Get current media time from clock
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t media_time_us = m_clock->CurrentTimeUS(aop_playhead);
@@ -640,7 +770,9 @@ void AudioPump::pumpLoop() {
             entry.flags = flags;
         }
 
-        // 7. Adaptive sleep based on buffer level
+        // 7. Adaptive sleep based on buffer level — but wake immediately
+        //    if a flush request lands, so mute/solo + direction-flip stay
+        //    snappy instead of waiting out the OK_MS interval.
         int sleep_ms;
         int64_t buffered_after = m_aop->BufferedFrames();
         if (buffered_after < target_frames) {
@@ -649,8 +781,22 @@ void AudioPump::pumpLoop() {
             sleep_ms = PUMP_INTERVAL_OK_MS;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+        std::unique_lock<std::mutex> lock(m_flush_mutex);
+        m_handoff_request_cv.wait_for(
+            lock,
+            std::chrono::milliseconds(sleep_ms),
+            [this]() {
+                return m_handoff_released_gen < m_handoff_request_gen
+                    || m_stop_requested.load(std::memory_order_relaxed);
+            });
     }
+
+    // Shutdown ritual — release SSE owner so post-pump callers (PlayBurst,
+    // shutdown, scrub) don't trip the owner assert. AOP teardown does NOT
+    // run here in the hybrid: the QAudioSink lives on main (Qt event-loop
+    // affinity, see specs/017/audio-stack-lessons-and-future.md) and main
+    // calls AOP.Stop/Flush in PlaybackController::Stop after the pump joins.
+    m_sse->ClearOwnerThread();
 }
 
 // ============================================================================
@@ -1071,7 +1217,26 @@ void PlaybackController::Play(int direction, float speed) {
     auto t_after_videocache = std::chrono::steady_clock::now();
 
     if (m_has_audio.load(std::memory_order_relaxed)) {
-        prefillAudio(pos, direction, speed);
+        // prefillAudio runs on MAIN. AOP starts here (QAudioSink is created
+        // on main; macOS Qt event-loop affinity requires it, see
+        // specs/017-refactor-playback-engine/audio-stack-lessons-and-future.md).
+        //
+        // Two cases:
+        //   Cold-start: pump is not running yet. SSE is unowned, asserts
+        //     allow main access. prefillAudio's tail calls pump->Start,
+        //     which claims SSE owner in its first cycle.
+        //   Re-Play (JKL key repeat while already playing): pump is
+        //     running and owns SSE. Route prefillAudio through the
+        //     pump-pause handshake so SSE stays single-writer.
+        JVE_ASSERT(m_audio_pump,
+            "Play: ActivateAudio must run before Play when audio is engaged");
+        if (m_audio_pump->IsRunning()) {
+            m_audio_pump->WithSseOwnerOnMain([this, pos, direction, speed]() {
+                prefillAudio(pos, direction, speed);
+            });
+        } else {
+            prefillAudio(pos, direction, speed);
+        }
     }
 
     auto t_after_audio = std::chrono::steady_clock::now();
@@ -1127,9 +1292,13 @@ void PlaybackController::Stop() {
     stopDisplayLink();
 
     if (m_audio_pump && m_audio_pump->IsRunning()) {
+        // Pump joins; after this returns nothing else touches AOP/SSE.
+        // pumpLoop's exit ritual only clears the SSE owner thread —
+        // the QAudioSink lives on main (Qt event-loop affinity) so its
+        // Stop/Flush stays here. See specs/017/audio-stack-lessons-and-future.md.
         m_audio_pump->Stop();
     }
-    if (m_aop) {
+    if (m_aop && m_aop->IsPlaying()) {
         m_aop->Stop();
         m_aop->Flush();
     }
@@ -1222,9 +1391,16 @@ void PlaybackController::ActivateAudio(aop::AudioOutput* aop, sse::ScrubStretchE
     // Measure hardware output latency for A/V sync
     m_clock.MeasureOutputLatency(0, sample_rate);
 
-    // Create audio pump if needed
+    // Create audio pump if needed. Install the flush handler BEFORE Start()
+    // ever runs — it serializes mid-play Flush/Reset/SetTarget/prefill onto
+    // the pump thread, so SSE render state is touched by exactly one thread
+    // while playback is live.
     if (!m_audio_pump) {
         m_audio_pump = std::make_unique<AudioPump>();
+        m_audio_pump->SetFlushHandler(
+            [this](int64_t time_us, int direction, float abs_speed) {
+                prefillAudioAtTime(time_us, direction, abs_speed);
+            });
     }
 
     JVE_LOG_EVENT(Audio, "ActivateAudio %d Hz %d ch latency=%lldus",
@@ -1287,18 +1463,30 @@ void PlaybackController::SetSpeed(float signed_speed) {
         // looking them up. So we schedule the new segment at aop_playhead
         // (the press moment), and the latency subtraction in CurrentTimeUS
         // naturally defers its activation until the drain completes.
+        // ScheduleSpeedChange is internally locked → safe from main.
+        // m_sse->SetSpeed mutates non-atomic fields → must run with SSE
+        // ownership, so hand off through the pump (≤1 cycle latency,
+        // no Flush/Reset/Start, no device restart).
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         m_clock.ScheduleSpeedChange(signed_speed, aop_playhead);
         sse::QualityMode mode = static_cast<sse::QualityMode>(qualityModeForSpeed(abs_speed));
-        m_sse->SetSpeed(signed_speed, mode);
+        JVE_ASSERT(m_audio_pump && m_audio_pump->IsRunning(),
+            "SetSpeed lightweight: audibly-playing implies pump is running");
+        m_audio_pump->WithSseOwnerOnMain([this, signed_speed, mode]() {
+            m_sse->SetSpeed(signed_speed, mode);
+        });
         JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d lightweight (same-dir mid-play)",
             signed_speed, qualityModeForSpeed(abs_speed));
     } else if (playing_with_audio) {
         // Direction flip while playing: full restart so the audio stream
-        // re-anchors with the correct sign + crossfade.
+        // re-anchors with the correct sign + crossfade. Route through the
+        // pump so SSE render state stays single-threaded — see
+        // AudioPump::RequestFlush / pumpLoop step 0.
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t current_time_us = m_clock.CurrentTimeUS(aop_playhead);
-        prefillAudioAtTime(current_time_us, new_dir, abs_speed);
+        JVE_ASSERT(m_audio_pump && m_audio_pump->IsRunning(),
+            "SetSpeed: direction flip while playing with audio implies pump is running");
+        m_audio_pump->RequestFlush(current_time_us, new_dir, abs_speed);
         JVE_LOG_EVENT(Ticks, "SetSpeed %.2f Q%d restart (direction flip)",
             signed_speed, qualityModeForSpeed(abs_speed));
     } else {
@@ -1318,14 +1506,17 @@ void PlaybackController::FlushAudioForMixChange() {
     // Same position, same speed — just swap the stale already-mixed tail for the
     // new mix (SetAudioMixParams already cleared TMB's mix cache). The live
     // position comes from the C++ clock (the authority in the two-engine model;
-    // the Lua audio anchor is stale during playback). prefillAudioAtTime does
-    // the full flush-and-RESTART so the device resumes instead of freezing.
+    // the Lua audio anchor is stale during playback). The pump executes the
+    // Flush/Reset/SetTarget/prefill/Start handler so SSE render state stays
+    // single-threaded — see AudioPump::RequestFlush / pumpLoop step 0.
     int64_t aop_playhead = m_aop->PlayheadTimeUS();
     int64_t current_time_us = m_clock.CurrentTimeUS(aop_playhead);
     int dir = m_direction.load(std::memory_order_relaxed);
     float abs_speed = m_speed.load(std::memory_order_relaxed);
 
-    prefillAudioAtTime(current_time_us, dir, abs_speed);
+    JVE_ASSERT(m_audio_pump && m_audio_pump->IsRunning(),
+        "FlushAudioForMixChange: audibly-playing implies pump is running");
+    m_audio_pump->RequestFlush(current_time_us, dir, abs_speed);
 
     JVE_LOG_EVENT(Audio, "FlushAudioForMixChange: t=%.3fs",
                   current_time_us / 1000000.0);
@@ -1484,6 +1675,70 @@ void PlaybackController::reloadAllClips() {
     m_tmb->ClearAllClips();
     resetPrefetchFrontiers();
     prefetchClips();
+}
+
+void PlaybackController::SetClipGradeSnapshot(const std::string& clip_id,
+                                               const emp::CdlParams& cdl,
+                                               const emp::Lut3d& lut) {
+    JVE_ASSERT(!clip_id.empty(),
+        "PlaybackController::SetClipGradeSnapshot: clip_id must not be empty");
+    std::lock_guard<std::mutex> lock(m_clip_grades_mutex);
+    GradeSnapshot& slot = m_clip_grades[clip_id];
+    slot.cdl = cdl;
+    slot.lut = lut;
+}
+
+void PlaybackController::ClearAllClipGrades() {
+    std::lock_guard<std::mutex> lock(m_clip_grades_mutex);
+    m_clip_grades.clear();
+}
+
+// Push `snap` to surface `s` on the main thread. has_snap=false means
+// "clear" (gap entry or unregistered clip). Free helper so the async
+// dispatch block can call it without touching `this`.
+static void applyGradeSnapshotToSurface(GPUVideoSurface* s,
+                                        const PlaybackController::GradeSnapshot& snap,
+                                        bool has_snap) {
+    if (!s) return;
+    if (has_snap && snap.cdl.enabled) s->setGrade(snap.cdl);
+    else                              s->clearGrade();
+    if (has_snap && snap.lut.enabled) s->setLut3D(snap.lut);
+    else                              s->clearLut3D();
+}
+
+bool PlaybackController::lookupClipGrade(const std::string& clip_id,
+                                          GradeSnapshot& out) const {
+    if (clip_id.empty()) return false;
+    std::lock_guard<std::mutex> lock(m_clip_grades_mutex);
+    auto it = m_clip_grades.find(clip_id);
+    if (it == m_clip_grades.end()) return false;
+    out = it->second;
+    return true;
+}
+
+void PlaybackController::applyClipGradeOnMainThread(const std::string& clip_id) {
+    JVE_ASSERT([NSThread isMainThread],
+        "PlaybackController::applyClipGradeOnMainThread: must be on main thread");
+    GradeSnapshot snap;
+    bool has_snap = lookupClipGrade(clip_id, snap);
+    applyGradeSnapshotToSurface(m_surface, snap, has_snap);
+    applyGradeSnapshotToSurface(m_mirror_surface, snap, has_snap);
+}
+
+// Async grade dispatch: resolve the snapshot + surface pointers NOW, then
+// enqueue a block that owns copies of both. The block never dereferences
+// `this` — a PLAYBACK.CLOSE racing the main queue drain can free this
+// controller without affecting the block. Surface lifetime is parent-
+// owned (QWidget) and outlives the controller.
+void PlaybackController::dispatchClipGradeToMainThread(const std::string& clip_id) {
+    GradeSnapshot snap;
+    bool has_snap = lookupClipGrade(clip_id, snap);
+    GPUVideoSurface* surf = m_surface;
+    GPUVideoSurface* mirror = m_mirror_surface;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        applyGradeSnapshotToSurface(surf, snap, has_snap);
+        applyGradeSnapshotToSurface(mirror, snap, has_snap);
+    });
 }
 
 void PlaybackController::setEffectiveVideoTracks(const std::vector<int>& indices) {
@@ -1797,7 +2052,8 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
             m_consecutive_audio_healthy = 0;
             if (m_consecutive_audio_dry >= AUDIO_DRY_CONSECUTIVE && !m_audio_master_position) {
                 m_audio_master_position = true;
-                JVE_LOG_EVENT(Ticks, "audio-master ON: buf=0 for %d ticks", m_consecutive_audio_dry);
+                JVE_LOG_EVENT(Ticks, "audio-master ON: buf=0 for %d ticks",
+                              m_consecutive_audio_dry.load(std::memory_order_relaxed));
             }
         } else {
             m_consecutive_audio_dry = 0;
@@ -1988,10 +2244,19 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         m_surface->clearFrame();
         if (m_mirror_surface) m_mirror_surface->clearFrame();
         if (!m_current_clip_id.empty()) {
-            // Entering gap from a clip — record transition
+            // Entering gap from a clip — record transition and drop the
+            // outgoing clip's CDL/LUT so a stop-in-gap doesn't park the
+            // surface with a stale grade. Empty clip_id misses the
+            // snapshot map → applyClipGradeOnMainThread issues clearGrade/
+            // clearLut3D on both surfaces.
             m_current_clip_id.clear();
             m_current_offline = false;
             m_clip_transitions.push_back({m_diag_tick_index, frame, "", "(gap)"});
+            if (synchronous) {
+                applyClipGradeOnMainThread("");
+            } else {
+                dispatchClipGradeToMainThread("");
+            }
         }
         m_last_displayed_frame = frame;
         if (m_current_tick) m_current_tick->flags |= TickFlags::GAP;
@@ -2045,6 +2310,20 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
                     cb(clip_id, rotation, par_num, par_den, offline, media_path, trans_frame);
                 });
             }
+        }
+
+        // Per-clip CDL/LUT (spec 023 FR-016, playback path). Apply the
+        // snapshot BEFORE the new clip's first frame draws so the surface
+        // doesn't carry the previous clip's grade. Sync path (Seek): direct
+        // call. Async path (CVDisplayLink tick): dispatch the snapshot by
+        // value (not `this`) so a PLAYBACK.CLOSE racing the queue drain
+        // can't fire the block against a destroyed controller. FIFO on the
+        // main queue ⇒ this lands before m_surface->setFrame()'s own
+        // dispatch_async.
+        if (synchronous) {
+            applyClipGradeOnMainThread(result.clip_id);
+        } else {
+            dispatchClipGradeToMainThread(result.clip_id);
         }
     }
 
