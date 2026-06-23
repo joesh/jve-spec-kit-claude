@@ -362,17 +362,13 @@ assert_false(handled, "Escape outside text field should not be consumed")
 assert_equal(timeline_panel_stub.cancel_timecode_calls, 0,
     "cancel_timecode_entry must not be called outside text field")
 
--- Test 15: Escape dismisses any visible find_chrome surface (project_browser, inspector, ...)
--- via the shared registry. cancel.lua queries find_chrome.any_visible() and calls
--- find_chrome.dismiss_first_visible() — neither path goes through project_browser anymore.
+-- Test 15: Escape dismisses any visible find bar regardless of which panel owns it.
 local find_chrome = require("ui.find_chrome")
 local function inject_visible_chrome()
-    -- Replace the registry contents with a single fake visible instance so the
-    -- test is independent of any module-level instances built elsewhere.
-    find_chrome._instances = {}
+    find_chrome._reset_for_test()
     local fake = { visible = true }
     function fake:hide() self.visible = false end
-    table.insert(find_chrome._instances, fake)
+    find_chrome._register_for_test(fake)
     return fake
 end
 

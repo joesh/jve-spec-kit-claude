@@ -13,6 +13,8 @@ local log = require("core.logger").for_area("ui.find")
 
 local M = {}
 
+local STATUS_NO_MATCHES = "No matches"
+
 -- The find dialog is a pure view: it dispatches every action with the user's
 -- query packet. These keys are optional at the schema layer (Find/FindNext open
 -- the dialog when absent); each executor asserts the subset it actually needs
@@ -147,13 +149,10 @@ local function cmd_find(command)
     end
     log.event("Find: view %s", view.view_id)
 
-    if view.view_id == "project_browser" then
-        local pb = require("ui.project_browser")
-        pb.show_find_bar()
-        return {success = true}
-    end
-
-    if view.view_id == "inspector" then
+    -- Views that own an inline find chrome expose show_find_bar(); they
+    -- handle Cmd+F themselves. Views without one (timeline) fall through
+    -- to the floating find_dialog.
+    if view.show_find_bar then
         view.show_find_bar()
         return {success = true}
     end
@@ -167,7 +166,7 @@ local function cmd_find(command)
 
     local count = execute_find(make_query(args))
     if count == 0 then
-        update_find_status("No matches")
+        update_find_status(STATUS_NO_MATCHES)
     else
         update_find_status(string.format("%d match%s", count, count == 1 and "" or "es"))
         navigate_to_match()
@@ -201,7 +200,7 @@ local function cmd_find_next(command)
 
     local fresh_count = re_execute_if_changed(args)
     if fresh_count == 0 then
-        update_find_status("No matches")
+        update_find_status(STATUS_NO_MATCHES)
         return {success = true, match_count = 0}
     end
     if fresh_count == nil then
@@ -223,7 +222,7 @@ local function cmd_find_previous(command)
 
     local fresh_count = re_execute_if_changed(args)
     if fresh_count == 0 then
-        update_find_status("No matches")
+        update_find_status(STATUS_NO_MATCHES)
         return {success = true, match_count = 0}
     end
     if fresh_count == nil then
@@ -248,7 +247,7 @@ local function cmd_select_all_matches(command)
     local fresh_count = re_execute_if_changed(args)
     if fresh_count == 0 then
         view:select_clips({})
-        update_find_status("No matches")
+        update_find_status(STATUS_NO_MATCHES)
         return {success = true, selected_count = 0}
     end
 
@@ -267,7 +266,7 @@ local function cmd_find_replace_current(command)
 
     local fresh_count = re_execute_if_changed(args)
     if fresh_count == 0 then
-        update_find_status("No matches")
+        update_find_status(STATUS_NO_MATCHES)
         return {success = true, replaced_count = 0}
     end
 
@@ -305,14 +304,14 @@ local function cmd_find_replace_all(command)
 
     local fresh_count = re_execute_if_changed(args)
     if fresh_count == 0 then
-        update_find_status("No matches")
+        update_find_status(STATUS_NO_MATCHES)
         return {success = true, replaced_count = 0}
     end
 
     local match_ids = find_state.get_matches()
     local count = #match_ids
     if count == 0 then
-        update_find_status("No matches")
+        update_find_status(STATUS_NO_MATCHES)
         return {success = true, replaced_count = 0}
     end
 

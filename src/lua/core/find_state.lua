@@ -73,9 +73,8 @@ function M.get_matched_clips()
     return matches
 end
 
---- Jump to the match with the given clip id. No-op if id is not in the set.
--- @param id clip id string
--- @return true if set, false if id not found
+--- Make the match with the given clip id current. Returns false if id
+--- is not in the result set (e.g. the clip was deleted after find ran).
 function M.set_current_by_id(id)
     for i, clip in ipairs(matches) do
         if clip.id == id then

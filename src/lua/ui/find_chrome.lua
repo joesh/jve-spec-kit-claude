@@ -34,9 +34,9 @@ local ui_constants = require("core.ui_constants")
 
 local M = {}
 
--- Registry of live instances (in build order). Iterated by dismiss_first_visible.
--- Append-only: instances are panel-lifetime objects.
-M._instances = {}
+-- Registry of live instances (in build order), kept module-private.
+-- Append-only — instances are panel-lifetime objects.
+local instances = {}
 
 local function color(key)
     local v = ui_constants.COLORS[key]
@@ -49,9 +49,6 @@ local function unique_handler_name(prefix)
     return string.format("__find_chrome_%s_%d", prefix, M._handler_seq)
 end
 
--- "Find in <Panel>  ⌘F" if we can resolve the bound shortcut, otherwise
--- fall back to plain "Find in <Panel>" (shortcut may be unbound). Without
--- a panel_name, just "Find".
 local function build_tooltip(panel_name)
     local label = panel_name and ("Find in " .. panel_name) or "Find"
     -- pcall: keyboard_shortcut_registry pulls a chain that isn't loaded in
@@ -148,11 +145,10 @@ function M.build(opts)
         if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
             qt_constants.DISPLAY.SET_VISIBLE(self.container, false)
         end
-        -- Clear the field so re-opening starts fresh; on_dismiss is the
-        -- caller's hook to clear any derived state (filter_query, find_state).
         if qt_constants.PROPERTIES.SET_TEXT then
             qt_constants.PROPERTIES.SET_TEXT(self.search_input, "")
         end
+        -- on_dismiss lets the caller clear derived state (filter_query, find_state).
         if self.on_dismiss then self.on_dismiss() end
     end
 
@@ -160,7 +156,7 @@ function M.build(opts)
         if self.visible then self:hide() else self:show() end
     end
 
-    table.insert(M._instances, inst)
+    table.insert(instances, inst)
     return inst
 end
 
@@ -178,9 +174,8 @@ function M.make_title_toggle_btn(opts)
 end
 
 --- Dismiss the first currently-visible chrome. Returns true if any was hidden.
---- cancel.lua calls this from the Cancel command.
 function M.dismiss_first_visible()
-    for _, inst in ipairs(M._instances) do
+    for _, inst in ipairs(instances) do
         if inst.visible then
             inst:hide()
             return true
@@ -189,12 +184,23 @@ function M.dismiss_first_visible()
     return false
 end
 
---- True if any chrome is visible. Used by cancel.lua's when() predicate.
+--- True if any chrome is visible.
 function M.any_visible()
-    for _, inst in ipairs(M._instances) do
+    for _, inst in ipairs(instances) do
         if inst.visible then return true end
     end
     return false
+end
+
+--- Test seam: drop all registered instances so a test can inject its own.
+function M._reset_for_test()
+    instances = {}
+end
+
+--- Test seam: register a fake instance (must expose `visible` field + `:hide()`
+--- method, matching the contract dismiss_first_visible iterates).
+function M._register_for_test(inst)
+    table.insert(instances, inst)
 end
 
 return M

@@ -75,7 +75,7 @@ function M.execute(args)
     end
 
     if any_find_chrome_visible() then
-        log.detail("  → dismiss find_chrome surface")
+        log.detail("  → dismiss find bar")
         require("ui.find_chrome").dismiss_first_visible()
         return true
     end

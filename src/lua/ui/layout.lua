@@ -506,9 +506,9 @@ end)
 
 -- Initialize the rewritten Inspector (feature 012).
 -- Public API: three functions — mount, update_selection, get_focus_widgets.
+-- mount() registers the focus_manager view-record internally so the facade
+-- can stay at three exports (spec 012 DR-THREE-EXPORTS).
 local inspector = require("ui.inspector")
-focus_manager.register_view("inspector", inspector)
-
 inspector.mount(inspector_panel)
 
 -- Wire project browser to timeline for insert button.
