@@ -25,6 +25,7 @@ local project_gen = require("core.project_generation")
 local view_grade_pull = require("core.view_grade_pull")
 local ClipGrade = require("models.clip_grade")
 local grade_badge = require("ui.grade_badge")
+local pulse = require("ui.pulse")
 
 local Signals = require("core.signals")
 local timecode = require("core.timecode")
@@ -1114,28 +1115,58 @@ end
 -- empty label at the default font (~13px) inflates the whole TC row. Only the
 -- background and text colour change between states.
 local GRADE_STATUS_METRICS = "padding: 2px 6px; font-size: 11px;"
+local SYNC_STATUS_TEXT = "⟳ Syncing grades from Resolve…"
+
+local function grade_status_empty_style()
+    return string.format("QLabel { background: transparent; %s }", GRADE_STATUS_METRICS)
+end
+
+-- Lazy-build the pulser so its closures capture the QLabel exactly once.
+-- The pulser is the AUTHORITY on the syncing message: start() puts it up
+-- (text + styled bar, animated), stop() takes it down (empty text +
+-- transparent bar). Other right-strip states (badge, empty) are owned by
+-- _update_grade_status and only render when the pulser is inactive.
+function SequenceMonitor:_ensure_grade_status_pulser()
+    if self._grade_status_pulser then return self._grade_status_pulser end
+    local widget = self._grade_status
+    self._grade_status_pulser = pulse.attach({
+        base_hex = ui_constants.COLORS.TEXT_LABEL,
+        show = function(rgba_color)
+            qt_constants.PROPERTIES.SET_TEXT(widget, SYNC_STATUS_TEXT)
+            qt_constants.PROPERTIES.SET_STYLE(widget, string.format(
+                "QLabel { background: %s; color: %s; %s }",
+                RECESSED_BG, rgba_color, GRADE_STATUS_METRICS))
+        end,
+        hide = function()
+            qt_constants.PROPERTIES.SET_TEXT(widget, "")
+            qt_constants.PROPERTIES.SET_STYLE(widget, grade_status_empty_style())
+        end,
+    })
+    return self._grade_status_pulser
+end
+
 function SequenceMonitor:_update_grade_status()
     if not self._grade_status then return end
-    local text, color = nil, nil
     if self._sync_pending then
-        text, color = "⟳ Syncing grades from Resolve…", ui_constants.COLORS.TEXT_LABEL_DIM
-    else
-        local badge = grade_badge.for_reproduction(self._grade_reproduction)
-        if badge.visible then text, color = badge.text, badge.color_hex end
-    end
-    if text == nil then
-        -- No message: clear the text and go transparent, but keep the metrics
-        -- so the empty label stays the timecodes' height (no taller black box).
-        qt_constants.PROPERTIES.SET_TEXT(self._grade_status, "")
-        qt_constants.PROPERTIES.SET_STYLE(self._grade_status, string.format(
-            "QLabel { background: transparent; %s }", GRADE_STATUS_METRICS))
+        self:_ensure_grade_status_pulser():start()
         return
     end
-    qt_constants.PROPERTIES.SET_TEXT(self._grade_status, text)
-    -- Match TC_STYLE metrics/background so the status sits flush with the two
-    -- timecodes — same height, same bar colour, only the text colour differs.
-    qt_constants.PROPERTIES.SET_STYLE(self._grade_status, string.format(
-        "QLabel { background: %s; color: %s; %s }", RECESSED_BG, color, GRADE_STATUS_METRICS))
+    -- Not syncing: halt the pulser (its hide() clears the message) before
+    -- the static state — badge or empty — paints over it.
+    if self._grade_status_pulser then self._grade_status_pulser:stop() end
+    local badge = grade_badge.for_reproduction(self._grade_reproduction)
+    if badge.visible then
+        qt_constants.PROPERTIES.SET_TEXT(self._grade_status, badge.text)
+        qt_constants.PROPERTIES.SET_STYLE(self._grade_status, string.format(
+            "QLabel { background: %s; color: %s; %s }",
+            RECESSED_BG, badge.color_hex, GRADE_STATUS_METRICS))
+        return
+    end
+    -- Empty: pulser:stop()'s hide() already cleared if it had been active;
+    -- the explicit empty render is the canonical first-paint path before
+    -- any sync has ever happened (and harmless when redundant).
+    qt_constants.PROPERTIES.SET_TEXT(self._grade_status, "")
+    qt_constants.PROPERTIES.SET_STYLE(self._grade_status, grade_status_empty_style())
 end
 
 --- Sync-in-progress flag (FR-016): the bridge broadcasts start/finish; the
