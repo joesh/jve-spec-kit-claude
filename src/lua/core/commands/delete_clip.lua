@@ -9,7 +9,8 @@
 --
 -- Effect:
 --   - the clip row is removed
---   - clip_links and clip_channel_override rows cascade via FK ON DELETE
+--   - clip_links, clip_channel_override, clip_grade, and
+--     resolve_bridge_link rows cascade via FK ON DELETE
 --   - clips on the same track at later times stay where they are
 --   - any linked partners (other clips in the group) are untouched
 --
@@ -19,9 +20,10 @@
 -- Atomicity: SAVEPOINT wraps the delete unit so a mid-delete failure
 -- (e.g. a missing link group member) unwinds the entire operation.
 --
--- Undo restores every captured clip via Clip.restore_state — the
--- row, its clip_channel_override rows, and its clip_links membership.
--- Atomic via SAVEPOINT so a partial restore unwinds.
+-- Undo restores every captured clip via Clip.restore_state — the row,
+-- its clip_channel_override rows, its clip_links membership, and (for
+-- spec 023) its clip_grade and resolve_bridge_link rows. Atomic via
+-- SAVEPOINT so a partial restore unwinds.
 --
 -- @file delete_clip.lua
 

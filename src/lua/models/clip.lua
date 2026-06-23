@@ -1996,11 +1996,19 @@ function M.load_row(id)
     return row
 end
 
---- Capture the FULL V13 state of a clip for undo: the row, its
---- clip_channel_override rows, and its clip_links membership (if any).
---- The returned table can be passed to Clip.restore_state to
---- recreate the clip exactly as it was. Loud-fail if clip is missing
---- (capturing a non-existent clip is always a caller bug).
+--- Capture the FULL state of a clip for undo: the row plus every
+--- satellite table whose rows are keyed by clip_id and CASCADE-deleted
+--- when the clip row goes away. Currently:
+---   • clips row
+---   • clip_channel_override rows
+---   • clip_links membership (if any)
+---   • clip_grade row (spec 023, FR-014)            — CASCADE on clips(id)
+---   • resolve_bridge_link row (spec 023, FR-011)   — CASCADE on clips(id)
+--- Pass the returned table to Clip.restore_state to recreate the clip
+--- exactly as it was. Loud-fail if clip is missing (capturing a
+--- non-existent clip is always a caller bug). Add a new clip-keyed
+--- table? Extend this function AND restore_state in lockstep — that's
+--- how the "capture = full clip state" invariant stays honest.
 function M.capture_state(clip_id)
     assert(clip_id and clip_id ~= "", "Clip.capture_state: clip_id required")
     local row = M.load_row(clip_id)
@@ -2050,10 +2058,37 @@ function M.capture_state(clip_id)
         stmt:finalize()
     end
 
+    -- Resolve color bridge satellites (spec 023). Both CASCADE on
+    -- clips(id) — captured here so undo can replay them after the
+    -- clip row is re-INSERTed.
+    local grade = require("models.clip_grade").load(clip_id, db)
+
+    local bridge_link
+    do
+        local stmt = db:prepare([[
+            SELECT resolve_item_id, grade_fingerprint, edit_fingerprint
+            FROM resolve_bridge_link WHERE jve_clip_uuid = ?
+            LIMIT 1
+        ]])
+        assert(stmt, "Clip.capture_state: bridge_link prepare failed")
+        stmt:bind_value(1, clip_id)
+        assert(stmt:exec(), "Clip.capture_state: bridge_link exec failed")
+        if stmt:next() then
+            bridge_link = {
+                resolve_item_id   = stmt:value(0),
+                grade_fingerprint = stmt:value(1),
+                edit_fingerprint  = stmt:value(2),
+            }
+        end
+        stmt:finalize()
+    end
+
     return {
-        row       = row,
-        overrides = overrides,
-        link      = link,
+        row         = row,
+        overrides   = overrides,
+        link        = link,
+        grade       = grade,
+        bridge_link = bridge_link,
     }
 end
 
@@ -2123,6 +2158,30 @@ function M.restore_state(state)
         stmt:bind_value(5, state.link.enabled and 1 or 0)
         assert(stmt:exec(),
             "Clip.restore_state: link exec failed")
+        stmt:finalize()
+    end
+
+    -- Resolve color bridge satellites (spec 023). Replay through the
+    -- canonical writers: ClipGrade.upsert validates CDL all-or-none +
+    -- enum fields so we re-enter the model at its front door.
+    if state.grade then
+        require("models.clip_grade").upsert(r.id, state.grade)
+    end
+
+    if state.bridge_link then
+        local db = require("core.database").get_connection()
+        local stmt = db:prepare([[
+            INSERT INTO resolve_bridge_link
+                (jve_clip_uuid, resolve_item_id, grade_fingerprint, edit_fingerprint)
+            VALUES (?, ?, ?, ?)
+        ]])
+        assert(stmt, "Clip.restore_state: bridge_link prepare failed")
+        stmt:bind_value(1, r.id)
+        stmt:bind_value(2, state.bridge_link.resolve_item_id)
+        stmt:bind_value(3, state.bridge_link.grade_fingerprint)
+        stmt:bind_value(4, state.bridge_link.edit_fingerprint)
+        assert(stmt:exec(),
+            "Clip.restore_state: bridge_link exec failed")
         stmt:finalize()
     end
 end
