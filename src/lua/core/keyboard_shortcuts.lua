@@ -227,8 +227,15 @@ local function handle_key_impl(event)
             timeline_panel.cancel_timecode_entry()
             return true
         end
-        log.detail("  → text-editing key or Escape in text input, deferring to widget")
-        return false
+        -- Escape in non-timeline text input falls through to the registry
+        -- dispatch below so the Cancel command can dismiss a visible find
+        -- bar / floating dialog / fullscreen — none of which a QLineEdit
+        -- handles natively. Text-editing keys (caret nav, typing, clipboard)
+        -- still defer to the widget.
+        if key ~= KEY.Escape then
+            log.detail("  → text-editing key in text input, deferring to widget")
+            return false
+        end
     end
 
     -- Escape: dispatch via TOML registry to reach the 'Cancel' command.

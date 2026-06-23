@@ -488,6 +488,9 @@ shortcut_registry.create_qt_shortcuts({
 -- Register views for navigation (Find uses focus_manager.get_active_view())
 focus_manager.register_view("timeline", timeline_panel_mod)
 focus_manager.register_view("project_browser", project_browser_mod)
+-- inspector registers itself from within mount() so its facade can stay at
+-- three exports (spec 012 DR-THREE-EXPORTS) while still exposing a view-record
+-- carrying view_id + show_find_bar.
 
 -- 017 FR-009: focus changes do NOT touch audio ownership any more. Audio
 -- ownership is structural (lives in core.media.audio_playback) and changes
@@ -504,6 +507,7 @@ end)
 -- Initialize the rewritten Inspector (feature 012).
 -- Public API: three functions — mount, update_selection, get_focus_widgets.
 local inspector = require("ui.inspector")
+focus_manager.register_view("inspector", inspector)
 
 inspector.mount(inspector_panel)
 

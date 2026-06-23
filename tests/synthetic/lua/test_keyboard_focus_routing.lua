@@ -362,12 +362,22 @@ assert_false(handled, "Escape outside text field should not be consumed")
 assert_equal(timeline_panel_stub.cancel_timecode_calls, 0,
     "cancel_timecode_entry must not be called outside text field")
 
--- Test 15: Escape dismisses find bar when visible
+-- Test 15: Escape dismisses any visible find_chrome surface (project_browser, inspector, ...)
+-- via the shared registry. cancel.lua queries find_chrome.any_visible() and calls
+-- find_chrome.dismiss_first_visible() — neither path goes through project_browser anymore.
+local find_chrome = require("ui.find_chrome")
+local function inject_visible_chrome()
+    -- Replace the registry contents with a single fake visible instance so the
+    -- test is independent of any module-level instances built elsewhere.
+    find_chrome._instances = {}
+    local fake = { visible = true }
+    function fake:hide() self.visible = false end
+    table.insert(find_chrome._instances, fake)
+    return fake
+end
+
 reset_environment()
--- Simulate find bar visible
-local find_bar_hidden = false
-project_browser_stub.find_bar = { visible = true }
-project_browser_stub.hide_find_bar = function() find_bar_hidden = true end
+local fake_chrome = inject_visible_chrome()
 focus_manager.set_focused_panel("project_browser")
 
 handled = keyboard_shortcuts.handle_key({
@@ -376,7 +386,26 @@ handled = keyboard_shortcuts.handle_key({
     text = "",
     focus_widget_is_text_input = false,
 })
-assert_true(handled, "Escape must be consumed when find bar is visible")
-assert_true(find_bar_hidden, "Escape must call hide_find_bar when find bar is visible")
+assert_true(handled, "Escape must be consumed when a find_chrome surface is visible")
+assert_false(fake_chrome.visible,
+    "Escape must hide the visible find_chrome surface")
+
+-- Test 16: Escape dismisses find_chrome even when text field is focused.
+-- The chrome's QLineEdit doesn't do anything useful with native Escape, so
+-- Esc must route through the Cancel command to dismiss the surface.
+reset_environment()
+fake_chrome = inject_visible_chrome()
+focus_manager.set_focused_panel("project_browser")
+
+handled = keyboard_shortcuts.handle_key({
+    key = QT_KEY_ESCAPE,
+    modifiers = QT_MOD_NONE,
+    text = "",
+    focus_widget_is_text_input = true,
+})
+assert_true(handled,
+    "Escape with find_chrome visible must be consumed even with text input focused")
+assert_false(fake_chrome.visible,
+    "Escape with find_chrome visible + text input focus must hide the surface")
 
 print("✅ keyboard focus routing tests passed")

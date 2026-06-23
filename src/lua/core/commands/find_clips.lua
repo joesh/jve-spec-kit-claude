@@ -24,6 +24,7 @@ local SPEC_FIND = {
         operator      = { kind = "string" },
         value         = { kind = "string" },
         replace_value = { kind = "string" },
+        match_id      = { kind = "string" },
     },
 }
 
@@ -74,6 +75,12 @@ local function update_find_status(text)
     if fd.is_visible() then fd.update_status(text) end
 end
 
+local function refresh_find_dialog_list()
+    local fd = require("ui.find_dialog")
+    if not fd.is_visible() then return end
+    fd.refresh_matches(find_state.get_matched_clips(), find_state.get_current_index())
+end
+
 local function execute_find(query)
     local view = get_active_view()
     assert(view, "execute_find: no active view")
@@ -102,6 +109,7 @@ local function complete_navigation()
     local idx = find_state.get_current_index()
     local total = find_state.get_match_count()
     update_find_status(string.format("Match %d of %d", idx, total))
+    refresh_find_dialog_list()
     return {success = true, current_match = find_state.get_current_match()}
 end
 
@@ -123,6 +131,7 @@ local function re_execute_for_view()
     local count = find_state.get_match_count()
     log.event("re_execute_for_view: %d matches", count)
     update_find_status(string.format("%d match%s", count, count == 1 and "" or "es"))
+    refresh_find_dialog_list()
 end
 
 -- ============================================================================
@@ -144,6 +153,11 @@ local function cmd_find(command)
         return {success = true}
     end
 
+    if view.view_id == "inspector" then
+        view.show_find_bar()
+        return {success = true}
+    end
+
     local find_dialog = require("ui.find_dialog")
 
     if not (args.column and args.operator and args.value) then
@@ -158,7 +172,19 @@ local function cmd_find(command)
         update_find_status(string.format("%d match%s", count, count == 1 and "" or "es"))
         navigate_to_match()
     end
+    refresh_find_dialog_list()
     return {success = true, match_count = count}
+end
+
+local function cmd_find_navigate(command)
+    local args = command:get_all_parameters()
+    assert(args.match_id, "FindNavigate: match_id required")
+    assert(find_state.is_active(), "FindNavigate: no active find session")
+    if not find_state.set_current_by_id(args.match_id) then
+        update_find_status("Match no longer in result set")
+        return {success = true, current_match = nil}
+    end
+    return complete_navigation()
 end
 
 local function cmd_find_next(command)
@@ -230,6 +256,7 @@ local function cmd_select_all_matches(command)
     view:select_clips(match_ids)
     local count = #match_ids
     update_find_status(string.format("Selected %d clip%s", count, count == 1 and "" or "s"))
+    refresh_find_dialog_list()
     return {success = true, selected_count = count}
 end
 
@@ -267,6 +294,7 @@ local function cmd_find_replace_current(command)
     local idx = find_state.get_current_index()
     local total = find_state.get_match_count()
     update_find_status(string.format("Replaced — Match %d of %d", idx, total))
+    refresh_find_dialog_list()
     return {success = true, replaced_count = 1}
 end
 
@@ -301,12 +329,14 @@ local function cmd_find_replace_all(command)
     })
 
     update_find_status(string.format("Replaced %d clip%s", count, count == 1 and "" or "s"))
+    refresh_find_dialog_list()
     return {success = true, replaced_count = count}
 end
 
 local function cmd_clear_find(_)
     find_state.clear()
     update_find_status("")
+    refresh_find_dialog_list()
     return {success = true}
 end
 
@@ -338,6 +368,7 @@ function M.register(command_executors, _, _, _)
     command_executors["Find"]               = cmd_find
     command_executors["FindNext"]           = cmd_find_next
     command_executors["FindPrevious"]       = cmd_find_previous
+    command_executors["FindNavigate"]       = cmd_find_navigate
     command_executors["FindReplace"]        = cmd_find
     command_executors["SelectAllMatches"]   = cmd_select_all_matches
     command_executors["FindReplaceCurrent"] = cmd_find_replace_current
@@ -348,6 +379,7 @@ function M.register(command_executors, _, _, _)
         ["Find"]               = {executor = cmd_find,                spec = SPEC_FIND},
         ["FindNext"]           = {executor = cmd_find_next,           spec = SPEC_FIND},
         ["FindPrevious"]       = {executor = cmd_find_previous,       spec = SPEC_FIND},
+        ["FindNavigate"]       = {executor = cmd_find_navigate,       spec = SPEC_FIND},
         ["FindReplace"]        = {executor = cmd_find,                spec = SPEC_FIND},
         ["SelectAllMatches"]   = {executor = cmd_select_all_matches,   spec = SPEC_FIND},
         ["FindReplaceCurrent"] = {executor = cmd_find_replace_current, spec = SPEC_FIND},

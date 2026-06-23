@@ -67,6 +67,25 @@ function M.get_matches()
     return ids
 end
 
+--- Get array of matched clip objects (full clip_data, in match order).
+-- @return array of clip tables
+function M.get_matched_clips()
+    return matches
+end
+
+--- Jump to the match with the given clip id. No-op if id is not in the set.
+-- @param id clip id string
+-- @return true if set, false if id not found
+function M.set_current_by_id(id)
+    for i, clip in ipairs(matches) do
+        if clip.id == id then
+            current_index = i
+            return true
+        end
+    end
+    return false
+end
+
 --- Get number of matches.
 -- @return integer
 function M.get_match_count()

@@ -36,6 +36,9 @@ local ws = {
     status_label = nil,
     rep_btn = nil,
     rep_all_btn = nil,
+    matches_tree = nil,
+    match_tree_ids = nil,   -- parallel to match list: tree_id → clip_id
+    suppress_match_select = false,
     geometry_ready = false,
     bool_field = false,
     visible = false,
@@ -118,6 +121,27 @@ function M.update_status(text)
     if ws.status_label then
         qt.PROPERTIES.SET_TEXT(ws.status_label, text)
     end
+end
+
+--- Refresh the matches list. Called by find_clips.lua after every state change.
+-- @param clips array of clip objects (find_state.get_matched_clips())
+-- @param current_index 1-based current-match index (find_state.get_current_index())
+function M.refresh_matches(clips, current_index)
+    if not ws.matches_tree then return end
+    ws.suppress_match_select = true
+    qt.CONTROL.CLEAR_TREE(ws.matches_tree)
+    ws.match_tree_ids = {}
+    local current_tree_id = nil
+    for i, clip in ipairs(clips) do
+        assert(clip.name, "find_dialog.refresh_matches: clip missing name (id=" .. tostring(clip.id) .. ")")
+        local tree_id = qt.CONTROL.ADD_TREE_ITEM(ws.matches_tree, {clip.name})
+        ws.match_tree_ids[tree_id] = clip.id
+        if i == current_index then current_tree_id = tree_id end
+    end
+    if current_tree_id and qt.CONTROL.SET_TREE_SELECTED_ITEMS then
+        qt.CONTROL.SET_TREE_SELECTED_ITEMS(ws.matches_tree, {current_tree_id})
+    end
+    ws.suppress_match_select = false
 end
 
 -- ============================================================================
@@ -328,6 +352,22 @@ local function create_window()
 
     qt.LAYOUT.ADD_LAYOUT(layout, row6)
 
+    -- Matches list: one row per match, single-column "Match". Selection
+    -- dispatches FindNavigate to make that row the current match.
+    ws.matches_tree = qt.WIDGET.CREATE_TREE()
+    qt.CONTROL.SET_TREE_HEADERS(ws.matches_tree, {"Match"})
+    qt.CONTROL.SET_TREE_SELECTION_MODE(ws.matches_tree, "SingleSelection")
+    qt.CONTROL.SET_TREE_INDENTATION(ws.matches_tree, 0)
+    register_handler("__find_dlg_match_selected", function(event)
+        if ws.suppress_match_select then return end
+        if not event or not event.item_id or not ws.match_tree_ids then return end
+        local clip_id = ws.match_tree_ids[event.item_id]
+        if not clip_id then return end
+        command_manager.execute_interactive("FindNavigate", {match_id = clip_id})
+    end)
+    qt.CONTROL.SET_TREE_SELECTION_HANDLER(ws.matches_tree, "__find_dlg_match_selected")
+    qt.LAYOUT.ADD_WIDGET(layout, ws.matches_tree)
+
     -- Status bar
     ws.status_label = qt.WIDGET.CREATE_LABEL("")
     qt.LAYOUT.ADD_WIDGET(layout, ws.status_label)
@@ -381,6 +421,13 @@ function M.show()
     qt.DISPLAY.SHOW(ws.window)
     qt.DISPLAY.RAISE(ws.window)
     qt.DISPLAY.ACTIVATE(ws.window)
+
+    -- Re-hydrate the match list from find_state in case a session is already
+    -- active (dialog was hidden then re-shown without a fresh Find).
+    local find_state = require("core.find_state")
+    if find_state.is_active() then
+        M.refresh_matches(find_state.get_matched_clips(), find_state.get_current_index())
+    end
 
     if ws.find_edit then
         qt_set_focus(ws.find_edit)  -- luacheck: globals qt_set_focus

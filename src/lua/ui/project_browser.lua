@@ -23,6 +23,7 @@ local project_gen = require("core.project_generation")
 local path_utils = require("core.path_utils")
 local browser_sort = require("ui.browser_sort")
 local media_status = require("core.media.media_status")
+local find_chrome = require("ui.find_chrome")
 
 local handler_seq = 0
 
@@ -1075,6 +1076,19 @@ function M.create()
         return assert(colors[key],
             "project_browser: ui_constants.COLORS." .. key .. " is required")
     end
+
+    -- Build the find chrome up front so its title-bar toggle button is
+    -- available when we assemble the tab row, and the row_layout/container
+    -- it owns can host the find-bar's prev/next/all/match/attr controls
+    -- further down. on_dismiss reaches forward-declared closures (assigned
+    -- once the rest of the find-bar widgets exist).
+    local search_on_dismiss  -- forward decl; assigned after widgets exist
+    local find_chrome_inst = find_chrome.build({
+        placeholder = "Search",
+        panel_name  = "Project Browser",
+        on_dismiss = function() if search_on_dismiss then search_on_dismiss() end end,
+    })
+
     local tab_container = qt_constants.WIDGET.CREATE()
     local tab_layout = qt_constants.LAYOUT.CREATE_HBOX()
     qt_constants.LAYOUT.SET_ON_WIDGET(tab_container, tab_layout)
@@ -1100,6 +1114,8 @@ function M.create()
     ]], color("TEXT_PRIMARY"), color("STATE_SELECTED")))
     qt_constants.LAYOUT.ADD_WIDGET(tab_layout, tab_label)
     qt_constants.LAYOUT.ADD_STRETCH(tab_layout, 1)
+    qt_constants.LAYOUT.ADD_WIDGET(tab_layout, find_chrome_inst.title_toggle_btn)
+
     qt_constants.LAYOUT.ADD_WIDGET(layout, tab_container)
 
     M.project_title_widget = tab_label
@@ -1322,21 +1338,14 @@ function M.create()
 
     -- ========================================================================
     -- Find bar (Avid-style, hidden by default, Cmd+F toggles)
+    --
+    -- Search row + title-bar magnifying glass + dismissal contract come from
+    -- find_chrome (shared with the Inspector). We append the project_browser-
+    -- specific controls (prev/next/all/match/attr combobox) onto its row, and
+    -- mount a separate replace_container below for find-and-replace.
     -- ========================================================================
-    local find_bar_container = qt_constants.WIDGET.CREATE()
-    local find_bar_layout = qt_constants.LAYOUT.CREATE_VBOX()
-    qt_constants.CONTROL.SET_LAYOUT_SPACING(find_bar_layout, 2)
-    qt_constants.CONTROL.SET_LAYOUT_MARGINS(find_bar_layout, 4, 2, 4, 2)
-
-    -- Row 1: Find: [____×] [←] [→] 3/16  [Any ▼]
-    local find_row = qt_constants.LAYOUT.CREATE_HBOX()
-    qt_constants.LAYOUT.ADD_WIDGET(find_row, qt_constants.WIDGET.CREATE_LABEL("Find:"))
-    local find_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
-    qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(find_edit, "search")
-    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
-        qt_constants.GEOMETRY.SET_SIZE_POLICY(find_edit, "Expanding", "Fixed")
-    end
-    qt_constants.LAYOUT.ADD_WIDGET(find_row, find_edit)
+    local find_row  = find_chrome_inst.row_layout
+    local find_edit = find_chrome_inst.search_input
 
     -- Let Fusion palette handle focus/hover/pressed on regular buttons.
     -- Only the default button (Next) gets accent styling.
@@ -1348,8 +1357,14 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
 
+    local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
+    -- No per-widget stylesheet — Fusion palette handles focus/hover/pressed
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
+
     local match_label = qt_constants.WIDGET.CREATE_LABEL("")
-    qt_constants.PROPERTIES.SET_STYLE(match_label, "QLabel { min-width: 45px; }")
+    -- No min-width — reserved space would read as an unexplained gap when
+    -- the count is empty. The label hugs its content (a little jitter when
+    -- "N/M" appears is fine).
     qt_constants.LAYOUT.ADD_WIDGET(find_row, match_label)
 
     local attr_combo = qt_constants.WIDGET.CREATE_COMBOBOX()
@@ -1358,18 +1373,22 @@ function M.create()
     for _, f in ipairs(query_engine.get_searchable_fields()) do
         qt_constants.PROPERTIES.ADD_COMBOBOX_ITEM(attr_combo, f.name)
     end
+    -- Hug content + draw a visible focus ring (Fusion's default ring is
+    -- invisible on the dark chrome here).
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(attr_combo, "Fixed", "Fixed")
+    end
+    qt_constants.PROPERTIES.SET_STYLE(attr_combo, string.format([[
+        QComboBox:focus { border: 1px solid %s; }
+    ]], ui_constants.COLORS.STATE_FOCUS_RING))
     qt_constants.LAYOUT.ADD_WIDGET(find_row, attr_combo)
 
-    local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
-    -- No per-widget stylesheet — Fusion palette handles focus/hover/pressed
-    qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
-
-    qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
-
-    -- Row 2: Replace (hidden by default, shown when replace_edit has text)
+    -- Replace row: lives just below the find_chrome container in the panel
+    -- layout. Hidden until the user types into replace_edit; also hidden on
+    -- find_chrome dismiss (via the search_on_dismiss callback below).
     local replace_container = qt_constants.WIDGET.CREATE()
     local replace_row = qt_constants.LAYOUT.CREATE_HBOX()
-    qt_constants.CONTROL.SET_LAYOUT_MARGINS(replace_row, 0, 0, 0, 0)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(replace_row, 4, 2, 4, 2)
     qt_constants.LAYOUT.ADD_WIDGET(replace_row, qt_constants.WIDGET.CREATE_LABEL("Replace:"))
     local replace_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
     qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(replace_edit, "replacement")
@@ -1391,17 +1410,14 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_all_btn)
 
     qt_constants.LAYOUT.SET_ON_WIDGET(replace_container, replace_row)
-    -- Hidden by default
     if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
         qt_constants.DISPLAY.SET_VISIBLE(replace_container, false)
     end
-    qt_constants.LAYOUT.ADD_WIDGET(find_bar_layout, replace_container)
 
-    qt_constants.LAYOUT.SET_ON_WIDGET(find_bar_container, find_bar_layout)
-
-    -- Store find bar refs
+    -- Kept for backwards-compat (tests/diagnostics). Visibility now lives in
+    -- find_chrome_inst.visible — read it through M.find_bar.is_visible().
     M.find_bar = {
-        container = find_bar_container,
+        find_chrome = find_chrome_inst,
         find_edit = find_edit,
         replace_edit = replace_edit,
         replace_container = replace_container,
@@ -1410,7 +1426,7 @@ function M.create()
         rep_btn = rep_btn,
         rep_find_btn = rep_find_btn,
         rep_all_btn = rep_all_btn,
-        visible = false,
+        is_visible = function() return find_chrome_inst:is_visible() end,
     }
 
     -- Wire find bar handlers
@@ -1585,12 +1601,19 @@ function M.create()
     -- Standard Qt pattern for non-QDialog windows (setDefault only works in QDialog).
     qt_set_line_edit_return_pressed_handler(find_edit, "__browser_find_next")
 
-    -- Start hidden
-    if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
-        qt_constants.DISPLAY.SET_VISIBLE(find_bar_container, false)
+    -- find_chrome dismiss: clear replace field + replace row + match counter.
+    -- (find_chrome already clears the search input text and hides its own row;
+    -- the cleared text triggers __browser_find_text_changed → find_state.clear.)
+    search_on_dismiss = function()
+        if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+            qt_constants.DISPLAY.SET_VISIBLE(replace_container, false)
+        end
+        qt_constants.PROPERTIES.SET_TEXT(replace_edit, "")
+        qt_constants.PROPERTIES.SET_TEXT(match_label, "")
     end
 
-    qt_constants.LAYOUT.ADD_WIDGET(layout, find_bar_container)
+    qt_constants.LAYOUT.ADD_WIDGET(layout, find_chrome_inst.container)
+    qt_constants.LAYOUT.ADD_WIDGET(layout, replace_container)
     qt_constants.LAYOUT.ADD_WIDGET(layout, tree)
 
     -- Set layout on container
@@ -1618,37 +1641,12 @@ function M.create()
     -- Install panel focus trap: Tab wraps within panel, Return activates default button
     qt_set_container_default_button(container, next_btn)  -- Return → Find Next via QShortcut
 
-    --- Toggle find bar visibility (called by Find command)
-    function M.toggle_find_bar()
-        if not M.find_bar then return end
-        M.find_bar.visible = not M.find_bar.visible
-        if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
-            qt_constants.DISPLAY.SET_VISIBLE(M.find_bar.container, M.find_bar.visible)
-        end
-        -- Focus + select all text when showing
-        if M.find_bar.visible then
-            pcall(qt_set_focus, M.find_bar.find_edit)
-            pcall(qt_line_edit_select_all, M.find_bar.find_edit)
-        end
-    end
-
-    function M.show_find_bar()
-        if not M.find_bar then return end
-        if M.find_bar.visible then
-            -- Already visible — just re-focus and select
-            pcall(qt_set_focus, M.find_bar.find_edit)
-            pcall(qt_line_edit_select_all, M.find_bar.find_edit)
-        else
-            M.toggle_find_bar()
-        end
-    end
-
-    function M.hide_find_bar()
-        if not M.find_bar then return end
-        if M.find_bar.visible then
-            M.toggle_find_bar()
-        end
-    end
+    -- Toggle / show / hide delegate to find_chrome. find_chrome handles
+    -- visibility, focus, select-all on show, and on-dismiss cleanup via the
+    -- search_on_dismiss closure wired above.
+    function M.toggle_find_bar() find_chrome_inst:toggle() end
+    function M.show_find_bar()   find_chrome_inst:show() end
+    function M.hide_find_bar()   find_chrome_inst:hide() end
 
     local media_count = M.master_clips and #M.master_clips or 0
     local sequence_count = 0

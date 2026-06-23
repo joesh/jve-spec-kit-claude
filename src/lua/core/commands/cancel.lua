@@ -21,9 +21,11 @@ local function find_dialog_visible()
     return ok and fd and fd.is_visible()
 end
 
-local function find_bar_visible()
-    local ok, pb = pcall(require, "ui.project_browser")
-    return ok and pb and pb.find_bar and pb.find_bar.visible
+local function any_find_chrome_visible()
+    -- pcall: ui.find_chrome pulls qt_constants which expects bindings; absent
+    -- in some headless tests. Skip silently when the module isn't loadable.
+    local ok, fc = pcall(require, "ui.find_chrome")
+    return ok and fc and fc.any_visible()
 end
 
 local function timeline_tc_entry_focused()
@@ -49,7 +51,7 @@ local SPEC = {
     when = function(params)
         return fullscreen_active()
             or find_dialog_visible()
-            or find_bar_visible()
+            or any_find_chrome_visible()
             or (params and params.focus_is_text_input and timeline_tc_entry_focused())
     end,
 }
@@ -72,9 +74,9 @@ function M.execute(args)
         return true
     end
 
-    if find_bar_visible() then
-        log.detail("  → dismiss find bar")
-        require("ui.project_browser").hide_find_bar()
+    if any_find_chrome_visible() then
+        log.detail("  → dismiss find_chrome surface")
+        require("ui.find_chrome").dismiss_first_visible()
         return true
     end
 

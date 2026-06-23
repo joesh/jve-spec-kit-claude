@@ -16,6 +16,8 @@ local selection_binding   = require("ui.inspector.selection_binding")
 local change_listeners    = require("ui.inspector.change_listeners")
 local timeline_state      = require("ui.timeline.timeline_state")
 local runtime_mode        = require("core.runtime_mode")
+local find_chrome         = require("ui.find_chrome")
+local focus_manager       = require("ui.focus_manager")
 local log                 = require("core.logger").for_area("ui")
 
 local M = {}
@@ -82,25 +84,40 @@ local function build_root_layout(container)
     return layout
 end
 
-local function build_search_row(root_layout)
-    local search_input = qt_constants.WIDGET.CREATE_LINE_EDIT("Search properties...")
-    assert(search_input, "inspector.mount: CREATE_LINE_EDIT for search returned nil")
-    qt_constants.GEOMETRY.SET_SIZE_POLICY(search_input, "Expanding", "Fixed")
-    qt_constants.LAYOUT.ADD_WIDGET(root_layout, search_input)
-    qt_constants.LAYOUT.SET_STRETCH_FACTOR(root_layout, search_input, 0)
-    return search_input
-end
+-- Header row: title label on the left, magnifying-glass toggle on the right.
+-- The toggle is supplied by find_chrome (already built so its button can sit
+-- in the header chrome; the search row container lives in the row below).
+local function build_header_row(root_layout, title_toggle_btn)
+    local row_container = qt_constants.WIDGET.CREATE()
+    local hbox = qt_constants.LAYOUT.CREATE_HBOX()
+    assert(hbox, "inspector.mount: CREATE_HBOX for header row returned nil")
+    qt_constants.LAYOUT.SET_ON_WIDGET(row_container, hbox)
+    qt_constants.LAYOUT.SET_MARGINS(hbox, 0, 0, 8, 0)
+    qt_constants.LAYOUT.SET_SPACING(hbox, 0)
 
-local function build_header_label(root_layout)
     -- Eliding label: a long selection title (e.g. a long sequence name shown
     -- when nothing is selected) must clip with "…" rather than widen the panel.
     local header = qt_constants.WIDGET.CREATE_ELIDING_LABEL("No editable selection")
     assert(header, "inspector.mount: CREATE_ELIDING_LABEL for header returned nil")
     qt_constants.PROPERTIES.SET_STYLE(header, style_header_label())
     qt_constants.GEOMETRY.SET_SIZE_POLICY(header, "Expanding", "Fixed")
-    qt_constants.LAYOUT.ADD_WIDGET(root_layout, header)
-    qt_constants.LAYOUT.SET_STRETCH_FACTOR(root_layout, header, 0)
+    qt_constants.LAYOUT.ADD_WIDGET(hbox, header)
+    qt_constants.LAYOUT.SET_STRETCH_FACTOR(hbox, header, 1)
+    qt_constants.LAYOUT.ADD_WIDGET(hbox, title_toggle_btn)
+
+    qt_constants.GEOMETRY.SET_SIZE_POLICY(row_container, "Expanding", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(root_layout, row_container)
+    qt_constants.LAYOUT.SET_STRETCH_FACTOR(root_layout, row_container, 0)
     return header
+end
+
+-- Mount find_chrome's hideable search row into the root layout. Caller passes
+-- the already-built instance (built up front so its title_toggle_btn can sit
+-- in the header row), so this step is purely placement: search lives BELOW
+-- the header — matches project_browser's chrome.
+local function mount_find_chrome_row(root_layout, inst)
+    qt_constants.LAYOUT.ADD_WIDGET(root_layout, inst.container)
+    qt_constants.LAYOUT.SET_STRETCH_FACTOR(root_layout, inst.container, 0)
 end
 
 local function build_scroll_area(root_layout)
@@ -284,8 +301,21 @@ function M.mount(container)
     assert(container, "inspector.mount: container is nil")
 
     local root_layout = build_root_layout(container)
-    local search_input = build_search_row(root_layout)
-    local header_label = build_header_label(root_layout)
+
+    -- find_chrome owns the search input + title-bar magnifying-glass toggle.
+    -- Build it first so the header row can place the toggle button to the
+    -- right of the eliding title label, then mount its hideable row BELOW
+    -- the header (matches project_browser's layout). on_dismiss is empty:
+    -- setting the search input to "" triggers the text-changed handler we
+    -- wire below, which clears the active schema's filter.
+    local find_chrome_inst = find_chrome.build({
+        placeholder = "Search",
+        panel_name  = "Inspector",
+        on_dismiss  = nil,
+    })
+    local search_input = find_chrome_inst.search_input
+    local header_label = build_header_row(root_layout, find_chrome_inst.title_toggle_btn)
+    mount_find_chrome_row(root_layout, find_chrome_inst)
     local error_banner = build_error_banner(root_layout)
     local scroll_area, content_widget, content_layout = build_scroll_area(root_layout)
 
@@ -293,6 +323,7 @@ function M.mount(container)
         root              = container,
         root_layout       = root_layout,
         search_input      = search_input,
+        find_chrome       = find_chrome_inst,
         header_label      = header_label,
         error_banner      = error_banner,
         scroll_area       = scroll_area,
@@ -328,6 +359,14 @@ function M.mount(container)
     ui_state._listener_disposers = change_listeners.install(ui_state)
 
     qt_constants.DISPLAY.SHOW(content_widget)
+
+    -- Register a view-record with focus_manager so Find can route Cmd+F here.
+    -- The view-record (not the facade module) carries view_id + show_find_bar,
+    -- keeping the inspector's 3-export facade contract (spec 012 DR-THREE-EXPORTS).
+    focus_manager.register_view("inspector", {
+        view_id = "inspector",
+        show_find_bar = function() find_chrome_inst:show() end,
+    })
 
     log.event("inspector.mount: scaffold built; schemas=%d",
         (ui_state.schema_views.clip and 1 or 0) + (ui_state.schema_views.sequence and 1 or 0))
