@@ -339,11 +339,16 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
     if was_playing then
         if not M.has_audio then
             -- All audio tracks removed mid-playback — stop audio output.
-            -- NOTE: C++ AudioPump will detect this via TMB state
+            -- C++ AudioPump owns the SSE thread-affinity assert while running;
+            -- a direct SSE.RESET from main here would trip it. The pump will
+            -- be torn down through the controller's DeactivateAudio path
+            -- (called by the engine framework on transport changes), whose
+            -- exit ritual clears SSE owner. The next acquire_for re-initializes
+            -- SSE state. AOP.STOP/FLUSH still run here because AOP lives on
+            -- main throughout (see specs/017/audio-stack-lessons-and-future.md).
             M.playing = false
             qt_constants.AOP.STOP(M.aop)
             qt_constants.AOP.FLUSH(M.aop)
-            qt_constants.SSE.RESET(M.sse)
         end
         -- TMB handles clip transitions autonomously in C++.
         -- send_mix_params_to_tmb() already invalidated the C++ mix cache.
@@ -786,9 +791,18 @@ function M.acquire_for(engine)
     end
     _owning_engine = engine
     M.playing = true
-    -- Mark the device as alive — production starts pumping on the
-    -- existing transport-start path (PLAYBACK.PLAY) which calls AOP.START.
-    if M.session_initialized and M.has_audio and M.aop then
+    -- Start the audio device here (audio path only) so M.playing semantics
+    -- match device state (consumers gate on M.playing). The first sink is
+    -- created on this Lua/main thread, which is required: QAudioSink on
+    -- macOS needs a Qt event loop on its owner thread and only main has one
+    -- (see specs/017/audio-stack-lessons-and-future.md). PlaybackController's
+    -- prefillAudio path will Flush+Start it again at Play time — a no-op
+    -- stop+restart on the same owner thread. Skip for video-only/silent
+    -- masters: M.aop is nil and there is no sink to start.
+    if M.has_audio then
+        assert(M.aop,
+            "audio_playback.acquire_for: has_audio=true but M.aop is nil — "
+            .. "_ffi_acquire did not populate the device handle")
         qt_constants.AOP.START(M.aop)
     end
     log.event("acquire_for: engine[%s,%s] (has_audio=%s)",

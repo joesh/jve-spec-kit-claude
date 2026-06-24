@@ -57,8 +57,16 @@ function M.install(PlaybackEngine)
 --- play() and shuttle/slow_play before kicking the C++ transport.
 function PlaybackEngine:_ensure_audio_ownership()
     if audio_playback.is_owner(self) then return end
-    if audio_playback.current_owner() ~= nil then
+    local prev = audio_playback.current_owner()
+    if prev ~= nil then
         audio_playback.halt_current()
+        -- Detach the prior engine's C++ controller too: DEACTIVATE_AUDIO
+        -- stops its AudioPump, whose exit ritual ClearOwnerThread's the
+        -- global SSE. Without this, the next acquirer's PLAY would call
+        -- SSE.RESET while the previous pump still owns SSE → owner-thread
+        -- assert. (Pre-hybrid this was a silent race; the assert added by
+        -- the SSE thread-affinity work surfaced it.)
+        prev:_detach_audio_from_controller()
     end
     audio_playback.acquire_for(self)
     self:_attach_audio_to_controller()

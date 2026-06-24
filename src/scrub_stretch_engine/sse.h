@@ -1,7 +1,9 @@
 #pragma once
 
-#include <memory>
+#include <atomic>
 #include <cstdint>
+#include <memory>
+#include <thread>
 
 namespace sse {
 
@@ -81,8 +83,26 @@ public:
     // Internal constructor
     explicit ScrubStretchEngine(std::unique_ptr<ScrubStretchEngineImpl> impl);
 
+    // ── Owner-thread invariant ────────────────────────────────────────────
+    // SSE has no internal mutex on its render state; concurrent calls from
+    // two threads corrupt m_current_time_us / m_speed / m_chunks. The
+    // owning thread is set once when audio playback engages (AudioPump at
+    // Start) and cleared when it disengages (Stop). Every public method
+    // asserts the calling thread matches — unset is allowed for cold-start
+    // / PlayBurst / shutdown paths where the pump is provably not running.
+    //
+    // The atomic store/load pair establishes happens-before from
+    // SetOwnerThread() on the spawning thread to assert_owner() on the
+    // pump thread for its first cycle (acquire on load synchronizes with
+    // release on store).
+    void SetOwnerThread(std::thread::id owner);
+    void ClearOwnerThread();
+
 private:
+    void assert_owner_thread() const;
+
     std::unique_ptr<ScrubStretchEngineImpl> m_impl;
+    std::atomic<std::thread::id> m_owner_thread_id{std::thread::id()};
 };
 
 // Create default config

@@ -107,10 +107,11 @@ collect_results() {
 # (batch_playback + batch_codec) completes in 37s and passes.
 if [ "${JVE_IN_VM:-0}" != "1" ]; then
   echo "[integration] Phase 1: timing-sensitive batches (host-local, paired parallel)..."
-  PERF_BATCH_NAMES=(batch_playback batch_codec test_playback_av_sync_offset)
+  PERF_BATCH_NAMES=(batch_playback batch_codec test_playback_av_sync_offset test_mix_change_keeps_playing)
   launch_test "batch_playback"                 "$BINARY" --test "$INTEG_DIR/batch_playback.lua"
   launch_test "batch_codec"                    "$BINARY" --test "$INTEG_DIR/batch_codec.lua"
   launch_test "test_playback_av_sync_offset"   "$BINARY" --test "$INTEG_DIR/test_playback_av_sync_offset.lua"
+  launch_test "test_mix_change_keeps_playing"  "$BINARY" --test "$INTEG_DIR/test_mix_change_keeps_playing.lua"
   wait
   collect_results "${PERF_BATCH_NAMES[@]}"
 
@@ -158,6 +159,12 @@ fi
 # the per-file guards below skip those three tests and we log the loss of coverage.
 # Check the NEWEST fixture too (the amp-ramp WAV, added for the per-channel
 # peak test) so a stale fixture set generated before it existed gets refreshed.
+#
+# Note for the VM leg: scripts/sync-to-vm.sh ships these WAVs from the host
+# (where they're cached across runs). This guard should ALWAYS pass on the
+# VM as long as the host had them at sync time. If you see ffmpeg running
+# inside the VM, the sync skipped them — check sync-to-vm.sh's
+# SYNTHETIC_FIXTURES list and the host's tests/fixtures/media/.
 if [[ ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_tones_48k.wav" \
    || ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_amp_ramp_48k.wav" ]]; then
   if command -v ffmpeg >/dev/null 2>&1; then
@@ -273,7 +280,6 @@ for t in \
   test_edit_source_popup_invariants.lua \
   test_playback_engine_filter.lua \
   test_mix_change_flush_gating.lua \
-  test_mix_change_keeps_playing.lua \
   test_playback_routes_to_displayed_tab.lua \
   test_mark_routing.lua \
   test_browser_activation_routes_through_commands.lua \

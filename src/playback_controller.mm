@@ -333,9 +333,8 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     JVE_ASSERT(aop, "AudioPump::Start: aop is null");
     JVE_ASSERT(clock, "AudioPump::Start: clock is null");
 
-    if (m_running.load(std::memory_order_relaxed)) {
-        return;  // Already running
-    }
+    JVE_ASSERT(!m_running.load(std::memory_order_relaxed),
+               "AudioPump::Start: called while pump is already running");
 
     m_tmb = tmb;
     m_sse = sse;
@@ -347,7 +346,19 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     JVE_ASSERT(m_target_buffer_ms > 0,
                "AudioPump::Start: AOP target_buffer_ms must be > 0");
     m_diag = diag;
-    m_stop_requested.store(false, std::memory_order_relaxed);
+    // Clean-slate the handoff state under the mutex. A prior session that
+    // self-terminated via exception mid-handoff (Stop() not called) can
+    // leave request_gen > resumed_gen; without this reset, the first
+    // WithSseOwnerOnMain on the new session parks forever on the idle
+    // predicate (waits for resumed == request).
+    {
+        std::lock_guard<std::mutex> lock(m_flush_mutex);
+        m_stop_requested.store(false, std::memory_order_relaxed);
+        m_handoff_request_gen = 0;
+        m_handoff_released_gen = 0;
+        m_handoff_completed_gen = 0;
+        m_handoff_resumed_gen = 0;
+    }
     m_running.store(true, std::memory_order_relaxed);
     ResetPushState();
 
@@ -371,21 +382,40 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
         }
         // ALWAYS release SSE owner before the thread dies — an exception
         // mid-pumpLoop must not leave the SSE asserting against a dead
-        // owner tid (the next Play's prefillAudio would trip the owner
-        // assert). pumpLoop's normal exit also calls ClearOwnerThread;
+        // owner tid. pumpLoop's normal exit also calls ClearOwnerThread;
         // the double-clear is idempotent.
         if (m_sse) m_sse->ClearOwnerThread();
-        m_running.store(false, std::memory_order_relaxed);
+        // Mark stop + wake any main-side waiter parked in WithSseOwnerOnMain
+        // (released_cv at stage 2, resume_cv between stages 3-4). Without
+        // this, a self-terminated pump leaves main blocked until Stop().
+        {
+            std::lock_guard<std::mutex> lock(m_flush_mutex);
+            m_stop_requested.store(true, std::memory_order_relaxed);
+            m_running.store(false, std::memory_order_relaxed);
+        }
+        m_handoff_idle_cv.notify_all();
+        m_handoff_released_cv.notify_all();
+        m_handoff_resume_cv.notify_all();
     });
     JVE_LOG_EVENT(Audio, "AudioPump: started");
 }
 
 void AudioPump::Stop() {
-    m_stop_requested.store(true, std::memory_order_relaxed);
-
-    // Wake every CV either side may be parked on. All wait predicates also
-    // check m_stop_requested so the sleeper exits regardless of counter
-    // values. No flag mutation needed — the gen counters are append-only.
+    // Store under the handoff mutex so any waiter that re-acquires the
+    // mutex to re-check its predicate is guaranteed to see m_stop_requested
+    // = true. A relaxed store outside the mutex can be reordered past the
+    // CV notifies on weakly-ordered platforms (ARM64), losing the wakeup.
+    // Also drain the gen counters: in-flight handoffs that won't complete
+    // would otherwise leave request_gen > resumed_gen across Stop/Start,
+    // causing the next WithSseOwnerOnMain to park on the idle predicate
+    // forever (it waits for resumed == request).
+    {
+        std::lock_guard<std::mutex> lock(m_flush_mutex);
+        m_stop_requested.store(true, std::memory_order_relaxed);
+        m_handoff_released_gen = m_handoff_request_gen;
+        m_handoff_completed_gen = m_handoff_request_gen;
+        m_handoff_resumed_gen = m_handoff_request_gen;
+    }
     m_handoff_idle_cv.notify_all();
     m_handoff_request_cv.notify_all();
     m_handoff_released_cv.notify_all();
@@ -414,6 +444,12 @@ void AudioPump::SetFlushHandler(FlushHandler handler) {
 }
 
 void AudioPump::WithSseOwnerOnMain(std::function<void()> work) {
+    // QAudioSink lifecycle (Start/Stop/Flush/dtor) must stay on main —
+    // QObject affinity (macOS Qt event loop). The work lambda invokes the
+    // flush handler which manipulates the sink, so we MUST be on main.
+    JVE_ASSERT([NSThread isMainThread],
+               "AudioPump::WithSseOwnerOnMain: must be called from main thread "
+               "(QAudioSink affinity)");
     JVE_ASSERT(m_running.load(std::memory_order_relaxed),
                "AudioPump::WithSseOwnerOnMain: pump is not running");
     JVE_ASSERT(m_sse, "AudioPump::WithSseOwnerOnMain: SSE pointer is null");
@@ -448,18 +484,27 @@ void AudioPump::WithSseOwnerOnMain(std::function<void()> work) {
 
     // Stage 3 — run work on THIS thread with SSE ownership transferred.
     // Pump is parked at the resume_cv wait, so SSE has exactly one writer.
+    // Stage 4 (advance completed_gen + notify) MUST run even if work()
+    // throws — otherwise the pump parks forever on m_handoff_resume_cv
+    // and a subsequent main-side call deadlocks at the idle predicate.
     m_sse->SetOwnerThread(std::this_thread::get_id());
-    work();
-    m_sse->ClearOwnerThread();
-
-    // Stage 4 — advance completed gen to signal pump to resume.
-    {
-        std::lock_guard<std::mutex> lock(m_flush_mutex);
-        JVE_ASSERT(m_handoff_completed_gen < my_gen,
-            "WithSseOwnerOnMain: completed_gen invariant violation");
-        m_handoff_completed_gen = my_gen;
+    auto complete_handoff = [this, my_gen]() {
+        m_sse->ClearOwnerThread();
+        {
+            std::lock_guard<std::mutex> lock(m_flush_mutex);
+            JVE_ASSERT(m_handoff_completed_gen < my_gen,
+                "WithSseOwnerOnMain: completed_gen invariant violation");
+            m_handoff_completed_gen = my_gen;
+        }
+        m_handoff_resume_cv.notify_one();
+    };
+    try {
+        work();
+    } catch (...) {
+        complete_handoff();
+        throw;
     }
-    m_handoff_resume_cv.notify_one();
+    complete_handoff();
 }
 
 void AudioPump::RequestFlush(int64_t time_us, int direction, float abs_speed) {
@@ -528,7 +573,11 @@ void AudioPump::pumpLoop() {
         {
             std::lock_guard<std::mutex> lock(m_flush_mutex);
             if (m_handoff_released_gen < m_handoff_request_gen) {
-                my_gen = m_handoff_released_gen + 1;
+                // Service the request gen directly (not released+1) — the
+                // value being requested is the self-documenting one. The
+                // gen is monotonic and request advances under the mutex,
+                // so this snapshot is the gen we will release/resume.
+                my_gen = m_handoff_request_gen;
                 servicing = true;
             }
         }

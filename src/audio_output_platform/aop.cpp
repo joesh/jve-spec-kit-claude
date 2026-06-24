@@ -11,8 +11,10 @@
 #include <vector>
 #include <atomic>
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 
 namespace aop {
 
@@ -187,8 +189,16 @@ public:
     }
 
     ~AudioOutputImpl() {
+        // m_sink lives on the thread that started it (main, by
+        // construction — QAudioSink on macOS requires a Qt event loop on
+        // its owner thread, and only main has one). AudioOutput is also
+        // owned by main, so its destruction happens on the same thread —
+        // safe to destroy the sink here. Assert ownership to catch any
+        // future invariant break loud.
         if (m_sink) {
-            m_sink->stop();
+            assert_sink_owner_thread("destructor");
+            stop_sink_unlocked();
+            // unique_ptr destroys QAudioSink as we exit scope.
         }
     }
 
@@ -218,7 +228,12 @@ public:
             m_channels = m_format.channelCount();
         }
 
-        m_sink = std::make_unique<QAudioSink>(m_device, m_format);
+        // INTENTIONALLY do NOT pre-create m_sink here. The first sink is
+        // constructed in start() — which always runs on main (cold-start
+        // via PlaybackController::prefillAudio, mid-play via the main-side
+        // RequestFlush handler). Deferring creation keeps the owner-thread
+        // assertion machinery uniform: m_sink_owner is set on first
+        // start() rather than at init time.
 
         if (out_report) {
             out_report->actual_sample_rate = m_sample_rate;
@@ -234,6 +249,13 @@ public:
 
     void start() {
         if (m_playing) return;
+        // First call establishes the sink-owner thread. Subsequent calls
+        // assert against it — QAudioSink construction + destruction on
+        // different threads is UB (cross-thread QObject destruction).
+        if (m_sink_owner == std::thread::id()) {
+            m_sink_owner = std::this_thread::get_id();
+        }
+        assert_sink_owner_thread("start");
         // Recreate QAudioSink from scratch to guarantee a fresh CoreAudio
         // AudioUnit with zero stale internal buffers. reset()+stop() was
         // insufficient on macOS — stale PCM survived and replayed as echo.
@@ -256,9 +278,8 @@ public:
 
     void stop() {
         if (!m_sink || !m_playing) return;
-        m_sink->stop();
-        m_io_device.close();
-        m_playing = false;
+        assert_sink_owner_thread("stop");
+        stop_sink_unlocked();
     }
 
     bool is_playing() const {
@@ -267,9 +288,8 @@ public:
 
     void flush() {
         if (m_sink && m_playing) {
-            m_sink->stop();
-            m_io_device.close();
-            m_playing = false;
+            assert_sink_owner_thread("flush");
+            stop_sink_unlocked();
         }
         m_ring_buffer.clear();
         m_io_device.reset_playhead();
@@ -319,6 +339,31 @@ public:
     int target_buffer_ms() const { return m_target_buffer_ms; }
 
 private:
+    // Assert the calling thread matches the thread that first started the
+    // sink. Set on first start(). start/stop/flush MUST be called from the
+    // same thread for a sink's lifetime — QAudioSink is a QObject and
+    // cross-thread method calls (especially destruction via unique_ptr
+    // reassignment) are UB.
+    void assert_sink_owner_thread(const char* op) {
+        if (m_sink_owner == std::thread::id()) return;  // No owner yet.
+        if (m_sink_owner == std::this_thread::get_id()) return;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "AOP::%s called from non-owner thread; QAudioSink lifecycle "
+            "must stay on one thread (set on first start)", op);
+        JVE_FAIL(buf);
+    }
+
+    // Tear down the sink + IO device without touching the ring buffer.
+    // Caller has already verified m_sink and owner-thread; no-ops if not
+    // playing. Used by dtor, stop(), and flush() (which then clears ring).
+    void stop_sink_unlocked() {
+        if (!m_playing) return;
+        m_sink->stop();
+        m_io_device.close();
+        m_playing = false;
+    }
+
     int m_sample_rate;
     int m_channels;
     int m_target_buffer_ms;
@@ -329,6 +374,11 @@ private:
     std::unique_ptr<QAudioSink> m_sink;
     bool m_playing;
     int64_t m_sink_buffer_us{0};
+    // Thread that first called start() — owns m_sink for its lifetime.
+    // QAudioSink is a QObject; cross-thread method calls / destruction are
+    // UB. Set on first start() and held for the lifetime of this impl;
+    // ~AudioOutputImpl asserts the destructor runs on the owner thread.
+    std::thread::id m_sink_owner{};
 };
 
 // AudioOutput implementation

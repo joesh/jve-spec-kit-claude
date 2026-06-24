@@ -1,13 +1,15 @@
 #include "sse.h"
+#include "../assert_handler.h"  // JVE_ASSERT (formatted, surfaces in Release)
 #include "jve_log.h"
 
-#include <vector>
-#include <cmath>
-#include <cassert>
 #include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <vector>
 
 namespace sse {
 
@@ -784,19 +786,52 @@ std::unique_ptr<ScrubStretchEngine> ScrubStretchEngine::Create(const SseConfig& 
     return std::unique_ptr<ScrubStretchEngine>(new ScrubStretchEngine(std::move(impl)));
 }
 
+// Owner-thread invariant. The audio pump takes ownership when it Starts and
+// releases on Stop. Any call from a different thread while owned trips the
+// assert — that's how the SSE main↔pump race class is caught at the source.
+void ScrubStretchEngine::SetOwnerThread(std::thread::id owner) {
+    m_owner_thread_id.store(owner, std::memory_order_release);
+}
+
+void ScrubStretchEngine::ClearOwnerThread() {
+    m_owner_thread_id.store(std::thread::id(), std::memory_order_release);
+}
+
+void ScrubStretchEngine::assert_owner_thread() const {
+    std::thread::id owner = m_owner_thread_id.load(std::memory_order_acquire);
+    if (owner == std::thread::id()) {
+        return;  // Unowned: cold-start / PlayBurst-while-stopped / shutdown.
+    }
+    std::thread::id self = std::this_thread::get_id();
+    if (owner == self) return;
+    size_t self_h = std::hash<std::thread::id>{}(self);
+    size_t owner_h = std::hash<std::thread::id>{}(owner);
+    char buf[192];
+    std::snprintf(buf, sizeof(buf),
+        "SSE called from non-owner thread (self_hash=%zu owner_hash=%zu) — "
+        "the audio pump owns SSE while playing; route through "
+        "AudioPump::RequestFlush or call only when the pump is stopped",
+        self_h, owner_h);
+    JVE_FAIL(buf);
+}
+
 void ScrubStretchEngine::Reset() {
+    assert_owner_thread();
     m_impl->reset();
 }
 
 void ScrubStretchEngine::SetTarget(int64_t t_us, float speed, QualityMode mode) {
+    assert_owner_thread();
     m_impl->set_target(t_us, speed, mode);
 }
 
 void ScrubStretchEngine::SetSpeed(float signed_speed, QualityMode mode) {
+    assert_owner_thread();
     m_impl->set_speed_only(signed_speed, mode);
 }
 
 void ScrubStretchEngine::PushSourcePcm(const float* interleaved, int64_t frames, int64_t start_time_us) {
+    assert_owner_thread();
     // NSF: Validate inputs
     assert((frames == 0 || interleaved != nullptr) &&
            "SSE::PushSourcePcm: interleaved cannot be null when frames > 0");
@@ -808,6 +843,7 @@ void ScrubStretchEngine::PushSourcePcm(const float* interleaved, int64_t frames,
 }
 
 int64_t ScrubStretchEngine::Render(float* out_interleaved, int64_t out_frames) {
+    assert_owner_thread();
     // NSF: Validate inputs
     assert((out_frames == 0 || out_interleaved != nullptr) &&
            "SSE::Render: out_interleaved cannot be null when out_frames > 0");
@@ -819,14 +855,17 @@ int64_t ScrubStretchEngine::Render(float* out_interleaved, int64_t out_frames) {
 }
 
 bool ScrubStretchEngine::Starved() const {
+    assert_owner_thread();
     return m_impl->starved();
 }
 
 void ScrubStretchEngine::ClearStarvedFlag() {
+    assert_owner_thread();
     m_impl->clear_starved();
 }
 
 int64_t ScrubStretchEngine::CurrentTimeUS() const {
+    assert_owner_thread();
     return m_impl->current_time_us();
 }
 
