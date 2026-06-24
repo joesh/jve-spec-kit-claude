@@ -35,10 +35,16 @@ _VM_HOST="${JVE_VM_HOST:-joes-virtual-machine.local}"
 _VM_USER="${JVE_VM_USER:-joe}"
 _VM_SSH="ssh -i $_VM_KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o BatchMode=yes"
 
-# Reachability probe (fast — falls through to host if VM is off).
+# Reachability probe. SSH key present (checked above) means VM-mode is
+# the intended path on this machine; silently falling back to host turns
+# "VM is off" into a ~40-process jve --test fork-bomb on the host (same
+# hazard as a broken sync below). Fail loud instead. Legitimate
+# host-only execution: set JVE_VM_DISABLE=1.
 if ! $_VM_SSH "$_VM_USER@$_VM_HOST" true 2>/dev/null; then
-    echo "[vm-dispatch] $_VM_HOST unreachable; running on host" >&2
-    return 0
+    echo "[vm-dispatch] $_VM_HOST UNREACHABLE — SSH key present so VM-mode" >&2
+    echo "[vm-dispatch] is expected. Start the UTM guest, or set" >&2
+    echo "[vm-dispatch] JVE_VM_DISABLE=1 to force host-local execution." >&2
+    exit 1
 fi
 
 # Sync once per `make` invocation. Sentinel scoped to $PPID (the make/test

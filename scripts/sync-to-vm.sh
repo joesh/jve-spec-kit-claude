@@ -91,6 +91,35 @@ if [ ! -d "$APP" ]; then
     exit 1
 fi
 
+# Synthetic per-channel audio fixtures. Gitignored (regenerable), but very
+# slow to produce inside the VM: ffmpeg amerge on 8 inputs runs at ~0.02×
+# real-time → ~100 s per 2-second fixture → ~7 min per VM dispatch.
+# Generate ONCE on the host (where the cache survives across runs) and
+# ship the WAVs (6 MB total) — the VM-side existence gate in
+# tests/run_integration_tests.sh then short-circuits regen entirely.
+# Fixture list mirrors tests/run_integration_tests.sh:162 + the gen
+# script's outputs; a new fixture means edits in all three places.
+SYNTHETIC_FIXTURES=(
+    tests/fixtures/media/synthetic_8ch_tones_48k.wav
+    tests/fixtures/media/synthetic_2ch_tones_44k.wav
+    tests/fixtures/media/synthetic_1ch_tone_48k.wav
+    tests/fixtures/media/synthetic_8ch_amp_ramp_48k.wav
+)
+need_regen=0
+for f in "${SYNTHETIC_FIXTURES[@]}"; do
+    [ -f "$REPO_ROOT/$f" ] || { need_regen=1; break; }
+done
+if [ "$need_regen" -eq 1 ]; then
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        echo "error: synthetic audio fixtures missing on host AND ffmpeg absent" >&2
+        echo "       install ffmpeg, or generate fixtures elsewhere and place" >&2
+        echo "       under tests/fixtures/media/" >&2
+        exit 1
+    fi
+    echo "→ regenerating synthetic audio fixtures on host (one-time, then cached)"
+    bash "$REPO_ROOT/tests/fixtures/gen_synthetic_tone_wavs.sh" >/dev/null
+fi
+
 SSH_OPTS="ssh -i $KEY -o StrictHostKeyChecking=accept-new"
 
 echo "→ runtime tree → $USER@$HOST:$GUEST_PATH"
@@ -113,6 +142,7 @@ rsync -az --delete \
     tests/synthetic/helpers \
     tests/fixtures/resolve \
     tests/fixtures/gen_synthetic_tone_wavs.sh \
+    "${SYNTHETIC_FIXTURES[@]}" \
     tools/resolve-helper \
     "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj" \
     "tests/fixtures/media/anamnesis-trimmed/2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \
