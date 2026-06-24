@@ -87,9 +87,21 @@ local function publish_staged(sequence_id, sequence)
     assert(project_id ~= "", string.format(
         "source_viewer.publish_staged: project_id is empty for %s",
         tostring(sequence_id)))
+    -- A master sequence published from the source viewer presents through
+    -- the master_clip inspector schema (Resolve-style master-clip lens:
+    -- file metadata + source range + channels), not the record-sequence
+    -- schema. The sequence row's own kind discriminator is the source of
+    -- truth — no separate "is this a master" flag in the selection item.
+    -- Schema discriminator: `kind` is 'master' (master sequence / master
+    -- clip lens) or 'sequence' (record sequence). The literal is 'sequence'
+    -- — NOT 'record' — even though the user-visible label is "Record".
+    assert(sequence.kind == "master" or sequence.kind == "sequence", string.format(
+        "source_viewer.publish_staged: sequence %s has unknown kind %s",
+        tostring(sequence_id), tostring(sequence.kind)))
+    local item_type = sequence.kind == "master" and "master_clip" or "timeline"
     selection_hub.update_selection(SOURCE_PANEL_ID, {
         {
-            item_type   = "timeline",
+            item_type   = item_type,
             id          = sequence_id,
             sequence_id = sequence_id,
             project_id  = project_id,

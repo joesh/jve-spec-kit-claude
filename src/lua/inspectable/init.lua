@@ -7,6 +7,7 @@
 --- @file init.lua
 local ClipInspectable = require("inspectable.clip")
 local SequenceInspectable = require("inspectable.sequence")
+local MasterClipInspectable = require("inspectable.master_clip")
 
 local M = {}
 
@@ -16,6 +17,10 @@ end
 
 function M.sequence(opts)
     return SequenceInspectable.new(opts or {})
+end
+
+function M.master_clip(opts)
+    return MasterClipInspectable.new(opts or {})
 end
 
 return M

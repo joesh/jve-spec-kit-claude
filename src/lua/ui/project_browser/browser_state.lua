@@ -102,10 +102,17 @@ local function normalize_master_clip(item, context)
         bin_id = bin_id
     }
 
-    local ok, inspectable = pcall(inspectable_factory.clip, {
-        clip_id = clip.clip_id,
-        project_id = project_id,
-        clip = clip
+    -- A master clip IS-A sequences.kind='master' row; route through
+    -- MasterClipInspectable (schema_id="master_clip"), not the
+    -- timeline-clip schema. clip.sequence_id is the master sequence's id
+    -- (see master_builder.lua: master clip and master sequence are the
+    -- same row).
+    local master_seq_id = assert(clip.sequence_id or clip.clip_id, string.format(
+        "browser_state.normalize_master_clip: clip %s has no sequence_id",
+        tostring(clip.clip_id)))
+    local ok, inspectable = pcall(inspectable_factory.master_clip, {
+        sequence_id = master_seq_id,
+        project_id  = project_id,
     })
     if ok and inspectable then
         entry.inspectable = inspectable

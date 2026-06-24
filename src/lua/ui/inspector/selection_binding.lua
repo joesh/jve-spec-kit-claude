@@ -47,11 +47,16 @@ end
 M._item_key = item_key
 
 -- Map a raw selection-item's item_type to its inspectable schema id.
--- timeline_clip/master_clip → "clip"; timeline_sequence/timeline → "sequence".
+-- timeline_clip → "clip" (timeline-clip instance, includes record-sequence-
+-- side mark/enable/audio/color fields). master_clip → "master_clip"
+-- (the Resolve-style master-clip lens onto a sequences.kind='master' row).
+-- timeline_sequence/timeline → "sequence" (record sequence).
 -- Anything else returns nil — caller treats unmapped items as schema-less.
 local function schema_for_item_type(item_type)
-    if item_type == "timeline_clip" or item_type == "master_clip" then
+    if item_type == "timeline_clip" then
         return "clip"
+    elseif item_type == "master_clip" then
+        return "master_clip"
     elseif item_type == "timeline_sequence" or item_type == "timeline" then
         return "sequence"
     end
@@ -166,7 +171,7 @@ local function resolve_inspectables(items)
                 sequence    = item.sequence,
             })
             schema_id = "sequence"
-        elseif (item.item_type == "timeline_clip" or item.item_type == "master_clip")
+        elseif item.item_type == "timeline_clip"
             and item.clip_id and item.clip_id ~= "" then
             inspectable = inspectable_factory.clip({
                 clip_id     = item.clip_id,
@@ -175,6 +180,19 @@ local function resolve_inspectables(items)
                 clip        = item.clip,
             })
             schema_id = "clip"
+        elseif item.item_type == "master_clip" then
+            -- A master clip IS-A sequences.kind='master' row; the item's
+            -- sequence_id identifies it. master_sequence_id is the
+            -- project-browser-side alias; accept either so source_viewer
+            -- (sequence_id) and project_browser (master_sequence_id) can
+            -- both publish without coercion.
+            local seq_id = item.sequence_id or item.master_sequence_id
+            inspectable = inspectable_factory.master_clip({
+                sequence_id = seq_id,
+                project_id  = item.project_id,
+                sequence    = item.sequence,
+            })
+            schema_id = "master_clip"
         end
 
         if inspectable and schema_id then
@@ -234,40 +252,49 @@ local function ids_set(items)
     return s
 end
 
+-- User-visible labels per schema_id. "sequence" → "Record" (this schema
+-- covers only record sequences); "master_clip" → "Master Clip" (the
+-- Resolve-style master-clip lens onto a sequences.kind='master' row).
+local SCHEMA_LABEL = {
+    clip         = { singular = "clip",        plural = "clips"        },
+    sequence     = { singular = "record",      plural = "records"      },
+    master_clip  = { singular = "master clip", plural = "master clips" },
+}
+local function label_for(schema_id, count)
+    local entry = assert(SCHEMA_LABEL[schema_id], string.format(
+        "selection_binding: no label for schema_id '%s'", tostring(schema_id)))
+    return count == 1 and entry.singular or entry.plural
+end
+
 local function format_split_header(schema_counts, active_schema_id)
     local parts = {}
-    local schema_order = {"clip", "sequence"}
+    local schema_order = {"clip", "sequence", "master_clip"}
     for _, id in ipairs(schema_order) do
         local c = schema_counts[id] or 0
         if c > 0 then
-            local label = (id == "clip" and (c == 1 and "clip" or "clips"))
-                       or (id == "sequence" and (c == 1 and "sequence" or "sequences"))
-            table.insert(parts, string.format("%d %s", c, label))
+            table.insert(parts, string.format("%d %s", c, label_for(id, c)))
         end
     end
     local summary = table.concat(parts, ", ")
     local editing_count = schema_counts[active_schema_id] or 0
-    local editing_label = (active_schema_id == "clip" and (editing_count == 1 and "clip" or "clips"))
-                       or (active_schema_id == "sequence" and (editing_count == 1 and "sequence" or "sequences"))
-    return string.format("%s — editing %d %s", summary, editing_count, editing_label)
+    return string.format("%s — editing %d %s",
+        summary, editing_count, label_for(active_schema_id, editing_count))
 end
 M._format_split_header = format_split_header
 
+local function title_case(s)
+    return (s:gsub("^%l", string.upper):gsub(" %l", string.upper))
+end
+
 local function format_single_header(schema_id, display_name)
-    if schema_id == "sequence" then
-        return string.format("Sequence: %s", display_name or "")
-    end
-    return string.format("Clip: %s", display_name or "")
+    return string.format("%s: %s",
+        title_case(label_for(schema_id, 1)), display_name or "")
 end
 M._format_single_header = format_single_header
 
 local function format_multi_header(schema_id, count, read_only)
-    local base
-    if schema_id == "clip" then
-        base = string.format("Clips: %d selected", count)
-    else
-        base = string.format("Sequences: %d selected", count)
-    end
+    local base = string.format("%s: %d selected",
+        title_case(label_for(schema_id, count)), count)
     if read_only then base = base .. " (read-only)" end
     return base
 end

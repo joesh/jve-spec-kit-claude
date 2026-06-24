@@ -644,7 +644,7 @@ end
 
 function SequenceMonitor:_update_title(seq)
     -- Update title
-    local kind_label = seq:is_master() and "Source" or "Timeline"
+    local kind_label = seq:is_master() and "Source" or "Record"
     self:_set_title(string.format("%s: %s", kind_label, seq.name or seq.id))
 end
 

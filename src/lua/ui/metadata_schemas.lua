@@ -101,64 +101,63 @@ end
 
 local T = metadata_schemas.FIELD_TYPES
 
+-- Shared field declarations. Schemas that include the same field MUST
+-- reference the same Lua table here so a label/type change updates every
+-- schema in lockstep. Tested by test_inspector_schema_contract.lua: the
+-- field reuse invariant asserts table identity across schemas.
+local FIELDS = {
+    -- File section
+    name         = field { key = "name",         label = "Clip Name",      type = T.STRING  },
+    media_id     = field { key = "media_id",     label = "Media ID",       type = T.STRING,   read_only = true },
+    offline      = field { key = "offline",      label = "Offline",        type = T.BOOLEAN,  read_only = true },
+    rate_display = field { key = "rate_display", label = "Frame Rate",     type = T.STRING,   read_only = true },
+
+    -- Source Range section — see clip schema comment for multi_editable
+    -- rationale (non-overlap invariant on the per-clip structural values).
+    -- NLE terminology: "Record In/Out" = position on the timeline where
+    -- the clip is laid down. "Source In/Out" = portion of source media used.
+    sequence_start = field { key = "sequence_start", label = "Record In",      type = T.TIMECODE, multi_editable = false },
+    duration       = field { key = "duration",       label = "Duration",       type = T.TIMECODE, multi_editable = false },
+    source_in      = field { key = "source_in",      label = "Source In",      type = T.TIMECODE, multi_editable = false },
+    source_out     = field { key = "source_out",     label = "Source Out",     type = T.TIMECODE, multi_editable = false },
+    mark_in        = field { key = "mark_in",        label = "Mark In",        type = T.TIMECODE },
+    mark_out       = field { key = "mark_out",       label = "Mark Out",       type = T.TIMECODE },
+    playhead_frame = field { key = "playhead_frame", label = "Source Playhead",type = T.TIMECODE, read_only = true },
+
+    -- Enable / Audio (clip-only — per-instance concerns)
+    enabled = field { key = "enabled", label = "Enabled", type = T.BOOLEAN },
+    volume  = field { key = "volume",  label = "Volume",  type = T.DOUBLE  },
+
+    -- Color (clip-only — per-instance grade; spec 023)
+    -- fidelity: spec 023 §5.5 — badge for non-primary clips.
+    -- reproduction: spec 023 FR-015 — what JVE can display
+    --   (full | approximate | not_shown). Find-able badge axis.
+    -- source: provenance (e.g. 'resolve_readback').
+    -- synced_at: timestamp of last sync.
+    fidelity     = field { key = "fidelity",     label = "Grade Fidelity", type = T.STRING,   read_only = true },
+    reproduction = field { key = "reproduction", label = "Grade Shown",    type = T.STRING,   read_only = true },
+    source       = field { key = "source",       label = "Source",         type = T.STRING,   read_only = true },
+    synced_at    = field { key = "synced_at",    label = "Last Synced",    type = T.TIMESTAMP, read_only = true },
+}
+
 -- Clip schema — Resolve-style grouping. Order matters.
 local clip_sections = {
-    {
-        name = "File",
-        schema = { fields = {
-            field { key = "name",        label = "Clip Name",   type = T.STRING  },
-            field { key = "media_id",    label = "Media ID",    type = T.STRING,   read_only = true },
-            field { key = "offline",     label = "Offline",     type = T.BOOLEAN,  read_only = true },
-            field { key = "rate_display",label = "Frame Rate",  type = T.STRING,   read_only = true },
-        }},
-    },
-    {
-        name = "Source Range",
-        schema = { fields = {
-            -- sequence_start / duration / source_in / source_out are per-clip
-            -- structural values. Applying the same value to N clips on the
-            -- same track violates non-overlap (VIDEO_OVERLAP in the clips
-            -- UNIQUE/CHECK invariant). multi_editable = false: user can still
-            -- edit per-clip in single-edit mode, but multi-edit Apply skips
-            -- these fields entirely.
-            -- NLE terminology: "Record In/Out" = position on the timeline
-            -- where the clip is laid down. "Source In/Out" = portion of the
-            -- source media used.
-            field { key = "sequence_start",  label = "Record In",   type = T.TIMECODE, multi_editable = false },
-            field { key = "duration",        label = "Duration",    type = T.TIMECODE, multi_editable = false },
-            field { key = "source_in",       label = "Source In",   type = T.TIMECODE, multi_editable = false },
-            field { key = "source_out",      label = "Source Out",  type = T.TIMECODE, multi_editable = false },
-            field { key = "mark_in",         label = "Mark In",        type = T.TIMECODE },
-            field { key = "mark_out",        label = "Mark Out",       type = T.TIMECODE },
-            field { key = "playhead_frame",  label = "Source Playhead",type = T.TIMECODE, read_only = true },
-        }},
-    },
-    {
-        name = "Enable",
-        schema = { fields = {
-            field { key = "enabled", label = "Enabled", type = T.BOOLEAN },
-        }},
-    },
-    {
-        name = "Audio",
-        schema = { fields = {
-            field { key = "volume",  label = "Volume", type = T.DOUBLE },
-        }},
-    },
-    {
-        name = "Color",
-        schema = { fields = {
-            -- fidelity: spec 023 §5.5 — badge for non-primary clips.
-            -- reproduction: spec 023 FR-015 — what JVE can display
-            --   (full | approximate | not_shown). Find-able badge axis.
-            -- source: provenance (e.g. 'resolve_readback').
-            -- synced_at: timestamp of last sync.
-            field { key = "fidelity",  label = "Grade Fidelity", type = T.STRING,   read_only = true },
-            field { key = "reproduction", label = "Grade Shown", type = T.STRING,   read_only = true },
-            field { key = "source",    label = "Source",         type = T.STRING,   read_only = true },
-            field { key = "synced_at",  label = "Last Synced",    type = T.TIMESTAMP, read_only = true },
-        }},
-    },
+    { name = "File",         schema = { fields = { FIELDS.name, FIELDS.media_id, FIELDS.offline, FIELDS.rate_display } } },
+    { name = "Source Range", schema = { fields = { FIELDS.sequence_start, FIELDS.duration, FIELDS.source_in, FIELDS.source_out, FIELDS.mark_in, FIELDS.mark_out, FIELDS.playhead_frame } } },
+    { name = "Enable",       schema = { fields = { FIELDS.enabled } } },
+    { name = "Audio",        schema = { fields = { FIELDS.volume } } },
+    { name = "Color",        schema = { fields = { FIELDS.fidelity, FIELDS.reproduction, FIELDS.source, FIELDS.synced_at } } },
+}
+
+-- Master-clip schema — kind='master' sequences presented as Clips (the
+-- canonical media asset). Same row as the sequence model but a different
+-- lens (browser + source-viewer context). Reuses File section verbatim and
+-- a trimmed Source Range (omits sequence_start / duration — record-side
+-- concepts). Enable / Audio / Color are per-timeline-instance and excluded.
+-- The Channels section lands in Phase 2 (see spec 012 + master-channel work).
+local master_clip_sections = {
+    { name = "File",         schema = { fields = { FIELDS.name, FIELDS.media_id, FIELDS.offline, FIELDS.rate_display } } },
+    { name = "Source Range", schema = { fields = { FIELDS.source_in, FIELDS.source_out, FIELDS.mark_in, FIELDS.mark_out, FIELDS.playhead_frame } } },
 }
 
 -- Sequence schema — viewport fields intentionally excluded per /analyze I1.
@@ -194,8 +193,9 @@ local sequence_sections = {
 }
 
 local SCHEMA_TABLE = {
-    clip     = clip_sections,
-    sequence = sequence_sections,
+    clip        = clip_sections,
+    sequence    = sequence_sections,
+    master_clip = master_clip_sections,
 }
 
 function metadata_schemas.get_sections(schema_id)

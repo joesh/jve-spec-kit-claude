@@ -277,8 +277,9 @@ local function prebuild_schemas(ui_state, content_layout)
         end,
     }
     ui_state.schema_views = {
-        clip     = schema.build("clip",     content_layout, callbacks),
-        sequence = schema.build("sequence", content_layout, callbacks),
+        clip        = schema.build("clip",        content_layout, callbacks),
+        sequence    = schema.build("sequence",    content_layout, callbacks),
+        master_clip = schema.build("master_clip", content_layout, callbacks),
     }
     qt_constants.LAYOUT.ADD_STRETCH(content_layout, 1)
 end
@@ -368,8 +369,9 @@ function M.mount(container)
         show_find_bar = function() find_chrome_inst:show() end,
     })
 
-    log.event("inspector.mount: scaffold built; schemas=%d",
-        (ui_state.schema_views.clip and 1 or 0) + (ui_state.schema_views.sequence and 1 or 0))
+    local n_schemas = 0
+    for _ in pairs(ui_state.schema_views) do n_schemas = n_schemas + 1 end
+    log.event("inspector.mount: scaffold built; schemas=%d", n_schemas)
 
     return ui_state
 end

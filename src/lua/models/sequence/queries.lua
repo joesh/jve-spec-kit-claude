@@ -21,6 +21,7 @@
 ---   * Sequence.effective_audio_sample_rate(seq)
 ---   * Sequence.count_master_audio_channels(master_id)
 ---   * Sequence.get_master_channel_state(master_id, channel_index)
+---   * Sequence.get_primary_media_ref(master_id)
 
 local database = require("core.database")
 
@@ -455,6 +456,53 @@ function Sequence.get_master_channel_state(master_id, channel_index)
     end
     stmt:finalize()
     return enabled, gain_db
+end
+
+--- A master sequence's primary media_ref + joined media row. The "primary"
+--- ref is the master's video track if present, else its first audio track
+--- (ordered by track_index, source_channel). Drives the master-clip
+--- inspector's File/Source Range fields (media_id, source_in/out, offline).
+---
+--- Returns the joined row table { id, media_id, source_in_frame,
+--- source_out_frame, media_name, media_file_path, media_offline }, or nil
+--- when the master has no media_refs yet (legitimate: master built but
+--- file not yet probed — master_builder.lua:124).
+---
+--- @param master_id string
+function Sequence.get_primary_media_ref(master_id)
+    assert(master_id and master_id ~= "",
+        "Sequence.get_primary_media_ref: master_id required")
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT mr.id, mr.media_id, mr.source_in_frame, mr.source_out_frame,
+               m.name, m.file_path, m.offline_note
+        FROM media_refs mr
+        JOIN tracks t ON t.id = mr.track_id
+        LEFT JOIN media m ON m.id = mr.media_id
+        WHERE mr.owner_sequence_id = ?
+        ORDER BY CASE t.track_type WHEN 'VIDEO' THEN 0 ELSE 1 END,
+                 t.track_index ASC,
+                 mr.source_channel ASC
+        LIMIT 1
+    ]])
+    assert(stmt, "Sequence.get_primary_media_ref: prepare failed")
+    stmt:bind_value(1, master_id)
+    assert(stmt:exec(), string.format(
+        "Sequence.get_primary_media_ref: exec failed for %s", master_id))
+    local row = nil
+    if stmt:next() then
+        row = {
+            id               = stmt:value(0),
+            media_id         = stmt:value(1),
+            source_in_frame  = stmt:value(2),
+            source_out_frame = stmt:value(3),
+            media_name       = stmt:value(4),
+            media_file_path  = stmt:value(5),
+            media_offline    = stmt:value(6),
+        }
+    end
+    stmt:finalize()
+    return row
 end
 
 end -- M.install

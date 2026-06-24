@@ -70,6 +70,76 @@ check("sequence [1] = Project",   seq_sections[1] and seq_sections[1].name == "P
 check("sequence [2] = Viewport",  seq_sections[2] and seq_sections[2].name == "Viewport")
 check("sequence [3] = Marks",     seq_sections[3] and seq_sections[3].name == "Marks")
 
+-- Master-clip sections: a master sequence (kind='master') presents itself
+-- as a Clip from the user's perspective (browser, source viewer). Fields
+-- mirror the clip schema where they apply to the canonical media asset,
+-- and OMIT the per-instance fields (sequence_start, duration, Enable,
+-- Audio volume, Color) — those are timeline-clip concerns. Channels
+-- section lands in Phase 2.
+local mc_sections = schemas.get_sections("master_clip")
+check("master_clip has ≥2 sections", #mc_sections >= 2)
+check("master_clip [1] = File",        mc_sections[1] and mc_sections[1].name == "File")
+check("master_clip [2] = Source Range",mc_sections[2] and mc_sections[2].name == "Source Range")
+
+-- master_clip File section mirrors clip File (same fields, same labels).
+do
+    local mc_file_fields = mc_sections[1].schema.fields
+    local clip_file_fields = clip_sections[1].schema.fields
+    check("master_clip.File has same field count as clip.File",
+        #mc_file_fields == #clip_file_fields,
+        string.format("master_clip=%d clip=%d", #mc_file_fields, #clip_file_fields))
+    for i, mcf in ipairs(mc_file_fields) do
+        local cf = clip_file_fields[i]
+        check(string.format("master_clip.File[%d].key == clip.File[%d].key", i, i),
+            cf and mcf.key == cf.key,
+            string.format("master_clip=%s clip=%s", mcf.key, cf and cf.key or "nil"))
+    end
+end
+
+-- master_clip Source Range omits sequence_start (record-side) and duration
+-- (derived for record-side display), keeps source_in/out + marks + playhead.
+do
+    local mc_sr_fields = mc_sections[2].schema.fields
+    local keys = {}
+    for _, f in ipairs(mc_sr_fields) do keys[f.key] = true end
+    check("master_clip Source Range has source_in",      keys.source_in)
+    check("master_clip Source Range has source_out",     keys.source_out)
+    check("master_clip Source Range has mark_in",        keys.mark_in)
+    check("master_clip Source Range has mark_out",       keys.mark_out)
+    check("master_clip Source Range has playhead_frame", keys.playhead_frame)
+    check("master_clip Source Range OMITS sequence_start (record-side concern)",
+        not keys.sequence_start)
+    check("master_clip Source Range OMITS duration (record-side display)",
+        not keys.duration)
+end
+
+-- master_clip MUST NOT carry Enable / Audio / Color sections (instance concerns).
+for _, s in ipairs(mc_sections) do
+    check("master_clip omits Enable section",  s.name ~= "Enable")
+    check("master_clip omits Audio section",   s.name ~= "Audio")
+    check("master_clip omits Color section",   s.name ~= "Color")
+end
+
+-- Field reuse invariant: identical field declarations across schemas must
+-- share the same Lua table (no duplicated literals). If you rename
+-- "Media ID" → "Source File ID" in one schema, the other follows for free.
+do
+    local clip_name      = schemas.get_field("clip",        "name")
+    local master_name    = schemas.get_field("master_clip", "name")
+    check("clip.name and master_clip.name are the same table object",
+        clip_name == master_name, "label sync requires shared field literal")
+
+    local clip_media_id      = schemas.get_field("clip",        "media_id")
+    local master_media_id    = schemas.get_field("master_clip", "media_id")
+    check("clip.media_id and master_clip.media_id are the same table object",
+        clip_media_id == master_media_id)
+
+    local clip_source_in     = schemas.get_field("clip",        "source_in")
+    local master_source_in   = schemas.get_field("master_clip", "source_in")
+    check("clip.source_in and master_clip.source_in are the same table object",
+        clip_source_in == master_source_in)
+end
+
 -- Viewport contains only playhead_frame (I1 resolution — no view_start_frame
 -- / view_duration_frames). Field keys are DB column names so the write path
 -- works through SetSequenceMetadata's column whitelist.

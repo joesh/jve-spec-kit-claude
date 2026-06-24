@@ -155,8 +155,8 @@ Only boolean values. Unknown keys are ignored. Missing keys default to `true` (s
            │
            ├── mode == "empty"          → show "No editable selection"; hide sections; clear selection label
            ├── mode == "heterogeneous"  → pick active schema (majority, tiebreak on newly-clicked item); header discloses split; load single or multi from active subset
-           ├── mode == "single"         → load single; header = "Clip: X" or "Timeline: Y"; mark summary if timeline source or sequence schema
-           ├── mode == "multi_edit"     → load multi; show Apply; header = "Clips: N selected" or "Timelines: N selected"
+           ├── mode == "single"         → load single; header = "Clip: X" or "Record: Y" (or "Master Clip: Y" when the master-clip schema lands); mark summary if record source or sequence schema
+           ├── mode == "multi_edit"     → load multi; show Apply; header = "Clips: N selected" or "Records: N selected"
            ├── mode == "multi_read_only" → load single (first item); hide Apply; header = "... (read-only)"
            └── mode == "mixed_unsupported" → behave as multi_read_only on the active schema
 ```

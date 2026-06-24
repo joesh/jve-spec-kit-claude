@@ -2,7 +2,10 @@
 -- under "source_monitor" so the Inspector renders the right schema.
 --
 -- Domain rules:
---   * Staged-sequence load (load_master_clip) → publish carries the
+--   * Staged load of a kind='master' sequence → publish carries the
+--     sequence_id + project_id + item_type="master_clip" (master-clip
+--     schema: file metadata + source range + channels).
+--   * Staged load of a kind='sequence' (record) → publish carries the
 --     sequence_id + project_id + item_type="timeline" (sequence schema).
 --   * Unload clears the published selection.
 --   * Subsequent load replaces (no accumulation).
@@ -93,8 +96,11 @@ end)
 package.loaded["ui.source_viewer"] = nil
 local source_viewer = require("ui.source_viewer")
 
--- ── (1) load_master_clip → staged-sequence publish ────────────────────
-print("-- (1) load_master_clip publishes timeline-typed selection --")
+-- ── (1) master-staged load publishes master_clip-typed selection ─────
+-- The fixture's `loaded_seq_id` is kind='master', so the publish item_type
+-- routes the Inspector to the master_clip schema (file metadata + source
+-- range + channels), not the record-sequence schema.
+print("-- (1) staged master load publishes master_clip-typed selection --")
 last_items, last_panel = nil, nil
 source_viewer.load_master_clip("loaded_seq_id", { skip_focus = true })
 
@@ -108,12 +114,34 @@ do
     local it = last_items[1]
     assert(it.sequence_id == "loaded_seq_id"
        and it.project_id  == "proj_under_test"
-       and it.item_type   == "timeline", string.format(
-        "staged publish: (item_type, sequence_id, project_id) must be "
-        .. "('timeline', 'loaded_seq_id', 'proj_under_test'); got (%s, %s, %s)",
+       and it.item_type   == "master_clip", string.format(
+        "staged master publish: (item_type, sequence_id, project_id) must be "
+        .. "('master_clip', 'loaded_seq_id', 'proj_under_test'); got (%s, %s, %s)",
         tostring(it.item_type), tostring(it.sequence_id), tostring(it.project_id)))
 end
-print("  PASS staged-mode publish carries timeline-typed item")
+print("  PASS staged master load publishes master_clip-typed item")
+
+-- ── (1b) record-staged load publishes timeline-typed selection ────────
+-- Mirror coverage for kind='sequence' sequences: the fixture's `rec` is
+-- a record sequence, so the publish must route to the record-sequence
+-- schema, not master_clip. This was a single bucket prior to the
+-- master_clip schema landing; it is now two.
+print("-- (1b) staged record load publishes timeline-typed selection --")
+last_items, last_panel = nil, nil
+source_viewer.load_master_clip("rec", { skip_focus = true })
+assert(last_panel == "source_monitor", string.format(
+    "publish panel_id must be 'source_monitor'; got %s",
+    tostring(last_panel)))
+do
+    local it = last_items[1]
+    assert(it.sequence_id == "rec"
+       and it.project_id  == "proj_under_test"
+       and it.item_type   == "timeline", string.format(
+        "staged record publish: (item_type, sequence_id, project_id) must be "
+        .. "('timeline', 'rec', 'proj_under_test'); got (%s, %s, %s)",
+        tostring(it.item_type), tostring(it.sequence_id), tostring(it.project_id)))
+end
+print("  PASS staged record load publishes timeline-typed item")
 
 -- ── (2) unload clears the published selection ─────────────────────────
 print("-- (2) unload clears selection --")

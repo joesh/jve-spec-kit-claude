@@ -207,13 +207,13 @@ do
     assert(not mon.sequence:is_master(), "timeline sequence is NOT master")
 
     local t = title_text(mon)
-    assert(t and t:find("Timeline"), string.format(
-        "timeline title must contain 'Timeline'; got '%s'", tostring(t)))
+    assert(t and t:find("Record"), string.format(
+        "timeline title must contain 'Record'; got '%s'", tostring(t)))
     assert(t:find("MyTimeline"), string.format(
         "timeline title must contain 'MyTimeline'; got '%s'", tostring(t)))
 
     mon:destroy()
-    print("  PASS: timeline load — has_clip, not master, title 'Timeline: MyTimeline'")
+    print("  PASS: timeline load — has_clip, not master, title 'Record: MyTimeline'")
 end
 
 -- ════════════════════════════════════════════════════════════════════════════

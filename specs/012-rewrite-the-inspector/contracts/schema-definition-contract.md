@@ -1,7 +1,7 @@
 # Contract: Schema Definition Module
 
 **Module**: `src/lua/ui/metadata_schemas.lua` (restructured under FR-023d)
-**Consumers**: `src/lua/ui/inspector/schema.lua`, `src/lua/ui/inspector/field_widget.lua`, `src/lua/inspectable/{clip,sequence}.lua`
+**Consumers**: `src/lua/ui/inspector/schema.lua`, `src/lua/ui/inspector/field_widget.lua`, `src/lua/inspectable/{clip,sequence,master_clip}.lua`
 
 The restructured module is the single source of truth for the Inspector's section / field layout. Stale sections (premiere, review, crop, composite, transform) are pruned; the remaining sections correspond to properties enumerated in `research.md` §1.
 
@@ -143,6 +143,35 @@ Section: Marks
   - mark_in              TIMECODE                   editable (nullable)
   - mark_out             TIMECODE                   editable (nullable)
 ```
+
+---
+
+## 4a. Master-clip schema (Phase 1 — added post-spec-012, under spec 018/021 work)
+
+A master sequence (`sequences.kind='master'`) IS a master clip — the same database row presented through a different lens. The `master_clip` schema is the Resolve-style master-clip view (file metadata + source range; channels arrive in Phase 2):
+
+```
+SCHEMA: master_clip
+
+Section: File
+  - name           STRING                          editable
+  - media_id       STRING   read_only              (display)
+  - offline        BOOLEAN  read_only              (transient)
+  - rate_display   STRING   read_only              (formatted "24 fps" / "23.976 fps")
+
+Section: Source Range
+  - source_in      TIMECODE read_only              (Phase 1 — write deferred)
+  - source_out     TIMECODE read_only              (Phase 1 — write deferred)
+  - mark_in        TIMECODE                        editable (nullable)
+  - mark_out       TIMECODE                        editable (nullable)
+  - playhead_frame TIMECODE read_only              (display)
+```
+
+**Sections deliberately omitted vs. the clip schema**: Enable, Audio (volume), Color. These belong to per-instance clips, not to the master.
+
+**Field reuse invariant**: every field literal in `master_clip` MUST be the same Lua table as the corresponding field in `clip` (the schema module factors them through a shared `FIELDS` table). Contract test asserts identity (`clip.name == master_clip.name`), so a future edit to `clip.name`'s `label` automatically applies to the master clip — no duplicate-data sync hazard.
+
+**Selection-binding dispatch**: items with `item_type="master_clip"` build a `MasterClipInspectable` (schema_id `"master_clip"`); items with `item_type="timeline_clip"` continue to build `ClipInspectable` (`"clip"`). The two no longer collide (pre-fix bug: both mapped to `"clip"`). User-visible header labels: `"Master Clip: <name>"` (single), `"Master Clips: N selected"` (multi).
 
 ---
 

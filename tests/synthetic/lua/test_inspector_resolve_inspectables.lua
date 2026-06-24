@@ -42,6 +42,36 @@ do
     check("sequence display = Main",    result.names_by_schema.sequence[1] == "Main")
 end
 
+-- master_clip carries a pre-built master_clip inspectable through.
+do
+    local mc = fake_inspectable("master_clip", "Boom")
+    local items = {
+        { item_type = "master_clip", sequence_id = "ms1", inspectable = mc },
+    }
+    local result = sb._resolve_inspectables(items)
+    check("schema_counts.master_clip = 1",     result.schema_counts.master_clip == 1)
+    check("master_clip group has 1 member",
+        #result.inspectables_by_schema.master_clip == 1)
+    check("master_clip display = Boom",
+        result.names_by_schema.master_clip[1] == "Boom")
+end
+
+-- Heterogeneous: a clip + a master_clip live in DIFFERENT schema buckets
+-- (the bug being fixed — both used to map to schema_id="clip").
+do
+    local c  = fake_inspectable("clip",        "C")
+    local mc = fake_inspectable("master_clip", "M")
+    local items = {
+        { item_type = "timeline_clip", clip_id = "c", inspectable = c  },
+        { item_type = "master_clip",   sequence_id = "ms", inspectable = mc },
+    }
+    local result = sb._resolve_inspectables(items)
+    check("clip and master_clip do not collide: clip=1",
+        result.schema_counts.clip == 1)
+    check("clip and master_clip do not collide: master_clip=1",
+        result.schema_counts.master_clip == 1)
+end
+
 -- Unknown item_type is silently dropped (selection hub is opaque).
 do
     local keep = fake_inspectable("clip", "kept")
