@@ -146,30 +146,53 @@ Section: Marks
 
 ---
 
-## 4a. Master-clip schema (Phase 1 — added post-spec-012, under spec 018/021 work)
+## 4a. Master-clip schema (added post-spec-012, under spec 018/021 work)
 
-A master sequence (`sequences.kind='master'`) IS a master clip — the same database row presented through a different lens. The `master_clip` schema is the Resolve-style master-clip view (file metadata + source range; channels arrive in Phase 2):
+A master sequence (`sequences.kind='master'`) IS a master clip — the same database row presented through a different lens. The `master_clip` schema is the Resolve-style master-clip view (file metadata + source range + channels):
 
 ```
 SCHEMA: master_clip
 
-Section: File
+Section: File                       (kind = flat_fields)
   - name           STRING                          editable
   - media_id       STRING   read_only              (display)
   - offline        BOOLEAN  read_only              (transient)
   - rate_display   STRING   read_only              (formatted "24 fps" / "23.976 fps")
 
-Section: Source Range
+Section: Source Range               (kind = flat_fields)
   - source_in      TIMECODE read_only              (Phase 1 — write deferred)
   - source_out     TIMECODE read_only              (Phase 1 — write deferred)
   - mark_in        TIMECODE                        editable (nullable)
   - mark_out       TIMECODE                        editable (nullable)
   - playhead_frame TIMECODE read_only              (display)
+
+Section: Channels                   (kind = channel_list — non-flat)
+  Source: MasterClipInspectable:iter_channels (one row per master AUDIO
+  track, ordered by tracks.track_index ASC).
+  Row: channel_index (1-based) + resolved name (track.name override →
+  iXML TRACK_LIST probe → "" — all done at the model layer; the renderer
+  never sees nil). Read-only in Phase 2; Phase 3 rewires the name row to
+  a RenameTrack edit through inspectable:set.
 ```
+
+**Section-kind dispatch (FR-024)**: each section declares a `kind`:
+- `flat_fields` (default) — schema.lua builds one field-widget per
+  `schema.fields` entry at mount time; field_widgets keyed by field key.
+- `channel_list` — section is built empty; rows populated at selection
+  time by `ui.inspector.channel_list_renderer`. selection_binding's
+  `load_single` and `refresh_only_clean_fields` both call into the
+  renderer so the channels track mutation pull-on-notify (FR-016).
+- Any other kind value asserts at build (no silent skip).
 
 **Sections deliberately omitted vs. the clip schema**: Enable, Audio (volume), Color. These belong to per-instance clips, not to the master.
 
-**Field reuse invariant**: every field literal in `master_clip` MUST be the same Lua table as the corresponding field in `clip` (the schema module factors them through a shared `FIELDS` table). Contract test asserts identity (`clip.name == master_clip.name`), so a future edit to `clip.name`'s `label` automatically applies to the master clip — no duplicate-data sync hazard.
+**Field reuse invariant**: every field literal in `master_clip`'s flat
+sections MUST be the same Lua table as the corresponding field in `clip`
+(the schema module factors them through a shared `FIELDS` table). Contract
+test asserts identity (`clip.name == master_clip.name`), so a future edit
+to `clip.name`'s `label` automatically applies to the master clip — no
+duplicate-data sync hazard. The Channels section has no `fields` array
+and is not subject to this invariant.
 
 **Selection-binding dispatch**: items with `item_type="master_clip"` build a `MasterClipInspectable` (schema_id `"master_clip"`); items with `item_type="timeline_clip"` continue to build `ClipInspectable` (`"clip"`). The two no longer collide (pre-fix bug: both mapped to `"clip"`). User-visible header labels: `"Master Clip: <name>"` (single), `"Master Clips: N selected"` (multi).
 

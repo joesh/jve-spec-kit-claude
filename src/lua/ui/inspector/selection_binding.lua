@@ -341,6 +341,13 @@ local function refresh_only_clean_fields(schema_view, inspectables, size)
             end
         end
     end
+    -- Non-flat sections (channel_list etc.) have no per-field dirty
+    -- concept — always re-populate. Only meaningful for size==1; the
+    -- only adapter with non-flat sections (MasterClipInspectable) is
+    -- supports_multi_edit=false so multi never lands here.
+    if size == 1 then
+        populate_non_flat_sections(schema_view, inspectables[1])
+    end
 end
 M._refresh_only_clean_fields = refresh_only_clean_fields
 

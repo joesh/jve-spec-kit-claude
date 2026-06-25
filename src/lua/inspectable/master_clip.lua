@@ -19,8 +19,11 @@
 ---
 --- @file master_clip.lua
 local metadata_schemas = require("ui.metadata_schemas")
+local database         = require("core.database")
 local Sequence         = require("models.sequence")
 local Track            = require("models.track")
+local channel_names    = require("core.media.channel_names")
+local track_label      = require("ui.timeline.track_header_label")
 local base             = require("inspectable.sequence_row_base")
 
 local MasterClipInspectable = {}
@@ -159,9 +162,27 @@ end
 --- Phase 2 read-only Channels section. Master AUDIO tracks present as
 --- one row per channel, ordered by tracks.track_index ASC (the channel
 --- slot is the track slot — same as how the resolver lays the master out;
---- per Joe 2026-06-24). channel_index is 1-based for display. Iterator
---- form so the renderer can `for ch in mc:iter_channels() do ... end`
---- without a temporary array.
+--- per Joe 2026-06-24). channel_index is 1-based for display. The model
+--- layer owns name resolution end-to-end: track.name override → iXML
+--- channel_names probe → track_header_label.for_display fallback. The
+--- renderer never sees nil names — that's an architecturally-correct
+--- model/view split (the view doesn't probe iXML or know about synced
+--- masters). Same resolution timeline_panel does for the header row.
+local function resolve_channel_name(track)
+    local channel_src = database.get_track_channel_source(track.id)
+    local channel_backed = channel_src ~= nil
+    local channel_name = nil
+    if channel_backed and (not track.name or track.name == "") then
+        channel_name = channel_names.get(
+            channel_src.media_id, channel_src.file_path, channel_src.source_channel)
+    end
+    return track_label.for_display(
+        { name = track.name, channel_name = channel_name,
+          channel_backed = channel_backed,
+          track_index = track.track_index, track_type = track.track_type },
+        "source")
+end
+
 function MasterClipInspectable:iter_channels()
     local audio_tracks = Track.find_by_sequence(self.sequence_id, "AUDIO")
     local i = 0
@@ -169,7 +190,7 @@ function MasterClipInspectable:iter_channels()
         i = i + 1
         local t = audio_tracks[i]
         if not t then return nil end
-        return { channel_index = t.track_index, name = t.name }
+        return { channel_index = t.track_index, name = resolve_channel_name(t) }
     end
 end
 
@@ -184,8 +205,15 @@ function MasterClipInspectable:supports_multi_edit()
     return false
 end
 
+-- Master IS-A sequence row (kind='master'). Listen on the sequence-key the
+-- model layer ACTUALLY emits: notify_sequence emits "sequence:<id>"; the
+-- track-fanout in notify_track emits "sequence:<seq_id>" on every track
+-- mutation so a RenameTrack / AddTrack / DeleteTrack on the master also
+-- fires here. No code anywhere emits a "master_clip:" prefix — that was
+-- the dead key the inspector used to register, causing every master-field
+-- mutation to leave the Inspector silently stale.
 function MasterClipInspectable:get_watcher_keys()
-    return { "master_clip:" .. self.sequence_id }
+    return { "sequence:" .. self.sequence_id }
 end
 
 return MasterClipInspectable

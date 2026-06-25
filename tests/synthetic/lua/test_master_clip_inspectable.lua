@@ -63,6 +63,14 @@ db:exec(string.format([[
 -- NOT show up in the Channels listing. Insertion order is shuffled relative
 -- to track_index so iter_channels' ORDER BY track_index ASC contract is
 -- actually exercised.
+-- Four master AUDIO tracks (one per channel) + one VIDEO track that must
+-- NOT show up in the Channels listing. Insertion order is shuffled relative
+-- to track_index so iter_channels' ORDER BY track_index ASC contract is
+-- actually exercised. mtrack_a4 has name=NULL — the synced-master case
+-- (channel-backed tracks carry no user name; display layer derives from
+-- iXML or falls back to abbreviated A4). The fixture media file doesn't
+-- exist on disk, so channel_names.get returns nil cleanly under the
+-- luajit harness, exercising the "" fallback path in track_header_label.
 local ok_tr = db:exec([[
     INSERT INTO tracks
         (id, sequence_id, name, track_type, track_index, enabled, muted, soloed,
@@ -71,9 +79,29 @@ local ok_tr = db:exec([[
         ('mtrack_a2', 'master_seq', 'Boom', 'AUDIO', 2, 1, 0, 0, 0, 'off', 1),
         ('mtrack_v1', 'master_seq', 'Picture', 'VIDEO', 1, 1, 0, 0, 0, 'off', 1),
         ('mtrack_a1', 'master_seq', 'L', 'AUDIO', 1, 1, 0, 0, 0, 'off', 1),
-        ('mtrack_a3', 'master_seq', 'Lav', 'AUDIO', 3, 1, 0, 0, 0, 'off', 1);
+        ('mtrack_a3', 'master_seq', 'Lav', 'AUDIO', 3, 1, 0, 0, 0, 'off', 1),
+        ('mtrack_a4', 'master_seq', NULL, 'AUDIO', 4, 1, 0, 0, 0, 'off', 1);
 ]])
 assert(ok_tr, "tracks insert failed: " .. tostring(db:last_error()))
+-- Every master AUDIO track is channel-backed (it owns one channel of an
+-- underlying media file). mref_boom (above) handles mtrack_a1; add refs
+-- for a2, a3, a4 — each pointing at its own channel of the same boom file.
+local ok_mref2 = db:exec(string.format([[
+    INSERT INTO media_refs
+        (id, project_id, owner_sequence_id, track_id, media_id,
+         source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+         audio_sample_rate, source_channel,
+         enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+         created_at, modified_at)
+    VALUES
+        ('mref_a2', 'proj', 'master_seq', 'mtrack_a2', 'media_boom',
+         120, 4680, 0, 4560, 48000, 1, 1, 1.0, NULL, NULL, 0, %d, %d),
+        ('mref_a3', 'proj', 'master_seq', 'mtrack_a3', 'media_boom',
+         120, 4680, 0, 4560, 48000, 2, 1, 1.0, NULL, NULL, 0, %d, %d),
+        ('mref_a4', 'proj', 'master_seq', 'mtrack_a4', 'media_boom',
+         120, 4680, 0, 4560, 48000, 3, 1, 1.0, NULL, NULL, 0, %d, %d);
+]], now, now, now, now, now, now))
+assert(ok_mref2, "channel-backed media_refs insert failed: " .. tostring(db:last_error()))
 local ok_mref = db:exec(string.format([[
     INSERT INTO media_refs
         (id, project_id, owner_sequence_id, track_id, media_id,
@@ -142,13 +170,14 @@ check("get_display_name() == sequence.name",
 check("supports_multi_edit() == false",
     mc:supports_multi_edit(), false)
 
--- watcher keys: master_clip:<sequence_id> so signals from sequence model
--- trigger inspector refresh.
+-- watcher keys: master IS-A sequence row, listen on "sequence:<id>" — the
+-- key notify_sequence emits and that notify_track's sequence-fanout fires
+-- on every track mutation. "master_clip:" prefix has no emitter anywhere.
 local keys = mc:get_watcher_keys()
 check("watcher_keys is a table",   type(keys) == "table", true)
 check("watcher_keys has 1 entry", #keys, 1)
-check("watcher_keys[1] keys off master_clip:<id>",
-    keys[1], "master_clip:master_seq")
+check("watcher_keys[1] uses 'sequence:' prefix (the key the model emits)",
+    keys[1], "sequence:master_seq")
 
 -- ── Fail-fast: refusing the wrong lens ────────────────────────────────
 -- A user can't end up with a MasterClipInspectable over a record sequence
@@ -194,13 +223,19 @@ local channels = {}
 for ch in mc:iter_channels() do
     table.insert(channels, ch)
 end
-check("iter_channels yields 3 AUDIO rows (VIDEO excluded)", #channels, 3)
+check("iter_channels yields 4 AUDIO rows (VIDEO excluded)", #channels, 4)
 check("channel[1].channel_index == 1",  channels[1].channel_index, 1)
 check("channel[1].name == 'L' (track_index=1)", channels[1].name, "L")
 check("channel[2].channel_index == 2",  channels[2].channel_index, 2)
 check("channel[2].name == 'Boom' (track_index=2)", channels[2].name, "Boom")
 check("channel[3].channel_index == 3",  channels[3].channel_index, 3)
 check("channel[3].name == 'Lav' (track_index=3)", channels[3].name, "Lav")
+-- channel-backed track with name=NULL + no iXML probe-able file: the
+-- display layer must yield a string (the model contract: name is always
+-- present at the inspectable boundary, even if the resolution is "").
+check("channel[4].channel_index == 4",  channels[4].channel_index, 4)
+check("channel[4].name is a string (nameless channel-backed resolved)",
+    type(channels[4].name), "string")
 
 -- ── Lazy-fill: browser projection lacks mark_in/out/playhead ──────────
 -- The project browser passes a flat master-clip entry as opts.sequence

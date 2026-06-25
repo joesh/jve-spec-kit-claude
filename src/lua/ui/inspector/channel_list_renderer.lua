@@ -6,13 +6,17 @@
 -- `{channel_index, name}` (see MasterClipInspectable:iter_channels).
 --
 -- Lifecycle (widget-pool reuse, per spec 012 Q2 — no rent/return):
---   * Build a row widget per channel slot lazily (first selection that
---     surfaces channel N creates row N).
---   * On subsequent selections, reuse the pool: relabel the visible
---     rows; hide unused rows. The pool is stable across selections —
---     the channel count moves up and down, not the slot count.
+--   * pool[i] is the i-th visible row at populate time — NOT the
+--     channel_index. The displayed channel_index/name come from the
+--     model on every call; slot identity is purely ordinal.
+--   * First populate that surfaces N channels creates rows 1..N. On
+--     subsequent populates, relabel the visible rows; hide unused
+--     rows. The pool grows monotonically — pool size = max channel
+--     count ever seen on this schema_view.
 --   * The pool lives on `section_view._channel_pool` (created on first
 --     call). Memory is bounded by max-channels-ever-seen.
+--   * Phase 3 note: when per-row edits land, store ch.channel_index
+--     on the row entry so edit handlers reference identity, not slot.
 --
 -- This renderer is read-only in Phase 2; Phase 3 rewires each row to
 -- a RenameTrack edit through inspectable:set.
