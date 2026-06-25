@@ -59,14 +59,20 @@ db:exec(string.format([[
          %d, %d, '{}');
 ]], now, now))
 
--- A single master AUDIO track + its media_ref (one-channel boom file).
-local ok_tr = db:exec(string.format([[
+-- Three master AUDIO tracks (one per channel) + one VIDEO track that must
+-- NOT show up in the Channels listing. Insertion order is shuffled relative
+-- to track_index so iter_channels' ORDER BY track_index ASC contract is
+-- actually exercised.
+local ok_tr = db:exec([[
     INSERT INTO tracks
         (id, sequence_id, name, track_type, track_index, enabled, muted, soloed,
          locked, sync_mode, autoselect)
     VALUES
-        ('mtrack_a1', 'master_seq', 'Boom', 'AUDIO', 1, 1, 0, 0, 0, 'off', 1);
-]]))
+        ('mtrack_a2', 'master_seq', 'Boom', 'AUDIO', 2, 1, 0, 0, 0, 'off', 1),
+        ('mtrack_v1', 'master_seq', 'Picture', 'VIDEO', 1, 1, 0, 0, 0, 'off', 1),
+        ('mtrack_a1', 'master_seq', 'L', 'AUDIO', 1, 1, 0, 0, 0, 'off', 1),
+        ('mtrack_a3', 'master_seq', 'Lav', 'AUDIO', 3, 1, 0, 0, 0, 'off', 1);
+]])
 assert(ok_tr, "tracks insert failed: " .. tostring(db:last_error()))
 local ok_mref = db:exec(string.format([[
     INSERT INTO media_refs
@@ -179,6 +185,22 @@ check("wrong-kind assert names the offending kind",
     and err:find("kind", 1, true) ~= nil, true)
 check("wrong-kind assert names the adapter",
     type(err) == "string" and err:find("MasterClipInspectable", 1, true) ~= nil, true)
+
+-- ── iter_channels: read-only channel list (Phase 2) ──────────────────
+-- Master AUDIO tracks present as Channels rows in the Inspector. Iterates
+-- in tracks.track_index ASC order, AUDIO only (VIDEO master tracks are
+-- not channels), each row yields {channel_index = 1-based, name}.
+local channels = {}
+for ch in mc:iter_channels() do
+    table.insert(channels, ch)
+end
+check("iter_channels yields 3 AUDIO rows (VIDEO excluded)", #channels, 3)
+check("channel[1].channel_index == 1",  channels[1].channel_index, 1)
+check("channel[1].name == 'L' (track_index=1)", channels[1].name, "L")
+check("channel[2].channel_index == 2",  channels[2].channel_index, 2)
+check("channel[2].name == 'Boom' (track_index=2)", channels[2].name, "Boom")
+check("channel[3].channel_index == 3",  channels[3].channel_index, 3)
+check("channel[3].name == 'Lav' (track_index=3)", channels[3].name, "Lav")
 
 -- ── Lazy-fill: browser projection lacks mark_in/out/playhead ──────────
 -- The project browser passes a flat master-clip entry as opts.sequence

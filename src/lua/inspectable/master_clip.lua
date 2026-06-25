@@ -20,6 +20,7 @@
 --- @file master_clip.lua
 local metadata_schemas = require("ui.metadata_schemas")
 local Sequence         = require("models.sequence")
+local Track            = require("models.track")
 local base             = require("inspectable.sequence_row_base")
 
 local MasterClipInspectable = {}
@@ -153,6 +154,23 @@ end
 
 function MasterClipInspectable:iter_fields()
     return metadata_schemas.iter_fields_for_schema(self:get_schema_id())
+end
+
+--- Phase 2 read-only Channels section. Master AUDIO tracks present as
+--- one row per channel, ordered by tracks.track_index ASC (the channel
+--- slot is the track slot — same as how the resolver lays the master out;
+--- per Joe 2026-06-24). channel_index is 1-based for display. Iterator
+--- form so the renderer can `for ch in mc:iter_channels() do ... end`
+--- without a temporary array.
+function MasterClipInspectable:iter_channels()
+    local audio_tracks = Track.find_by_sequence(self.sequence_id, "AUDIO")
+    local i = 0
+    return function()
+        i = i + 1
+        local t = audio_tracks[i]
+        if not t then return nil end
+        return { channel_index = t.track_index, name = t.name }
+    end
 end
 
 function MasterClipInspectable:get_display_name()

@@ -154,10 +154,17 @@ local clip_sections = {
 -- lens (browser + source-viewer context). Reuses File section verbatim and
 -- a trimmed Source Range (omits sequence_start / duration — record-side
 -- concepts). Enable / Audio / Color are per-timeline-instance and excluded.
--- The Channels section lands in Phase 2 (see spec 012 + master-channel work).
+--
+-- Channels: kind='channel_list' is a non-flat section — repeating rows
+-- driven by MasterClipInspectable:iter_channels (one row per master AUDIO
+-- track, ordered by tracks.track_index ASC). Phase 2 is read-only display
+-- (track name + 1-based channel index). RenameTrack-from-inspector lands
+-- in Phase 3. The flat-fields renderer skips this kind; a dedicated
+-- channel_list_renderer mounts the rows on selection change.
 local master_clip_sections = {
     { name = "File",         schema = { fields = { FIELDS.name, FIELDS.media_id, FIELDS.offline, FIELDS.rate_display } } },
     { name = "Source Range", schema = { fields = { FIELDS.source_in, FIELDS.source_out, FIELDS.mark_in, FIELDS.mark_out, FIELDS.playhead_frame } } },
+    { name = "Channels",     kind = "channel_list" },
 }
 
 -- Sequence schema — viewport fields intentionally excluded per /analyze I1.

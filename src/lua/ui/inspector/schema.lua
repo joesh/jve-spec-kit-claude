@@ -63,27 +63,47 @@ function M.build(schema_id, content_layout, callbacks)
         local section_obj    = section_result.return_values.section
         local section_widget = section_result.return_values.section_widget
 
+        -- Section-kind dispatch. Flat-field sections (default) iterate
+        -- `section_def.schema.fields` and create a field widget per entry.
+        -- `kind = "channel_list"` is a non-flat section — rows are
+        -- repopulated on selection change by channel_list_renderer
+        -- (Phase 2b). Build leaves the section empty here; mount + select
+        -- bind the renderer once it lands. Other non-flat kinds will branch
+        -- here too. `iter_fields_for_schema` (search filter consumer) reads
+        -- `field_labels`, which stays empty for non-flat kinds — filter
+        -- still matches on section name.
+        local section_kind = section_def.kind or "flat_fields"
+        -- channel_list sections are built empty at this stage; rows are
+        -- populated at selection time by channel_list_renderer (Phase 2b).
+        -- Unknown kinds fail loud per FR-024.
+        assert(section_kind == "flat_fields" or section_kind == "channel_list",
+            string.format(
+                "schema.build: section %q declares unknown kind %q "
+                .. "(supported: flat_fields, channel_list)",
+                section_def.name, section_kind))
         local field_labels = {}
-        for _, f in ipairs(section_def.schema.fields) do
-            local entry = field_widget.create_field(section_widget, f, {
-                sequence = callbacks.sequence,
-                on_commit  = callbacks.on_commit,
-                on_error   = callbacks.on_error,
-                on_field_focused = callbacks.on_field_focused,
-                attach_row = function(row)
-                    assert(section_obj.addContentWidget,
-                        string.format("schema.build: section %q missing addContentWidget",
-                            section_def.name))
-                    local add_result = section_obj:addContentWidget(row)
-                    if type(add_result) == "table" and add_result.success == false then
-                        error(string.format(
-                            "schema.build: addContentWidget failed for field %q in section %q",
-                            f.key, section_def.name))
-                    end
-                end,
-            })
-            field_widgets[f.key] = entry
-            table.insert(field_labels, f.label)
+        if section_kind == "flat_fields" then
+            for _, f in ipairs(section_def.schema.fields) do
+                local entry = field_widget.create_field(section_widget, f, {
+                    sequence = callbacks.sequence,
+                    on_commit  = callbacks.on_commit,
+                    on_error   = callbacks.on_error,
+                    on_field_focused = callbacks.on_field_focused,
+                    attach_row = function(row)
+                        assert(section_obj.addContentWidget,
+                            string.format("schema.build: section %q missing addContentWidget",
+                                section_def.name))
+                        local add_result = section_obj:addContentWidget(row)
+                        if type(add_result) == "table" and add_result.success == false then
+                            error(string.format(
+                                "schema.build: addContentWidget failed for field %q in section %q",
+                                f.key, section_def.name))
+                        end
+                    end,
+                })
+                field_widgets[f.key] = entry
+                table.insert(field_labels, f.label)
+            end
         end
 
         qt_constants.LAYOUT.ADD_WIDGET(content_layout, section_widget)
@@ -112,6 +132,7 @@ function M.build(schema_id, content_layout, callbacks)
 
         table.insert(sections, {
             name         = section_def.name,
+            kind         = section_kind,
             section_obj  = section_obj,
             widget       = section_widget,
             field_labels = field_labels,

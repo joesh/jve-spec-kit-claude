@@ -74,9 +74,10 @@ Shape of each item in the list passed to `update_selection(items, source_panel_i
 | Field | Type | Purpose |
 |---|---|---|
 | `name` | string | section display name |
+| `kind` | enum | `"flat_fields"` (default) or `"channel_list"`. Flat sections build one field-widget per `schema.fields` entry. Non-flat sections leave the section empty at build and are populated by a dedicated renderer at selection time. `channel_list` is used by the master-clip Channels section — repeating rows driven by `MasterClipInspectable:iter_channels`. Unknown kinds fail loud per FR-024. |
 | `section_obj` | collapsible-section object | from `collapsible_section.create_section` |
 | `widget` | Qt widget | section container |
-| `field_names` | list<string> | labels (for search match) |
+| `field_names` | list<string> | labels (for search match) — empty for non-flat sections; search still matches on `name` |
 | `persisted_key` | string | `"inspector.section.<schema_id>.<section_name>.expanded"` (for PersistentWidget) |
 
 ### 2.5 `FieldWidget` (per field, per schema)
