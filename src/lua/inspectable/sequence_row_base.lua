@@ -42,16 +42,15 @@ end
 --- schema (or vice versa).
 function M.require_sequence_of_kind(sequence_id, expected_kind, caller)
     local record = M.require_sequence(sequence_id, caller)
-    assert(record.kind == expected_kind, string.format(
-        "%s: sequence %s is kind='%s'; this adapter requires kind='%s' "
-        .. "(use the other inspectable lens)",
-        caller, sequence_id, tostring(record.kind), expected_kind))
+    M.assert_kind(record, expected_kind, sequence_id, caller)
     return record
 end
 
 --- Asserts the kind of an already-in-hand sequence record. Used when
 --- the adapter accepts opts.sequence (already-loaded row) and must
---- still enforce the lens-duality contract before adopting it.
+--- still enforce the lens-duality contract before adopting it. Single
+--- source of truth for the kind-mismatch assert message — require_*_of_kind
+--- delegates here.
 function M.assert_kind(record, expected_kind, sequence_id, caller)
     assert(record.kind == expected_kind, string.format(
         "%s: sequence %s is kind='%s'; this adapter requires kind='%s' "
@@ -129,7 +128,7 @@ end
 --- Dispatch a field write: specialized command if `field` is in
 --- `specialized_map` (schema field → command name), else the generic
 --- SetSequenceMetadata. The command's payload-key comes from the
---- central COMMAND_PAYLOAD_KEY table — each command owns its own
+--- central SPECIALIZED_COMMAND_PAYLOAD_KEY table — each command owns its own
 --- payload contract; the base never repeats it per-adapter.
 function M.execute_sequence_field_set(self, field, payload_value, specialized_map)
     local command_name = specialized_map[field]

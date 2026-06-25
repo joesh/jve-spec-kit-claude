@@ -95,18 +95,6 @@ function ClipInspectable:_ensure_properties()
     return self._property_cache
 end
 
-local function format_rate_display(rate)
-    if type(rate) ~= "table" then return nil end
-    local num, den = rate.fps_numerator, rate.fps_denominator
-    if type(num) ~= "number" or type(den) ~= "number" or den == 0 then
-        return nil
-    end
-    if num % den == 0 then
-        return string.format("%d fps", math.floor(num / den + 0.5))
-    end
-    return string.format("%.3f fps", num / den)
-end
-
 function ClipInspectable:get(field)
     if not field or field == "" then
         return nil
@@ -116,7 +104,7 @@ function ClipInspectable:get(field)
     if field == "rate_display" then
         local clip_table = self.clip_ref
         if clip_table and clip_table.frame_rate then
-            return format_rate_display(clip_table.frame_rate)
+            return base.format_frame_rate_display(clip_table.frame_rate)
         end
     end
 
@@ -166,19 +154,8 @@ function ClipInspectable:get(field)
 end
 
 function ClipInspectable:set(field, value)
-    if not field or field == "" then
-        return false, "Field is required"
-    end
-
-    assert(type(value) == "table", string.format(
-        "ClipInspectable:set(%s): expected payload table {value, property_type[, default_value]}, got %s",
-        field, type(value)))
-    local payload_value = value.value
-    local property_type = value.property_type
-    local default_value = value.default_value
-
-    assert(property_type and property_type ~= "", string.format(
-        "ClipInspectable:set(%s): payload.property_type is required", field))
+    local payload_value, property_type, default_value =
+        base.unpack_payload("ClipInspectable", field, value)
 
     -- TIMECODE branch (012 Inspector rewrite, Q3 resolution): integer frames only;
     -- rate lives on the owning entity and is NEVER carried in the payload.
@@ -210,9 +187,8 @@ function ClipInspectable:set(field, value)
     end
 
     local result = command_manager.execute_interactive(cmd)
-    if not result.success then
-        return false, result.error_message or "unknown error"
-    end
+    local ok, err = base.unwrap_command_result("ClipInspectable:set", result)
+    if not ok then return false, err end
 
     if self.clip_ref then
         self.clip_ref[field] = payload_value

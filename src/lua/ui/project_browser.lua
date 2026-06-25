@@ -725,6 +725,11 @@ local function populate_tree()
         local sequence_info = {
             type = "timeline",
             id = sequence.id,
+            -- kind='sequence' is the lens-duality contract enforced by
+            -- SequenceInspectable.new (base.assert_kind). load_sequences
+            -- already filters WHERE kind='sequence' at SQL, so stamping
+            -- the constant here matches what the row carries.
+            kind = "sequence",
             project_id = sequence.project_id or project_id,
             name = sequence.name,
             frame_rate = sequence.frame_rate,

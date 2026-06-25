@@ -55,6 +55,7 @@ end
 function MasterClipInspectable:refresh()
     self._record = base.require_sequence_of_kind(
         self.sequence_id, MASTER_KIND, "MasterClipInspectable:refresh")
+    self._lazy_fill_succeeded = false
     self._primary_ref = Sequence.get_primary_media_ref(self.sequence_id)
 end
 
@@ -77,6 +78,24 @@ local SPECIALIZED_COMMANDS = {
     playhead_frame = "SetPlayhead",
 }
 
+-- Browser path (database.build_master_clip_entry) supplies the flat
+-- master-clip projection: id, kind, name, frame_rate, source_in/out, media
+-- — but NOT mark_in / mark_out / playhead_position. Lazy-load on first
+-- read of an absent record-side field so the inspector shows real values
+-- on first render. Symmetric with sequence.lua's lazy_fill_record (same
+-- "deliberately-nil vs partial-record" caveat tracked in
+-- todo_inspectable_lazy_fill_disconnect_silent_nil.md).
+local function lazy_fill_record(self, mapped_key)
+    if self._lazy_fill_succeeded then return end
+    if self._record[mapped_key] ~= nil then return end
+    local full = base.load_sequence(self.sequence_id)
+    if not full then return end
+    base.assert_kind(full, MASTER_KIND,
+        self.sequence_id, "MasterClipInspectable.lazy_fill_record")
+    self._record = full
+    self._lazy_fill_succeeded = true
+end
+
 function MasterClipInspectable:get(field)
     assert(field and field ~= "", "MasterClipInspectable:get: field required")
     if field == "name" then
@@ -84,7 +103,9 @@ function MasterClipInspectable:get(field)
     elseif field == "rate_display" then
         return base.format_frame_rate_display(self._record.frame_rate)
     elseif SEQUENCE_FIELD_MAP[field] then
-        return self._record[SEQUENCE_FIELD_MAP[field]]
+        local mapped = SEQUENCE_FIELD_MAP[field]
+        lazy_fill_record(self, mapped)
+        return self._record[mapped]
     end
     if field == "media_id" then
         return self._primary_ref and self._primary_ref.media_id

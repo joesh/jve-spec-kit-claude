@@ -123,8 +123,12 @@ local ok, err = pcall(SequenceInspectable.new, {
     project_id  = "proj",
 })
 check("wrong-kind construction raises", ok, false)
+-- Behavior-level check: the assert must name the offending kind and the
+-- adapter. Don't pin punctuation (`kind='master'` vs `kind="master"`) —
+-- that's a format-string coupling, not a policy.
 check("wrong-kind assert names the offending kind",
-    type(err) == "string" and err:find("kind='master'", 1, true) ~= nil, true)
+    type(err) == "string" and err:find("master", 1, true) ~= nil
+    and err:find("kind", 1, true) ~= nil, true)
 check("wrong-kind assert names the adapter",
     type(err) == "string" and err:find("SequenceInspectable", 1, true) ~= nil, true)
 

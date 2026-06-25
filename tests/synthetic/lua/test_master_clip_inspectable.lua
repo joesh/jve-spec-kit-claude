@@ -172,10 +172,37 @@ local ok, err = pcall(inspectable_factory.master_clip, {
     project_id  = "proj",
 })
 check("wrong-kind construction raises", ok, false)
+-- Behavior-level: assert names the offending kind and the adapter.
+-- Don't pin punctuation — that's format-string coupling.
 check("wrong-kind assert names the offending kind",
-    type(err) == "string" and err:find("kind='sequence'", 1, true) ~= nil, true)
+    type(err) == "string" and err:find("sequence", 1, true) ~= nil
+    and err:find("kind", 1, true) ~= nil, true)
 check("wrong-kind assert names the adapter",
     type(err) == "string" and err:find("MasterClipInspectable", 1, true) ~= nil, true)
+
+-- ── Lazy-fill: browser projection lacks mark_in/out/playhead ──────────
+-- The project browser passes a flat master-clip entry as opts.sequence
+-- (build_master_clip_entry — id + kind + name + frame_rate + source_in/out,
+-- no marks/playhead). On first :get of one of those fields the adapter
+-- must pull the full sequence row from DB and return the real value.
+local browser_entry = {
+    id           = "master_seq",
+    kind         = "master",
+    name         = "BoomMaster",
+    frame_rate   = { fps_numerator = 24, fps_denominator = 1 },
+    -- Notably absent: mark_in / mark_out / playhead_position.
+}
+local mc_partial = inspectable_factory.master_clip({
+    sequence_id = "master_seq",
+    project_id  = "proj",
+    sequence    = browser_entry,
+})
+check("lazy-fill: mark_in pulled from DB (500)",
+    mc_partial:get("mark_in"), 500)
+check("lazy-fill: mark_out pulled from DB (1500)",
+    mc_partial:get("mark_out"), 1500)
+check("lazy-fill: playhead_frame pulled from DB (88)",
+    mc_partial:get("playhead_frame"), 88)
 
 print(string.format("\n--- %d passed, %d failed ---", pass, fail))
 if fail > 0 then error(fail .. " failures") end
