@@ -20,6 +20,7 @@
 --- @file master_clip.lua
 local metadata_schemas = require("ui.metadata_schemas")
 local database         = require("core.database")
+local command_manager  = require("core.command_manager")
 local Sequence         = require("models.sequence")
 local Track            = require("models.track")
 local channel_names    = require("core.media.channel_names")
@@ -205,6 +206,43 @@ function MasterClipInspectable:iter_channels()
             track_id      = t.id,
         }
     end
+end
+
+--- Phase 3: rename a master AUDIO channel (a master track) through the
+--- inspector. Dispatches SetTrackName, which stores the override on the
+--- track row and emits track_name_changed + notify_track sequence-fanout —
+--- the latter is what wakes refresh_only_clean_fields → channel_list
+--- re-populate, so the new label appears in the row without a manual
+--- refresh. Clearing (empty/whitespace name) drops the override and the
+--- displayed label reverts to the derived form ('A<n>' / iXML / "").
+---
+--- Identity check (1.14): refuse a track that doesn't belong to this
+--- master sequence — that would be a routing bug at the call site, not
+--- a user-typo, and a silent dispatch would mutate the wrong row.
+function MasterClipInspectable:set_channel_name(track_id, name)
+    assert(type(track_id) == "string" and track_id ~= "",
+        "MasterClipInspectable:set_channel_name: track_id required")
+    assert(type(name) == "string",
+        "MasterClipInspectable:set_channel_name: name must be a string")
+    local track = Track.load(track_id)
+    assert(track, string.format(
+        "MasterClipInspectable:set_channel_name: track %s not found",
+        track_id))
+    assert(track.sequence_id == self.sequence_id, string.format(
+        "MasterClipInspectable:set_channel_name: track %s lives on "
+        .. "sequence %s, not on this master %s",
+        track_id, tostring(track.sequence_id), self.sequence_id))
+
+    local result = command_manager.execute_interactive("SetTrackName", {
+        track_id    = track_id,
+        name        = name,
+        sequence_id = self.sequence_id,
+        project_id  = self.project_id,
+    })
+    local ok, err = base.unwrap_command_result(
+        "MasterClipInspectable:set_channel_name", result)
+    if not ok then return false, err end
+    return true
 end
 
 function MasterClipInspectable:get_display_name()

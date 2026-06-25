@@ -169,10 +169,15 @@ Section: Source Range               (kind = flat_fields)
 Section: Channels                   (kind = channel_list — non-flat)
   Source: MasterClipInspectable:iter_channels (one row per master AUDIO
   track, ordered by tracks.track_index ASC).
-  Row: channel_index (1-based) + resolved name (track.name override →
-  iXML TRACK_LIST probe → "" — all done at the model layer; the renderer
-  never sees nil). Read-only in Phase 2; Phase 3 rewires the name row to
-  a RenameTrack edit through inspectable:set.
+  Row: channel_index (1-based) + resolved name + track_id (stable
+  identity for edits). Name resolution at the model layer:
+    channel-backed → track.name override → iXML TRACK_LIST probe → ""
+    non-channel-backed → track.name override → "A<n>" abbreviated
+  The renderer never sees nil. Phase 3: the name cell rewires to
+  MasterClipInspectable:set_channel_name(track_id, name) → SetTrackName
+  (per-sequence undoable; clearing the name drops the override).
+  Track identity is carried explicitly because rows are addressed by
+  track_id, not by a flat-field key.
 ```
 
 **Section-kind dispatch (FR-024)**: each section declares a `kind`:

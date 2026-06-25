@@ -286,6 +286,52 @@ local ok_getf = pcall(metadata_schemas.get_field, "master_clip", "name")
 check("get_field('master_clip', 'name') does not crash on Channels",
     ok_getf, true)
 
+-- ── Phase 3: per-channel rename through inspector ────────────────────
+-- set_channel_name dispatches SetTrackName via command_manager. Black-box:
+-- after a successful rename, the channel row's name in iter_channels
+-- reflects the new override; clearing reverts to the derived label.
+local command_manager = require("core.command_manager")
+-- A bare record sequence so command_manager.init has a valid active edit
+-- target (it refuses kind='master' per FR-005). set_channel_name dispatches
+-- with the master's own sequence_id anyway — the master-channel rename
+-- lives on the master's undo stack, not the record's.
+db:exec(string.format([[
+    INSERT INTO sequences
+        (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
+         width, height, playhead_frame, view_start_frame, view_duration_frames,
+         mark_in_frame, mark_out_frame, start_timecode_frame,
+         video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
+         created_at, modified_at)
+    VALUES
+        ('rec_seq', 'proj', 'Edit', 'sequence', 24, 1, 48000,
+         1920, 1080, 0, 0, 1000, NULL, NULL, 0, 0, 0, 0.5, %d, %d);
+]], now, now))
+command_manager.init("rec_seq", "proj")
+
+local ok_set = mc:set_channel_name("mtrack_a4", "Stereo Mix")
+check("set_channel_name returns true on success", ok_set, true)
+
+local renamed = {}
+for ch in mc:iter_channels() do table.insert(renamed, ch) end
+check("after rename, channel[4].name == 'Stereo Mix' (was nameless)",
+    renamed[4].name, "Stereo Mix")
+
+-- Clearing the override reverts to the derived label (empty string here —
+-- file unprobeable). SetTrackName normalises "" → NULL.
+mc:set_channel_name("mtrack_a4", "")
+local cleared = {}
+for ch in mc:iter_channels() do table.insert(cleared, ch) end
+check("after clear, channel[4].name reverts to '' (nameless fallback)",
+    cleared[4].name, "")
+
+-- Wrong-master refusal: track on a different sequence must not be
+-- rename-able through this inspectable. Fail-fast per 1.14.
+local ok_wrong, wrong_err = pcall(mc.set_channel_name, mc, "vmaster_v1", "X")
+check("set_channel_name refuses track belonging to a different sequence",
+    ok_wrong, false)
+check("refusal message names the offending sequence",
+    type(wrong_err) == "string" and wrong_err:find("vmaster", 1, true) ~= nil, true)
+
 -- ── Zero-AUDIO master: VIDEO-only iteration ───────────────────────────
 db:exec(string.format([[
     INSERT INTO sequences

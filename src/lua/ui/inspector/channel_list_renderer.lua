@@ -3,7 +3,7 @@
 -- Populates a `kind='channel_list'` section (built empty by schema.lua)
 -- with one row per master AUDIO channel, ordered by tracks.track_index ASC.
 -- The data source is `inspectable:iter_channels()` — yielding rows of
--- `{channel_index, name}` (see MasterClipInspectable:iter_channels).
+-- `{channel_index, name, track_id}` (see MasterClipInspectable:iter_channels).
 --
 -- Lifecycle (widget-pool reuse, per spec 012 Q2 — no rent/return):
 --   * pool[i] is the i-th visible row at populate time — NOT the
@@ -15,14 +15,17 @@
 --     count ever seen on this schema_view.
 --   * The pool lives on `section_view._channel_pool` (created on first
 --     call). Memory is bounded by max-channels-ever-seen.
---   * Phase 3 note: edit handlers must key off ch.track_id (stable
---     Track identity) — channel_index/slot are positional ordinals
---     that shift on reorder. iter_channels already yields track_id.
 --
--- This renderer is read-only in Phase 2; Phase 3 rewires each row to
--- a RenameTrack edit through inspectable:set.
+-- Phase 3: each row's name is an editable QLineEdit. On editingFinished
+-- (Enter or focus-out), if the user actually changed the text, the row
+-- dispatches MasterClipInspectable:set_channel_name(track_id, new_text)
+-- → SetTrackName (undoable; clearing the text drops the override and
+-- the displayed label reverts to the derived form). The textChanged →
+-- editingFinished dirty-gate matches field_widget's pattern so a
+-- populate-time SET_TEXT never round-trips as a phantom rename.
 
 local qt_constants  = require("core.qt_constants")
+local qt_signals    = require("core.qt_signals")
 local ui_constants  = require("core.ui_constants")
 local log           = require("core.logger").for_area("ui")
 
@@ -51,18 +54,55 @@ local function build_row(section_obj)
         qt_constants.PROPERTIES.ALIGN_RIGHT)
     qt_constants.LAYOUT.ADD_WIDGET(layout, index_label)
 
-    local name_label = qt_constants.WIDGET.CREATE_LABEL("")
-    assert(name_label, "channel_list_renderer: CREATE_LABEL (name) returned nil")
-    qt_constants.PROPERTIES.SET_STYLE(name_label, ui_constants.STYLES.FIELD_LABEL)
-    qt_constants.LAYOUT.ADD_WIDGET(layout, name_label)
-    qt_constants.LAYOUT.SET_STRETCH_FACTOR(layout, name_label, 1)
+    local name_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
+    assert(name_edit, "channel_list_renderer: CREATE_LINE_EDIT returned nil")
+    qt_constants.PROPERTIES.SET_STYLE(name_edit, ui_constants.STYLES.STRING_FIELD)
+    qt_constants.LAYOUT.ADD_WIDGET(layout, name_edit)
+    qt_constants.LAYOUT.SET_STRETCH_FACTOR(layout, name_edit, 1)
+
+    -- entry shape: identity (track_id, inspectable) is rebound by populate
+    -- on each selection; the closures here read the LIVE values so wiring
+    -- once at build is correct. _programmatic suppresses dirty during
+    -- populate's SET_TEXT (no phantom commit on every selection swap).
+    local entry = {
+        widget       = row,
+        index_label  = index_label,
+        name_edit    = name_edit,
+        dirty        = false,
+        _programmatic = false,
+        track_id     = nil,
+        inspectable  = nil,
+    }
+
+    local text_conn = qt_signals.connect(name_edit, "textChanged", function()
+        if entry._programmatic then return end
+        entry.dirty = true
+    end)
+    assert(text_conn, "channel_list_renderer: textChanged connect failed")
+
+    local commit_conn = qt_signals.connect(name_edit, "editingFinished", function()
+        if entry._programmatic then return end
+        if not entry.dirty then return end
+        entry.dirty = false
+        local text = qt_constants.PROPERTIES.GET_TEXT(name_edit) or ""
+        assert(entry.inspectable and entry.track_id, string.format(
+            "channel_list_renderer: row committed without bound identity "
+            .. "(track_id=%s, inspectable=%s)",
+            tostring(entry.track_id), tostring(entry.inspectable)))
+        local ok, err = entry.inspectable:set_channel_name(entry.track_id, text)
+        if not ok then
+            log.warn("channel_list_renderer: set_channel_name failed: %s",
+                tostring(err))
+        end
+    end)
+    assert(commit_conn, "channel_list_renderer: editingFinished connect failed")
 
     local add_result = section_obj:addContentWidget(row)
     if type(add_result) == "table" and add_result.success == false then
         error("channel_list_renderer: addContentWidget failed for channel row")
     end
 
-    return { widget = row, index_label = index_label, name_label = name_label }
+    return entry
 end
 
 --- Populate section_view's channel-list section from inspectable:iter_channels.
@@ -84,15 +124,24 @@ function M.populate(section_view, inspectable)
     local n = 0
     for ch in inspectable:iter_channels() do
         n = n + 1
-        assert(type(ch) == "table" and ch.channel_index and ch.name,
+        assert(type(ch) == "table" and ch.channel_index and ch.name and ch.track_id,
             string.format("channel_list_renderer: iter_channels row %d malformed", n))
         local row = pool[n]
         if not row then
             row = build_row(section_view.section_obj)
             pool[n] = row
         end
+        -- Rebind identity for the editingFinished closure on every populate;
+        -- the row widget persists across selection swaps but the underlying
+        -- master/track changes. _programmatic guards textChanged so the
+        -- SET_TEXT below doesn't flip dirty and stage a phantom rename.
+        row.track_id      = ch.track_id
+        row.inspectable   = inspectable
+        row._programmatic = true
         qt_constants.PROPERTIES.SET_TEXT(row.index_label, tostring(ch.channel_index))
-        qt_constants.PROPERTIES.SET_TEXT(row.name_label, ch.name)
+        qt_constants.PROPERTIES.SET_TEXT(row.name_edit, ch.name)
+        row._programmatic = false
+        row.dirty         = false
         qt_constants.DISPLAY.SET_VISIBLE(row.widget, true)
     end
 
