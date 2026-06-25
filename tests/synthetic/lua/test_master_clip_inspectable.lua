@@ -144,6 +144,39 @@ check("watcher_keys has 1 entry", #keys, 1)
 check("watcher_keys[1] keys off master_clip:<id>",
     keys[1], "master_clip:master_seq")
 
+-- ── Fail-fast: refusing the wrong lens ────────────────────────────────
+-- A user can't end up with a MasterClipInspectable over a record sequence
+-- (kind='sequence') — the dispatcher in source_viewer.publish_staged
+-- routes by kind. If something upstream ever leaks the wrong row, the
+-- adapter must refuse loudly rather than render the master-clip schema
+-- over record-sequence data. Exercise that fail-fast via pcall so the
+-- message is part of the regression contract (ENGINEERING.md 2.32).
+local ok_rec = db:exec(string.format([[
+    INSERT INTO sequences
+        (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
+         width, height, playhead_frame, view_start_frame, view_duration_frames,
+         mark_in_frame, mark_out_frame, start_timecode_frame,
+         video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
+         created_at, modified_at)
+    VALUES
+        ('record_seq', 'proj', 'RecSeq', 'sequence', 24, 1, 48000,
+         1920, 1080, 0, 0, 300,
+         NULL, NULL, 0,
+         0, 0, 0.5,
+         %d, %d);
+]], now, now))
+assert(ok_rec, "fixture: failed to insert record sequence: " .. tostring(db:last_error()))
+
+local ok, err = pcall(inspectable_factory.master_clip, {
+    sequence_id = "record_seq",
+    project_id  = "proj",
+})
+check("wrong-kind construction raises", ok, false)
+check("wrong-kind assert names the offending kind",
+    type(err) == "string" and err:find("kind='sequence'", 1, true) ~= nil, true)
+check("wrong-kind assert names the adapter",
+    type(err) == "string" and err:find("MasterClipInspectable", 1, true) ~= nil, true)
+
 print(string.format("\n--- %d passed, %d failed ---", pass, fail))
 if fail > 0 then error(fail .. " failures") end
 print("✅ test_master_clip_inspectable.lua passed")

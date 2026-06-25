@@ -45,22 +45,18 @@ function M.validate_timecode(caller, field, payload_value)
 end
 
 --- Dispatch a field write: specialized command if `field` is in
---- `specialized_map` (key→command name), else the generic
---- SetSequenceMetadata. `playhead_frame` routes the payload through the
---- `playhead_position` param name; all other specialized fields use `frame`.
---- Returns the raw command result table.
-function M.execute_sequence_field_set(self, field, payload_value, specialized_map, caller)
-    if specialized_map[field] then
-        local params = {
-            sequence_id = self.sequence_id,
-            project_id  = self.project_id,
-        }
-        if field == "playhead_frame" then
-            params.playhead_position = payload_value
-        else
-            params.frame = payload_value
-        end
-        return command_manager.execute_interactive(specialized_map[field], params)
+--- `specialized_map`, else the generic SetSequenceMetadata. Each
+--- specialized entry carries `{command, param}` — the param name
+--- (`frame`, `playhead_position`, etc.) is the command's payload key.
+--- The base never branches on caller-domain field names.
+function M.execute_sequence_field_set(self, field, payload_value, specialized_map)
+    local spec = specialized_map[field]
+    if spec then
+        return command_manager.execute_interactive(spec.command, {
+            sequence_id  = self.sequence_id,
+            project_id   = self.project_id,
+            [spec.param] = payload_value,
+        })
     end
     return command_manager.execute_interactive("SetSequenceMetadata", {
         sequence_id = self.sequence_id,

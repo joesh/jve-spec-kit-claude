@@ -70,9 +70,9 @@ local SEQUENCE_FIELD_MAP = {
 }
 
 local SPECIALIZED_COMMANDS = {
-    mark_in        = "SetMarkIn",
-    mark_out       = "SetMarkOut",
-    playhead_frame = "SetPlayhead",
+    mark_in        = { command = "SetMarkIn",   param = "frame"             },
+    mark_out       = { command = "SetMarkOut",  param = "frame"             },
+    playhead_frame = { command = "SetPlayhead", param = "playhead_position" },
 }
 
 function MasterClipInspectable:get(field)
@@ -119,7 +119,7 @@ function MasterClipInspectable:set(field, value)
     end
 
     local result = base.execute_sequence_field_set(
-        self, field, payload_value, SPECIALIZED_COMMANDS, "MasterClipInspectable")
+        self, field, payload_value, SPECIALIZED_COMMANDS)
 
     assert(type(result) == "table",
         "MasterClipInspectable:set: execute returned non-table")

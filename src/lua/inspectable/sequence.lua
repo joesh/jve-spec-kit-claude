@@ -17,16 +17,13 @@ function SequenceInspectable.new(opts)
     local self = setmetatable({}, SequenceInspectable)
     self.sequence_id = opts.sequence_id
     self.project_id = opts.project_id
-    -- Stub fallback: the browser's database.load_sequences() may pass a
-    -- partial record (id + name + frame_rate + width + height); the
-    -- inspector reads other fields lazily (lazy_fill_record below). When
-    -- there's no live DB and no caller-supplied record, the stub keeps
-    -- :get_display_name() viable for the empty-projects path. Production
-    -- selection paths always reach Sequence.load successfully.
-    self._record = opts.sequence or base.load_sequence(opts.sequence_id) or {
-        id = opts.sequence_id,
-        project_id = self.project_id
-    }
+    -- Browser's database.load_sequences() may pass a partial record (id +
+    -- name + frame_rate + width + height); lazy_fill_record below pulls
+    -- the rest on first miss. Selection paths that don't pre-load pass
+    -- only sequence_id + project_id and rely on Sequence.load here.
+    self._record = opts.sequence or base.load_sequence(opts.sequence_id)
+    assert(self._record, string.format(
+        "SequenceInspectable.new: sequence %s not found", opts.sequence_id))
     return self
 end
 
@@ -36,7 +33,10 @@ end
 
 function SequenceInspectable:refresh()
     local reloaded = base.load_sequence(self.sequence_id)
-    if reloaded then self._record = reloaded end
+    assert(reloaded, string.format(
+        "SequenceInspectable:refresh: sequence %s vanished from the DB",
+        self.sequence_id))
+    self._record = reloaded
 end
 
 -- Schema field keys are SQL column names (so SetSequenceMetadata's whitelist
@@ -52,9 +52,9 @@ local COLUMN_TO_MODEL_FIELD = {
 }
 
 local SPECIALIZED_COMMANDS = {
-    mark_in_frame  = "SetMarkIn",
-    mark_out_frame = "SetMarkOut",
-    playhead_frame = "SetPlayhead",
+    mark_in_frame  = { command = "SetMarkIn",   param = "frame"             },
+    mark_out_frame = { command = "SetMarkOut",  param = "frame"             },
+    playhead_frame = { command = "SetPlayhead", param = "playhead_position" },
 }
 
 -- The browser's database.load_sequences() builds a minimal record (id, name,
@@ -94,7 +94,7 @@ function SequenceInspectable:set(field, value)
     end
 
     local result = base.execute_sequence_field_set(
-        self, field, payload_value, SPECIALIZED_COMMANDS, "SequenceInspectable")
+        self, field, payload_value, SPECIALIZED_COMMANDS)
 
     assert(type(result) == "table",
         "SequenceInspectable:set: execute returned non-table")

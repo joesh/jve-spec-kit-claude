@@ -18,6 +18,17 @@ local function resolve_db()
     return conn
 end
 
+-- Soft variant for read paths that must distinguish "no DB" (test
+-- fixtures with no live connection, browser-load before open_project)
+-- from "row not present" (a real query miss). Returns nil on no-DB
+-- instead of raising. Used by Sequence.load — see its `if not conn`
+-- branch. (database.get_connection() itself asserts, so we gate on
+-- has_connection() first.)
+local function try_resolve_db()
+    if not database.has_connection() then return nil end
+    return database.get_connection()
+end
+
 local function validate_frame_rate(val)
     if type(val) == "number" and val > 0 then
         return { fps_numerator = math.floor(val), fps_denominator = 1 } -- Simple integer rate
@@ -176,7 +187,7 @@ end
 function Sequence.load(id)
     assert(id and id ~= "", "Sequence.load: id is required")
 
-    local conn = resolve_db()
+    local conn = try_resolve_db()
     if not conn then
         return nil
     end
