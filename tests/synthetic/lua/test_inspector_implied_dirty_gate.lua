@@ -44,8 +44,13 @@ local function make_ui_state(opts)
             set_mixed     = function(self, m) self.mixed = m end,
         }
     end
+    -- Sections is the real shape's list of SectionView records; load_single
+    -- iterates it to populate non-flat sections (channel_list, etc.). The
+    -- dirty-gate test only exercises flat fields, so an empty list satisfies
+    -- the contract without faking section records.
     local schema_view = {
         field_widgets = field_widgets,
+        sections      = {},
     }
     return {
         mode                  = opts.mode or "single",

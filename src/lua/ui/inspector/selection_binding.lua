@@ -9,10 +9,11 @@
 --   compute_mode, compute_active_schema, resolve_inspectables,
 --   detect_mixed_values.
 
-local inspectable_factory = require("inspectable")
-local command_manager     = require("core.command_manager")
-local qt_constants        = require("core.qt_constants")
-local log                 = require("core.logger").for_area("ui")
+local inspectable_factory     = require("inspectable")
+local command_manager         = require("core.command_manager")
+local qt_constants            = require("core.qt_constants")
+local channel_list_renderer   = require("ui.inspector.channel_list_renderer")
+local log                     = require("core.logger").for_area("ui")
 
 local M = {}
 
@@ -303,10 +304,19 @@ local function set_header(ui_state, text)
     end
 end
 
+local function populate_non_flat_sections(schema_view, inspectable)
+    for _, section in ipairs(schema_view.sections) do
+        if section.kind == "channel_list" then
+            channel_list_renderer.populate(section, inspectable)
+        end
+    end
+end
+
 local function load_single(schema_view, inspectable)
     for key, entry in pairs(schema_view.field_widgets) do
         entry:set_value(inspectable:get(key))
     end
+    populate_non_flat_sections(schema_view, inspectable)
 end
 
 local function load_multi(schema_view, inspectables)
