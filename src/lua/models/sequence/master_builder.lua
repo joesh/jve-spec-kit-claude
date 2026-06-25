@@ -20,6 +20,7 @@
 --- because install runs after models.sequence finishes loading).
 
 local database = require("core.database")
+local watchers = require("core.watchers")
 local log = require("core.logger").for_area("media")
 
 local function resolve_db()
@@ -576,6 +577,10 @@ function Sequence.batch_set_master_start_tc(rows)
                 "Sequence.batch_set_master_start_tc: exec upd_no_ph failed")
             upd_no_ph:reset()
         end
+        -- TC-shifting relink mutates sequences row; emit so an open
+        -- Inspector on this master sees the new playhead_frame /
+        -- start_timecode_frame (MasterClipInspectable watches "sequence:<id>").
+        watchers.notify_sequence(r.sequence_id)
     end
     upd_with_ph:finalize()
     upd_no_ph:finalize()
@@ -599,6 +604,9 @@ function Sequence.batch_restore_master_start_tc(rows)
         assert(stmt:exec(),
             "Sequence.batch_restore_master_start_tc: exec failed")
         stmt:reset()
+        -- Symmetric with batch_set_master_start_tc: undo also mutates
+        -- the sequence row; emit so the Inspector sees the restored TC.
+        watchers.notify_sequence(r.sequence_id)
     end
     stmt:finalize()
 end

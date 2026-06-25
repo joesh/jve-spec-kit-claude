@@ -15,8 +15,9 @@
 --     count ever seen on this schema_view.
 --   * The pool lives on `section_view._channel_pool` (created on first
 --     call). Memory is bounded by max-channels-ever-seen.
---   * Phase 3 note: when per-row edits land, store ch.channel_index
---     on the row entry so edit handlers reference identity, not slot.
+--   * Phase 3 note: edit handlers must key off ch.track_id (stable
+--     Track identity) — channel_index/slot are positional ordinals
+--     that shift on reorder. iter_channels already yields track_id.
 --
 -- This renderer is read-only in Phase 2; Phase 3 rewires each row to
 -- a RenameTrack edit through inspectable:set.

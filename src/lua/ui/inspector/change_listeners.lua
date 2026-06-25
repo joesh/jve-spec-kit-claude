@@ -21,10 +21,20 @@ local function on_entity_mutated(ui_state)
         if #ui_state.active_inspectables == 0 then return end
 
         -- PERFORMANCE (FU-8 optimization): Ignore sequence playhead updates
-        -- when we are only inspecting clips. Scrubbing persists the playhead
-        -- to the DB every 200ms, but this doesn't change clip metadata.
+        -- when the active schema doesn't surface a live playhead value.
+        -- Scrubbing persists the playhead every ~200ms via notify_sequence
+        -- with kind="playhead". Neither the clip schema nor the master_clip
+        -- schema displays it as a hot value: clip has no playhead field;
+        -- master_clip exposes playhead_frame read-only, where a 200ms lag
+        -- to the next non-playhead refresh is fine. Critically, master_clip
+        -- subscribes to "sequence:<id>" (Phase 2 pass-1 watcher-key fix),
+        -- so without this guard scrubbing a master in the source viewer
+        -- would re-run iter_channels (N DB hits) at 5Hz. Sequence schema
+        -- DOES surface playhead_frame as an interactive field — it must
+        -- still refresh.
         if event_data and event_data.kind == "playhead" then
-            if ui_state.active_schema_id == "clip" then
+            if ui_state.active_schema_id == "clip"
+                or ui_state.active_schema_id == "master_clip" then
                 return
             end
         end

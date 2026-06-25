@@ -213,15 +213,24 @@ function metadata_schemas.get_sections(schema_id)
     return sections
 end
 
+-- Both flat-field walkers skip non-flat sections (kind ~= 'flat_fields').
+-- channel_list and any future non-flat kind have no `schema.fields`;
+-- indexing it crashes. Mirrors the dispatch in ui.inspector.schema.build.
+local function section_is_flat(section)
+    return (section.kind or "flat_fields") == "flat_fields"
+end
+
 function metadata_schemas.get_field(schema_id, field_key)
     assert(schema_id ~= nil, "metadata_schemas.get_field: schema_id is nil")
     assert(field_key ~= nil and field_key ~= "",
         "metadata_schemas.get_field: field_key is nil or empty")
     local sections = metadata_schemas.get_sections(schema_id)
     for _, section in ipairs(sections) do
-        for _, f in ipairs(section.schema.fields) do
-            if f.key == field_key then
-                return f
+        if section_is_flat(section) then
+            for _, f in ipairs(section.schema.fields) do
+                if f.key == field_key then
+                    return f
+                end
             end
         end
     end
@@ -232,8 +241,10 @@ function metadata_schemas.iter_fields_for_schema(schema_id)
     local sections = metadata_schemas.get_sections(schema_id)
     local flat = {}
     for _, section in ipairs(sections) do
-        for _, f in ipairs(section.schema.fields) do
-            table.insert(flat, f)
+        if section_is_flat(section) then
+            for _, f in ipairs(section.schema.fields) do
+                table.insert(flat, f)
+            end
         end
     end
     local i = 0

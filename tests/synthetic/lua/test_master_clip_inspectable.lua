@@ -63,14 +63,17 @@ db:exec(string.format([[
 -- NOT show up in the Channels listing. Insertion order is shuffled relative
 -- to track_index so iter_channels' ORDER BY track_index ASC contract is
 -- actually exercised.
--- Four master AUDIO tracks (one per channel) + one VIDEO track that must
--- NOT show up in the Channels listing. Insertion order is shuffled relative
--- to track_index so iter_channels' ORDER BY track_index ASC contract is
--- actually exercised. mtrack_a4 has name=NULL — the synced-master case
--- (channel-backed tracks carry no user name; display layer derives from
--- iXML or falls back to abbreviated A4). The fixture media file doesn't
--- exist on disk, so channel_names.get returns nil cleanly under the
--- luajit harness, exercising the "" fallback path in track_header_label.
+-- Five master tracks exercising every domain shape iter_channels handles:
+--   v1 (VIDEO)         — must NOT appear in Channels (AUDIO-only iteration)
+--   a1 "L" + mref      — channel-backed, user-named override
+--   a2 "Boom" + mref   — channel-backed, user-named override
+--   a3 "Lav" + mref    — channel-backed, user-named override
+--   a4 NULL + mref     — channel-backed, NO user name; file unprobeable
+--                        on disk so iXML probe returns nil → "" fallback
+--   a5 NULL, no mref   — non-channel-backed (no media_ref carrying
+--                        source_channel); resolver returns "A5"
+-- Insertion order is shuffled relative to track_index so iter_channels'
+-- ORDER BY track_index ASC contract is exercised.
 local ok_tr = db:exec([[
     INSERT INTO tracks
         (id, sequence_id, name, track_type, track_index, enabled, muted, soloed,
@@ -80,7 +83,8 @@ local ok_tr = db:exec([[
         ('mtrack_v1', 'master_seq', 'Picture', 'VIDEO', 1, 1, 0, 0, 0, 'off', 1),
         ('mtrack_a1', 'master_seq', 'L', 'AUDIO', 1, 1, 0, 0, 0, 'off', 1),
         ('mtrack_a3', 'master_seq', 'Lav', 'AUDIO', 3, 1, 0, 0, 0, 'off', 1),
-        ('mtrack_a4', 'master_seq', NULL, 'AUDIO', 4, 1, 0, 0, 0, 'off', 1);
+        ('mtrack_a4', 'master_seq', NULL, 'AUDIO', 4, 1, 0, 0, 0, 'off', 1),
+        ('mtrack_a5', 'master_seq', NULL, 'AUDIO', 5, 1, 0, 0, 0, 'off', 1);
 ]])
 assert(ok_tr, "tracks insert failed: " .. tostring(db:last_error()))
 -- Every master AUDIO track is channel-backed (it owns one channel of an
@@ -170,14 +174,17 @@ check("get_display_name() == sequence.name",
 check("supports_multi_edit() == false",
     mc:supports_multi_edit(), false)
 
--- watcher keys: master IS-A sequence row, listen on "sequence:<id>" — the
--- key notify_sequence emits and that notify_track's sequence-fanout fires
--- on every track mutation. "master_clip:" prefix has no emitter anywhere.
+-- watcher keys: master IS-A sequence row, listen on "sequence:<id>"
+-- (notify_sequence + track-fanout) AND on "media:<media_id>" so the
+-- "offline" projection refreshes when notify_media fires.
 local keys = mc:get_watcher_keys()
+local key_set = {}
+for _, k in ipairs(keys) do key_set[k] = true end
 check("watcher_keys is a table",   type(keys) == "table", true)
-check("watcher_keys has 1 entry", #keys, 1)
-check("watcher_keys[1] uses 'sequence:' prefix (the key the model emits)",
-    keys[1], "sequence:master_seq")
+check("watcher_keys subscribes to 'sequence:<id>'",
+    key_set["sequence:master_seq"], true)
+check("watcher_keys subscribes to 'media:<primary_media_id>'",
+    key_set["media:media_boom"], true)
 
 -- ── Fail-fast: refusing the wrong lens ────────────────────────────────
 -- A user can't end up with a MasterClipInspectable over a record sequence
@@ -223,19 +230,23 @@ local channels = {}
 for ch in mc:iter_channels() do
     table.insert(channels, ch)
 end
-check("iter_channels yields 4 AUDIO rows (VIDEO excluded)", #channels, 4)
+check("iter_channels yields 5 AUDIO rows (VIDEO excluded)", #channels, 5)
 check("channel[1].channel_index == 1",  channels[1].channel_index, 1)
-check("channel[1].name == 'L' (track_index=1)", channels[1].name, "L")
+check("channel[1].name == 'L' (channel-backed, user-named)", channels[1].name, "L")
+check("channel[1].track_id == 'mtrack_a1' (identity for Phase 3 edits)",
+    channels[1].track_id, "mtrack_a1")
 check("channel[2].channel_index == 2",  channels[2].channel_index, 2)
-check("channel[2].name == 'Boom' (track_index=2)", channels[2].name, "Boom")
+check("channel[2].name == 'Boom'", channels[2].name, "Boom")
 check("channel[3].channel_index == 3",  channels[3].channel_index, 3)
-check("channel[3].name == 'Lav' (track_index=3)", channels[3].name, "Lav")
--- channel-backed track with name=NULL + no iXML probe-able file: the
--- display layer must yield a string (the model contract: name is always
--- present at the inspectable boundary, even if the resolution is "").
+check("channel[3].name == 'Lav'",  channels[3].name, "Lav")
+-- channel-backed track with name=NULL + no iXML probe-able file → "".
 check("channel[4].channel_index == 4",  channels[4].channel_index, 4)
-check("channel[4].name is a string (nameless channel-backed resolved)",
-    type(channels[4].name), "string")
+check("channel[4].name == '' (channel-backed, no name, no iXML)",
+    channels[4].name, "")
+-- non-channel-backed track (no media_ref) + name=NULL → abbreviated "A5".
+check("channel[5].channel_index == 5",  channels[5].channel_index, 5)
+check("channel[5].name == 'A5' (non-channel-backed, no name → abbreviated)",
+    channels[5].name, "A5")
 
 -- ── Lazy-fill: browser projection lacks mark_in/out/playhead ──────────
 -- The project browser passes a flat master-clip entry as opts.sequence
@@ -260,6 +271,49 @@ check("lazy-fill: mark_out pulled from DB (1500)",
     mc_partial:get("mark_out"), 1500)
 check("lazy-fill: playhead_frame pulled from DB (88)",
     mc_partial:get("playhead_frame"), 88)
+
+-- ── iter_fields_for_schema('master_clip') must not crash ──────────────
+-- The Channels section has no schema.fields (kind='channel_list'). The
+-- generic flat-field walker (used by search filter + any per-field UI
+-- iterator) must skip non-flat sections, not crash on nil indexing.
+local metadata_schemas = require("ui.metadata_schemas")
+local ok_iter = pcall(function()
+    for _ in metadata_schemas.iter_fields_for_schema("master_clip") do end
+end)
+check("iter_fields_for_schema('master_clip') does not crash on Channels",
+    ok_iter, true)
+local ok_getf = pcall(metadata_schemas.get_field, "master_clip", "name")
+check("get_field('master_clip', 'name') does not crash on Channels",
+    ok_getf, true)
+
+-- ── Zero-AUDIO master: VIDEO-only iteration ───────────────────────────
+db:exec(string.format([[
+    INSERT INTO sequences
+        (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
+         width, height, playhead_frame, view_start_frame, view_duration_frames,
+         mark_in_frame, mark_out_frame, start_timecode_frame,
+         video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
+         created_at, modified_at)
+    VALUES
+        ('vmaster', 'proj', 'VideoOnly', 'master', 24, 1, NULL,
+         1920, 1080, 0, 0, 100,
+         NULL, NULL, 0,
+         0, 0, 0.5,
+         %d, %d);
+]], now, now))
+db:exec([[
+    INSERT INTO tracks
+        (id, sequence_id, name, track_type, track_index, enabled, muted, soloed,
+         locked, sync_mode, autoselect)
+    VALUES
+        ('vmaster_v1', 'vmaster', 'Picture', 'VIDEO', 1, 1, 0, 0, 0, 'off', 1);
+]])
+local mc_v = inspectable_factory.master_clip({
+    sequence_id = "vmaster", project_id = "proj",
+})
+local v_channels = {}
+for ch in mc_v:iter_channels() do table.insert(v_channels, ch) end
+check("zero-AUDIO master: iter_channels yields 0 rows", #v_channels, 0)
 
 print(string.format("\n--- %d passed, %d failed ---", pass, fail))
 if fail > 0 then error(fail .. " failures") end
