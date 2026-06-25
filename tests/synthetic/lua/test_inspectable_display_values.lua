@@ -69,6 +69,7 @@ check("schema has clip.rate_display",
 local fake_seq = {
     id                    = "s1",
     project_id            = "p1",
+    kind                  = "sequence",
     name                  = "TestSeq",
     frame_rate            = { fps_numerator = 30000, fps_denominator = 1001 },
     audio_sample_rate     = 48000,
@@ -107,7 +108,7 @@ check("sequence.mark_out_frame (→ mark_out)",
 
 -- Integer frame rate renders without decimals.
 local fake_seq_24 = {
-    id = "s2", project_id = "p1", name = "S2",
+    id = "s2", project_id = "p1", kind = "sequence", name = "S2",
     frame_rate = { fps_numerator = 24, fps_denominator = 1 },
     audio_sample_rate = 48000, width = 1920, height = 1080,
     playhead_position = 0, viewport_start_time = 0, viewport_duration = 0,

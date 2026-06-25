@@ -1,8 +1,8 @@
 --- MasterClipInspectable: the master-clip lens onto a `sequences.kind='master'`
 --- row. A master sequence and a master clip are the SAME database row
---- (database.lua:1649 "master IS-a"); this adapter presents it through
---- the Resolve-style master-clip schema (file metadata + source range +
---- channels in Phase 2) instead of the sequence-of-tracks schema.
+--- (`database.build_master_clip_entry` "master IS-a"); this adapter presents
+--- it through the Resolve-style master-clip schema (file metadata + source
+--- range + channels in Phase 2) instead of the sequence-of-tracks schema.
 ---
 --- Reads aggregate:
 ---   * sequence row     — name, marks, playhead, frame rate
@@ -25,6 +25,8 @@ local base             = require("inspectable.sequence_row_base")
 local MasterClipInspectable = {}
 MasterClipInspectable.__index = MasterClipInspectable
 
+local MASTER_KIND = "master"
+
 function MasterClipInspectable.new(opts)
     assert(opts and opts.sequence_id and opts.sequence_id ~= "",
         "MasterClipInspectable.new requires sequence_id")
@@ -34,12 +36,14 @@ function MasterClipInspectable.new(opts)
     local self = setmetatable({}, MasterClipInspectable)
     self.sequence_id = opts.sequence_id
     self.project_id  = opts.project_id
-    self._record     = opts.sequence
-        or base.require_sequence(opts.sequence_id, "MasterClipInspectable.new")
-    assert(self._record.kind == "master", string.format(
-        "MasterClipInspectable.new: sequence %s is kind='%s'; "
-        .. "MasterClipInspectable requires kind='master' (use SequenceInspectable for record sequences)",
-        opts.sequence_id, tostring(self._record.kind)))
+    if opts.sequence then
+        base.assert_kind(opts.sequence, MASTER_KIND,
+            self.sequence_id, "MasterClipInspectable.new")
+        self._record = opts.sequence
+    else
+        self._record = base.require_sequence_of_kind(
+            self.sequence_id, MASTER_KIND, "MasterClipInspectable.new")
+    end
     self._primary_ref = Sequence.get_primary_media_ref(opts.sequence_id)
     return self
 end
@@ -49,16 +53,15 @@ function MasterClipInspectable:get_schema_id()
 end
 
 function MasterClipInspectable:refresh()
-    self._record = base.require_sequence(
-        self.sequence_id, "MasterClipInspectable:refresh")
+    self._record = base.require_sequence_of_kind(
+        self.sequence_id, MASTER_KIND, "MasterClipInspectable:refresh")
     self._primary_ref = Sequence.get_primary_media_ref(self.sequence_id)
 end
 
 -- Field-key → sequence-record key. The shared FIELDS table in
 -- metadata_schemas uses clip-style keys (mark_in, mark_out, playhead_frame);
--- Sequence.load already exposes mark_in / mark_out under the same names
--- (sequence.lua:258-259), so only playhead_frame needs a model-side rename
--- to playhead_position.
+-- Sequence.load already exposes mark_in / mark_out under the same names, so
+-- only playhead_frame needs a model-side rename to playhead_position.
 local SEQUENCE_FIELD_MAP = {
     mark_in        = "mark_in",
     mark_out       = "mark_out",
@@ -66,7 +69,8 @@ local SEQUENCE_FIELD_MAP = {
 }
 
 -- Schema field key → command name. Each command's payload-key lives
--- in sequence_row_base.COMMAND_PAYLOAD_KEY (single source of truth).
+-- in sequence_row_base.SPECIALIZED_COMMAND_PAYLOAD_KEY (single source of
+-- truth).
 local SPECIALIZED_COMMANDS = {
     mark_in        = "SetMarkIn",
     mark_out       = "SetMarkOut",
@@ -98,13 +102,8 @@ function MasterClipInspectable:get(field)
 end
 
 function MasterClipInspectable:set(field, value)
-    assert(field and field ~= "", "MasterClipInspectable:set: field required")
-    assert(type(value) == "table",
-        "MasterClipInspectable:set: value must be a payload table")
-    local payload_value = value.value
-    local property_type = value.property_type
-    assert(property_type and property_type ~= "",
-        "MasterClipInspectable:set: property_type required")
+    local payload_value, property_type =
+        base.unpack_payload("MasterClipInspectable", field, value)
 
     -- Source In/Out are read-only in Phase 1; fail loud rather than silently
     -- discarding. Lands when general In/Out editing UX lands.
@@ -119,11 +118,8 @@ function MasterClipInspectable:set(field, value)
     local result = base.execute_sequence_field_set(
         self, field, payload_value, SPECIALIZED_COMMANDS)
 
-    assert(type(result) == "table",
-        "MasterClipInspectable:set: execute returned non-table")
-    if not result.success then
-        return false, result.error_message or "failed to update master clip"
-    end
+    local ok, err = base.unwrap_command_result("MasterClipInspectable:set", result)
+    if not ok then return false, err end
 
     if SEQUENCE_FIELD_MAP[field] then
         self._record[SEQUENCE_FIELD_MAP[field]] = payload_value
@@ -139,7 +135,10 @@ function MasterClipInspectable:iter_fields()
 end
 
 function MasterClipInspectable:get_display_name()
-    return self._record.name or self.sequence_id
+    assert(self._record.name and self._record.name ~= "", string.format(
+        "MasterClipInspectable:get_display_name: master %s has empty name "
+        .. "(sequences.name is NOT NULL by schema)", self.sequence_id))
+    return self._record.name
 end
 
 function MasterClipInspectable:supports_multi_edit()

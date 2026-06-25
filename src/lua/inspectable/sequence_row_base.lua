@@ -34,20 +34,78 @@ function M.require_sequence(sequence_id, caller)
     return record
 end
 
---- Single source of truth for each command's payload-key contract.
---- Adapter SPECIALIZED_COMMANDS tables map a schema field → command
---- name; the base looks the param name up here. Renaming a command's
---- payload key changes one row in this table; both adapters pick it up.
-local COMMAND_PAYLOAD_KEY = {
+--- Strict load + kind check. Enforces the lens-duality contract
+--- symmetrically across both adapters: SequenceInspectable presents
+--- kind='sequence' rows, MasterClipInspectable presents kind='master'.
+--- A mismatch is a routing bug — fail loud at construction/refresh
+--- rather than silently writing master fields through the record
+--- schema (or vice versa).
+function M.require_sequence_of_kind(sequence_id, expected_kind, caller)
+    local record = M.require_sequence(sequence_id, caller)
+    assert(record.kind == expected_kind, string.format(
+        "%s: sequence %s is kind='%s'; this adapter requires kind='%s' "
+        .. "(use the other inspectable lens)",
+        caller, sequence_id, tostring(record.kind), expected_kind))
+    return record
+end
+
+--- Asserts the kind of an already-in-hand sequence record. Used when
+--- the adapter accepts opts.sequence (already-loaded row) and must
+--- still enforce the lens-duality contract before adopting it.
+function M.assert_kind(record, expected_kind, sequence_id, caller)
+    assert(record.kind == expected_kind, string.format(
+        "%s: sequence %s is kind='%s'; this adapter requires kind='%s' "
+        .. "(use the other inspectable lens)",
+        caller, sequence_id, tostring(record.kind), expected_kind))
+end
+
+--- Payload-key for each specialized command's primary value. The
+--- generic SetSequenceMetadata path doesn't appear here because its
+--- payload shape is fixed (field/value pair) and lives at the call
+--- site in execute_sequence_field_set. Renaming a specialized
+--- command's payload key changes one row in this table; both
+--- adapters pick it up.
+local SPECIALIZED_COMMAND_PAYLOAD_KEY = {
     SetMarkIn   = "frame",
     SetMarkOut  = "frame",
     SetPlayhead = "playhead_position",
 }
 
+--- Adapter :set methods all open with the same envelope-unpack:
+--- value must be a payload table carrying `value` + `property_type`
+--- (and optionally `default_value` for ClipInspectable). Lifted at
+--- the third copy. Returns three values; callers that don't use
+--- `default_value` just discard it.
+function M.unpack_payload(caller, field, value)
+    assert(field and field ~= "", string.format(
+        "%s:set: field required", caller))
+    assert(type(value) == "table", string.format(
+        "%s:set(%s): expected payload table {value, property_type[, default_value]}, got %s",
+        caller, field, type(value)))
+    local property_type = value.property_type
+    assert(property_type and property_type ~= "", string.format(
+        "%s:set(%s): payload.property_type is required", caller, field))
+    return value.value, property_type, value.default_value
+end
+
+--- Command-result envelope: success is non-optional, error_message
+--- is mandatory when success=false. A command that violates the
+--- contract should fail loud here rather than have the adapter
+--- fabricate a generic error string.
+function M.unwrap_command_result(caller, result)
+    assert(type(result) == "table", string.format(
+        "%s: command returned non-table result", caller))
+    if result.success then return true end
+    assert(result.error_message and result.error_message ~= "", string.format(
+        "%s: command returned success=false without error_message (command-contract violation)",
+        caller))
+    return false, result.error_message
+end
+
 --- "%d fps" when integer; "%.3f fps" otherwise. nil for malformed input.
-function M.format_frame_rate_display(fr)
-    if type(fr) ~= "table" then return nil end
-    local num, den = fr.fps_numerator, fr.fps_denominator
+function M.format_frame_rate_display(frame_rate)
+    if type(frame_rate) ~= "table" then return nil end
+    local num, den = frame_rate.fps_numerator, frame_rate.fps_denominator
     if type(num) ~= "number" or type(den) ~= "number" or den == 0 then
         return nil
     end
@@ -76,9 +134,9 @@ end
 function M.execute_sequence_field_set(self, field, payload_value, specialized_map)
     local command_name = specialized_map[field]
     if command_name then
-        local payload_key = assert(COMMAND_PAYLOAD_KEY[command_name], string.format(
+        local payload_key = assert(SPECIALIZED_COMMAND_PAYLOAD_KEY[command_name], string.format(
             "execute_sequence_field_set: no payload key registered for %s "
-            .. "(add to sequence_row_base.COMMAND_PAYLOAD_KEY)", command_name))
+            .. "(add to sequence_row_base.SPECIALIZED_COMMAND_PAYLOAD_KEY)", command_name))
         return command_manager.execute_interactive(command_name, {
             sequence_id   = self.sequence_id,
             project_id    = self.project_id,

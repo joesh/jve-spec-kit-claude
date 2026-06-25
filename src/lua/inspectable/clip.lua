@@ -21,6 +21,7 @@ local database = require("core.database")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local metadata_schemas = require("ui.metadata_schemas")
+local base = require("inspectable.sequence_row_base")
 
 local ClipInspectable = {}
 ClipInspectable.__index = ClipInspectable
@@ -182,15 +183,7 @@ function ClipInspectable:set(field, value)
     -- TIMECODE branch (012 Inspector rewrite, Q3 resolution): integer frames only;
     -- rate lives on the owning entity and is NEVER carried in the payload.
     if property_type == "TIMECODE" then
-        assert(type(payload_value) == "number",
-            string.format("ClipInspectable:set(%s): TIMECODE value must be a number, got %s",
-                field, type(payload_value)))
-        assert(payload_value == math.floor(payload_value),
-            string.format("ClipInspectable:set(%s): TIMECODE value must be integer frames, got %s",
-                field, tostring(payload_value)))
-        assert(payload_value >= 0,
-            string.format("ClipInspectable:set(%s): TIMECODE value must be non-negative, got %d",
-                field, payload_value))
+        base.validate_timecode("ClipInspectable", field, payload_value)
     end
 
     local current = self:get(field)

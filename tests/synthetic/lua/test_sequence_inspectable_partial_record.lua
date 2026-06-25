@@ -51,6 +51,7 @@ db:exec(string.format([[
 local browser_record = {
     id                = "seq",
     project_id        = "proj",
+    kind              = "sequence",
     name              = "TestSeq",
     frame_rate        = { fps_numerator = 25, fps_denominator = 1 },
     audio_sample_rate = 48000,
@@ -98,6 +99,34 @@ local seq_ins2 = SequenceInspectable.new({
 })
 check("no-opts-sequence: reads mark_in_frame via DB load",
     seq_ins2:get("mark_in_frame"), 91500)
+
+-- Fail-fast: lens-duality. SequenceInspectable must REFUSE a kind='master'
+-- row symmetrically with how MasterClipInspectable refuses kind='sequence'.
+-- If routing ever leaks the wrong row, the adapter renders + writes the
+-- wrong schema; the assert blocks that at construction.
+db:exec(string.format([[
+    INSERT INTO sequences
+        (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
+         width, height, playhead_frame, view_start_frame, view_duration_frames,
+         mark_in_frame, mark_out_frame, start_timecode_frame,
+         video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
+         created_at, modified_at)
+    VALUES
+        ('master_seq', 'proj', 'MasterClip', 'master', 24, 1, NULL,
+         1920, 1080, 0, 0, 300,
+         NULL, NULL, 0,
+         0, 0, 0.5,
+         %d, %d);
+]], now, now))
+local ok, err = pcall(SequenceInspectable.new, {
+    sequence_id = "master_seq",
+    project_id  = "proj",
+})
+check("wrong-kind construction raises", ok, false)
+check("wrong-kind assert names the offending kind",
+    type(err) == "string" and err:find("kind='master'", 1, true) ~= nil, true)
+check("wrong-kind assert names the adapter",
+    type(err) == "string" and err:find("SequenceInspectable", 1, true) ~= nil, true)
 
 print(string.format("\n--- %d passed, %d failed ---", pass, fail))
 if fail > 0 then error(fail .. " failures") end

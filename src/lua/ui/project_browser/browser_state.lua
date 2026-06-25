@@ -78,13 +78,11 @@ local function normalize_master_clip(item, context)
         media_id = clip.media_id,
         name = clip.name or (media and media.name) or clip.clip_id,
         duration = duration,
-        start_value = source_in,
         source_in = source_in,
         source_out = source_out,
         -- V13: master clip rate = master sequence fps (NOT NULL by
         -- schema). No fallback to media.frame_rate — that stub is
-        -- nil-fielded for orphan masters (Media:delete leaves shells,
-        -- models/media.lua:1271).
+        -- nil-fielded for orphan masters (Media:delete leaves shells).
         frame_rate = assert(clip.frame_rate, string.format(
             "browser_state.normalize_master_clip: clip %s missing rate",
             tostring(clip.clip_id))),
@@ -110,10 +108,13 @@ local function normalize_master_clip(item, context)
 
     -- A master clip IS-A sequences.kind='master' row; route through
     -- MasterClipInspectable (schema_id="master_clip"), not the
-    -- timeline-clip schema. clip.sequence_id was asserted above.
+    -- timeline-clip schema. The clip table already carries id+kind+name+
+    -- frame_rate (build_master_clip_entry) so pass it as opts.sequence —
+    -- avoids a redundant Sequence.load round-trip during selection.
     local inspectable = inspectable_factory.master_clip({
         sequence_id = entry.sequence_id,
         project_id  = project_id,
+        sequence    = clip,
     })
     entry.inspectable = inspectable
     entry.schema = inspectable:get_schema_id()
@@ -145,7 +146,6 @@ local function normalize_timeline(item, context)
         id = sequence.id,
         name = sequence.name or sequence.id,
         duration = duration,
-        start_value = 0,
         source_in = 0,
         source_out = duration,
         frame_rate = assert(sequence.frame_rate, string.format("browser_state.normalize_timeline: missing frame_rate for sequence %s", tostring(sequence.id))),

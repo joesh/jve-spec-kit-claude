@@ -47,6 +47,7 @@ local browser_state = require("ui.project_browser.browser_state")
 local items = {{
     type = "timeline",
     id = "seq1",
+    kind = "sequence",
     name = "Main Timeline",
     duration = 2400,
     frame_rate = {fps_numerator = 24, fps_denominator = 1},
@@ -74,6 +75,7 @@ end
 local empty_items = {{
     type = "timeline",
     id = "seq_empty",
+    kind = "sequence",
     name = "Empty",
     duration = 0,
     frame_rate = {fps_numerator = 25, fps_denominator = 1},
@@ -92,6 +94,7 @@ end
 local ntsc_items = {{
     type = "timeline",
     id = "seq_ntsc",
+    kind = "sequence",
     name = "NTSC",
     duration = 90000,
     frame_rate = {fps_numerator = 30000, fps_denominator = 1001},
@@ -149,6 +152,7 @@ expect_error("missing frame_rate asserts",
 local ctx_items = {{
     type = "timeline",
     id = "seq_no_proj",
+    kind = "sequence",
     name = "No Proj",
     duration = 100,
     frame_rate = {fps_numerator = 24, fps_denominator = 1},

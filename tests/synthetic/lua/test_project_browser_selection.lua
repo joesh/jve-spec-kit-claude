@@ -2,8 +2,19 @@
 
 require('test_env')
 
+local database = require('core.database')
 local browser_state = require('ui.project_browser.browser_state')
 local selection_hub = require('ui.selection_hub')
+
+-- MasterClipInspectable / SequenceInspectable both call
+-- Sequence.get_primary_media_ref during construction; that needs a live DB
+-- connection. Set up a minimal in-memory project so normalize_selection's
+-- attached inspectables can construct.
+local db_path = "/tmp/jve/test_project_browser_selection.db"
+os.remove(db_path); os.execute("mkdir -p /tmp/jve")
+database.init(db_path)
+local db = database.get_connection()
+db:exec(require("import_schema"))
 
 -- Ensure clean slate
 selection_hub._reset_for_tests()
@@ -49,7 +60,10 @@ local media_lookup = {
 -- carry `frame_rate` from the master sequence row, NOT NULL by schema.
 local master_lookup = {
     clip_a = {
+        id = "clip_a",
+        kind = "master",
         clip_id = "clip_a",
+        sequence_id = "clip_a",
         media_id = "media_a",
         name = "Clip A",
         duration = 1500,
@@ -61,7 +75,10 @@ local master_lookup = {
         media = media_lookup.media_a
     },
     clip_b = {
+        id = "clip_b",
+        kind = "master",
         clip_id = "clip_b",
+        sequence_id = "clip_b",
         media_id = "media_b",
         name = "Clip B",
         duration = 3200,
@@ -77,6 +94,7 @@ local master_lookup = {
 local sequence_lookup = {
     timeline_1 = {
         id = "timeline_1",
+        kind = "sequence",
         name = "Main Timeline",
         duration = 9000,
         project_id = "default_project",

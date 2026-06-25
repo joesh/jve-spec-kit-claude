@@ -1657,6 +1657,11 @@ local function build_master_clip_entry(q)
     }
 
     return {
+        -- Master IS-A sequence row (kind='master'): expose `id` + `kind`
+        -- so the browser entry is directly usable as opts.sequence to
+        -- MasterClipInspectable without a second DB round-trip.
+        id             = seq_id,
+        kind           = "master",
         clip_id        = seq_id,
         sequence_id    = seq_id,
         project_id     = seq_project_id,

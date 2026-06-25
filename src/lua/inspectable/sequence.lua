@@ -9,6 +9,8 @@ local base             = require("inspectable.sequence_row_base")
 local SequenceInspectable = {}
 SequenceInspectable.__index = SequenceInspectable
 
+local SEQUENCE_KIND = "sequence"
+
 function SequenceInspectable.new(opts)
     assert(opts and opts.sequence_id, "SequenceInspectable.new requires sequence_id")
     assert(opts.project_id and opts.project_id ~= "",
@@ -20,10 +22,17 @@ function SequenceInspectable.new(opts)
     -- Browser's database.load_sequences() may pass a partial record (id +
     -- name + frame_rate + width + height); lazy_fill_record below pulls
     -- the rest on first miss. Selection paths that don't pre-load pass
-    -- only sequence_id + project_id and rely on require_sequence here —
-    -- which distinguishes "no DB" from "row not found" in its assert.
-    self._record = opts.sequence
-        or base.require_sequence(opts.sequence_id, "SequenceInspectable.new")
+    -- only sequence_id + project_id and rely on require_sequence_of_kind
+    -- here — which distinguishes "no DB" from "row not found" AND
+    -- enforces the lens-duality contract (kind='sequence').
+    if opts.sequence then
+        base.assert_kind(opts.sequence, SEQUENCE_KIND,
+            self.sequence_id, "SequenceInspectable.new")
+        self._record = opts.sequence
+    else
+        self._record = base.require_sequence_of_kind(
+            self.sequence_id, SEQUENCE_KIND, "SequenceInspectable.new")
+    end
     return self
 end
 
@@ -32,8 +41,9 @@ function SequenceInspectable:get_schema_id()
 end
 
 function SequenceInspectable:refresh()
-    self._record = base.require_sequence(
-        self.sequence_id, "SequenceInspectable:refresh")
+    self._record = base.require_sequence_of_kind(
+        self.sequence_id, SEQUENCE_KIND, "SequenceInspectable:refresh")
+    self._lazy_fill_succeeded = false
 end
 
 -- Schema field keys are SQL column names (so SetSequenceMetadata's whitelist
@@ -49,8 +59,8 @@ local COLUMN_TO_MODEL_FIELD = {
 }
 
 -- Schema field key → command name. Each command's payload-key lives
--- in sequence_row_base.COMMAND_PAYLOAD_KEY (single source of truth);
--- adapters only own the field→command mapping.
+-- in sequence_row_base.SPECIALIZED_COMMAND_PAYLOAD_KEY (single source of
+-- truth); adapters only own the field→command mapping.
 local SPECIALIZED_COMMANDS = {
     mark_in_frame  = "SetMarkIn",
     mark_out_frame = "SetMarkOut",
@@ -60,18 +70,22 @@ local SPECIALIZED_COMMANDS = {
 -- The browser's database.load_sequences() builds a minimal record (id, name,
 -- frame_rate, width, height, audio_sample_rate). Other callers pass the full
 -- model. Lazy-fill on first read of a missing field rather than trust any
--- particular caller's shape.
+-- particular caller's shape. Cannot distinguish "field absent" from
+-- "field=nil" in Lua, so a deliberately-unset mark trips this path too —
+-- silent no-op when load_sequence returns nil is the conservative behavior
+-- (mid-session DB disconnect risk tracked separately).
 local function lazy_fill_record(self, mapped_key)
-    if self._full_record_loaded then return end
-    if self._record and self._record[mapped_key] ~= nil then return end
+    if self._lazy_fill_succeeded then return end
+    if self._record[mapped_key] ~= nil then return end
     local full = base.load_sequence(self.sequence_id)
     if not full then return end
+    base.assert_kind(full, SEQUENCE_KIND,
+        self.sequence_id, "SequenceInspectable.lazy_fill_record")
     self._record = full
-    self._full_record_loaded = true
+    self._lazy_fill_succeeded = true
 end
 
 function SequenceInspectable:get(field)
-    if not self._record then return nil end
     if field == "frame_rate_display" then
         return base.format_frame_rate_display(self._record.frame_rate)
     end
@@ -81,13 +95,8 @@ function SequenceInspectable:get(field)
 end
 
 function SequenceInspectable:set(field, value)
-    assert(field and field ~= "", "SequenceInspectable:set: field required")
-    assert(type(value) == "table",
-        "SequenceInspectable:set: value must be a payload table")
-    local payload_value = value.value
-    local property_type = value.property_type
-    assert(property_type and property_type ~= "",
-        "SequenceInspectable:set: property_type required")
+    local payload_value, property_type =
+        base.unpack_payload("SequenceInspectable", field, value)
 
     if property_type == "TIMECODE" then
         base.validate_timecode("SequenceInspectable", field, payload_value)
@@ -96,17 +105,11 @@ function SequenceInspectable:set(field, value)
     local result = base.execute_sequence_field_set(
         self, field, payload_value, SPECIALIZED_COMMANDS)
 
-    assert(type(result) == "table",
-        "SequenceInspectable:set: execute returned non-table")
-    if not result.success then
-        return false, result.error_message or "failed to update sequence"
-    end
+    local ok, err = base.unwrap_command_result("SequenceInspectable:set", result)
+    if not ok then return false, err end
 
-    if self._record then
-        local mapped = COLUMN_TO_MODEL_FIELD[field] or field
-        self._record[mapped] = payload_value
-    end
-
+    local mapped = COLUMN_TO_MODEL_FIELD[field] or field
+    self._record[mapped] = payload_value
     return true
 end
 
@@ -115,10 +118,10 @@ function SequenceInspectable:iter_fields()
 end
 
 function SequenceInspectable:get_display_name()
-    if self._record then
-        return self._record.name or self.sequence_id
-    end
-    return self.sequence_id
+    assert(self._record.name and self._record.name ~= "", string.format(
+        "SequenceInspectable:get_display_name: sequence %s has empty name "
+        .. "(sequences.name is NOT NULL by schema)", self.sequence_id))
+    return self._record.name
 end
 
 function SequenceInspectable:supports_multi_edit()
