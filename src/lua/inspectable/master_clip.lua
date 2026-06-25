@@ -18,18 +18,12 @@
 ---   * media_id / offline / rate_display — schema-declared read_only.
 ---
 --- @file master_clip.lua
-local command_manager = require("core.command_manager")
 local metadata_schemas = require("ui.metadata_schemas")
-local Sequence = require("models.sequence")
+local Sequence         = require("models.sequence")
+local base             = require("inspectable.sequence_row_base")
 
 local MasterClipInspectable = {}
 MasterClipInspectable.__index = MasterClipInspectable
-
-local function load_sequence(sequence_id)
-    local ok, record = pcall(Sequence.load, sequence_id)
-    if ok and record then return record end
-    return nil
-end
 
 function MasterClipInspectable.new(opts)
     assert(opts and opts.sequence_id and opts.sequence_id ~= "",
@@ -40,7 +34,7 @@ function MasterClipInspectable.new(opts)
     local self = setmetatable({}, MasterClipInspectable)
     self.sequence_id = opts.sequence_id
     self.project_id  = opts.project_id
-    self._record     = opts.sequence or load_sequence(opts.sequence_id)
+    self._record     = opts.sequence or base.load_sequence(opts.sequence_id)
     assert(self._record, string.format(
         "MasterClipInspectable.new: sequence %s not found", opts.sequence_id))
     assert(self._record.kind == "master", string.format(
@@ -56,24 +50,12 @@ function MasterClipInspectable:get_schema_id()
 end
 
 function MasterClipInspectable:refresh()
-    local reloaded = load_sequence(self.sequence_id)
+    local reloaded = base.load_sequence(self.sequence_id)
     assert(reloaded, string.format(
         "MasterClipInspectable:refresh: sequence %s vanished from the DB",
         self.sequence_id))
     self._record      = reloaded
     self._primary_ref = Sequence.get_primary_media_ref(self.sequence_id)
-end
-
-local function format_frame_rate_display(fr)
-    if type(fr) ~= "table" then return nil end
-    local num, den = fr.fps_numerator, fr.fps_denominator
-    if type(num) ~= "number" or type(den) ~= "number" or den == 0 then
-        return nil
-    end
-    if num % den == 0 then
-        return string.format("%d fps", math.floor(num / den + 0.5))
-    end
-    return string.format("%.3f fps", num / den)
 end
 
 -- Field-key → sequence-record key. The shared FIELDS table in
@@ -87,12 +69,18 @@ local SEQUENCE_FIELD_MAP = {
     playhead_frame = "playhead_position",
 }
 
+local SPECIALIZED_COMMANDS = {
+    mark_in        = "SetMarkIn",
+    mark_out       = "SetMarkOut",
+    playhead_frame = "SetPlayhead",
+}
+
 function MasterClipInspectable:get(field)
     assert(field and field ~= "", "MasterClipInspectable:get: field required")
     if field == "name" then
         return self._record.name
     elseif field == "rate_display" then
-        return format_frame_rate_display(self._record.frame_rate)
+        return base.format_frame_rate_display(self._record.frame_rate)
     elseif SEQUENCE_FIELD_MAP[field] then
         return self._record[SEQUENCE_FIELD_MAP[field]]
     end
@@ -127,40 +115,11 @@ function MasterClipInspectable:set(field, value)
         .. "edit on a timeline-clip instance instead)", field))
 
     if property_type == "TIMECODE" then
-        assert(type(payload_value) == "number"
-            and payload_value == math.floor(payload_value)
-            and payload_value >= 0,
-            string.format("MasterClipInspectable:set(%s): TIMECODE must be "
-                .. "non-negative integer frames, got %s",
-                field, tostring(payload_value)))
+        base.validate_timecode("MasterClipInspectable", field, payload_value)
     end
 
-    local specialized = {
-        mark_in        = "SetMarkIn",
-        mark_out       = "SetMarkOut",
-        playhead_frame = "SetPlayhead",
-    }
-
-    local result
-    if specialized[field] then
-        local params = {
-            sequence_id = self.sequence_id,
-            project_id  = self.project_id,
-        }
-        if field == "playhead_frame" then
-            params.playhead_position = payload_value
-        else
-            params.frame = payload_value
-        end
-        result = command_manager.execute_interactive(specialized[field], params)
-    else
-        result = command_manager.execute_interactive("SetSequenceMetadata", {
-            sequence_id = self.sequence_id,
-            field       = field,
-            value       = payload_value,
-            project_id  = self.project_id,
-        })
-    end
+    local result = base.execute_sequence_field_set(
+        self, field, payload_value, SPECIALIZED_COMMANDS, "MasterClipInspectable")
 
     assert(type(result) == "table",
         "MasterClipInspectable:set: execute returned non-table")

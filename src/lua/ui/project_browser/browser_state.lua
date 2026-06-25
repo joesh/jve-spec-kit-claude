@@ -94,7 +94,13 @@ local function normalize_master_clip(item, context)
         file_path = clip.file_path or (media and media.file_path),
         metadata = decode_metadata(media and media.metadata),
         offline = clip.offline,
-        master_sequence_id = clip.sequence_id or clip.clip_id,
+        -- A master clip IS-A sequences.kind='master' row (database.lua
+        -- build_master_clip_entry sets clip_id == sequence_id by
+        -- construction). Emit the canonical `sequence_id` so consumers
+        -- (selection_binding, effective_source) don't have to alias.
+        sequence_id = assert(clip.sequence_id, string.format(
+            "browser_state.normalize_master_clip: clip %s missing sequence_id",
+            tostring(clip.clip_id))),
         item_type = "master_clip",
         view = "project_browser",
         project_id = project_id,
@@ -104,20 +110,13 @@ local function normalize_master_clip(item, context)
 
     -- A master clip IS-A sequences.kind='master' row; route through
     -- MasterClipInspectable (schema_id="master_clip"), not the
-    -- timeline-clip schema. clip.sequence_id is the master sequence's id
-    -- (see master_builder.lua: master clip and master sequence are the
-    -- same row).
-    local master_seq_id = assert(clip.sequence_id or clip.clip_id, string.format(
-        "browser_state.normalize_master_clip: clip %s has no sequence_id",
-        tostring(clip.clip_id)))
-    local ok, inspectable = pcall(inspectable_factory.master_clip, {
-        sequence_id = master_seq_id,
+    -- timeline-clip schema. clip.sequence_id was asserted above.
+    local inspectable = inspectable_factory.master_clip({
+        sequence_id = entry.sequence_id,
         project_id  = project_id,
     })
-    if ok and inspectable then
-        entry.inspectable = inspectable
-        entry.schema = inspectable:get_schema_id()
-    end
+    entry.inspectable = inspectable
+    entry.schema = inspectable:get_schema_id()
 
     return entry
 end

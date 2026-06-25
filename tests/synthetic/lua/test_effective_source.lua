@@ -89,7 +89,7 @@ assert(#emit_log == 0, "T3: no emit — computed value unchanged")
 print("-- T4: browser active + master_clip selected → rule 1")
 clear_emits()
 selection_hub.update_selection("project_browser",
-    { { item_type = "master_clip", master_sequence_id = "master-B" } })
+    { { item_type = "master_clip", sequence_id = "master-B" } })
 assert(effective_src.get() == "master-B", string.format(
     "T4: browser-active + insertable item → that item; got %s",
     tostring(effective_src.get())))
@@ -130,7 +130,7 @@ assert(e7 and e7.new == "master-B" and e7.prev == "master-A",
 print("-- T8: idempotent — re-emitting same selection produces no emit")
 clear_emits()
 selection_hub.update_selection("project_browser",
-    { { item_type = "master_clip", master_sequence_id = "master-B" } })
+    { { item_type = "master_clip", sequence_id = "master-B" } })
 assert(effective_src.get() == "master-B", "T8: still master-B")
 assert(#emit_log == 0, "T8: no emit on no-op re-selection")
 
@@ -146,8 +146,8 @@ assert(effective_src.get() == "nested-seq-Q", string.format(
 -- ── T10: master_seq_id_of predicate ─────────────────────────────────────
 print("-- T10: master_seq_id_of predicate")
 assert(effective_src.master_seq_id_of(
-    { item_type = "master_clip", master_sequence_id = "m1" }) == "m1",
-    "T10a: master_clip → master_sequence_id")
+    { item_type = "master_clip", sequence_id = "m1" }) == "m1",
+    "T10a: master_clip → sequence_id")
 assert(effective_src.master_seq_id_of(
     { item_type = "timeline", id = "seq2" }) == "seq2",
     "T10b: timeline → id")
@@ -155,8 +155,8 @@ assert(effective_src.master_seq_id_of(
     { item_type = "bin", id = "binX" }) == nil,
     "T10c: bin → nil")
 assert(effective_src.master_seq_id_of(
-    { item_type = "master_clip", master_sequence_id = "" }) == nil,
-    "T10d: empty master_sequence_id → nil")
+    { item_type = "master_clip", sequence_id = "" }) == nil,
+    "T10d: empty sequence_id → nil")
 assert(effective_src.master_seq_id_of("not a table") == nil,
     "T10e: non-table → nil")
 assert(effective_src.master_seq_id_of(nil) == nil, "T10f: nil → nil")
@@ -222,7 +222,7 @@ local orig_would = cycle_mod.would_create_cycle
 cycle_mod.would_create_cycle = function(_a, _b) return false end
 sequence_mod.get_name = function(id) return "named-" .. id end
 selection_hub.update_selection("project_browser",
-    { { item_type = "master_clip", master_sequence_id = "src-1" } })
+    { { item_type = "master_clip", sequence_id = "src-1" } })
 local seq15, problem15 = effective_src.pick_for_edit("rec-1", "Overwrite")
 assert(seq15 == "src-1", string.format(
     "T15: happy path returns source id; got %s", tostring(seq15)))
@@ -344,7 +344,7 @@ do
         {
             item_type           = "master_clip",
             clip_id             = "browser-clip",
-            master_sequence_id  = "browser-master",
+            sequence_id  = "browser-master",
             display_name        = "Browser Master",
         },
     })

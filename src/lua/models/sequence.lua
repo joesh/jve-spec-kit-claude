@@ -97,7 +97,7 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
 
     -- Rule 2.13: kind is required, no default. Schema V9 CHECK restricts to
     -- ('master', 'sequence'); caller must pick.
-    assert(opts.kind == "master" or opts.kind == "sequence",
+    assert(Sequence.is_known_kind(opts.kind),
         "Sequence.create: opts.kind must be 'master' or 'sequence' (V9 schema); got "
         .. tostring(opts.kind))
     -- 018 (FR-004): masters MUST have audio_sample_rate = NULL.
@@ -285,7 +285,7 @@ end
 -- Enforce the master-only NULL window for audio_sample_rate / width / height
 -- and the kind whitelist. Throws actionable assertions on violation.
 local function validate_save_invariants(self)
-    assert(self.kind == "master" or self.kind == "sequence",
+    assert(Sequence.is_known_kind(self.kind),
         "Sequence.save: kind must be 'master' or 'sequence' (V9); got " .. tostring(self.kind))
 
     if self.audio_sample_rate ~= nil then
@@ -696,9 +696,20 @@ end
 -- MASTER SEQUENCE METHODS (for kind="master")
 -- =============================================================================
 
+--- Closed set of legal `kind` discriminator values (V13 schema CHECK).
+--- Single source of truth — adding a new kind (e.g. 'compound') updates
+--- this table and every membership check picks it up. Used by
+--- Sequence.create / Sequence.save invariants and by view callers
+--- (e.g. source_viewer.publish_staged) that branch on kind.
+Sequence.KNOWN_KINDS = { master = true, sequence = true }
+
+function Sequence.is_known_kind(k)
+    return Sequence.KNOWN_KINDS[k] == true
+end
+
 --- Whether this sequence is a master (V13 kind='master'). The `kind`
 --- value narrowed from {timeline,masterclip,compound,multicam} to
---- {master,nested} in V13; this checks the new value.
+--- {master,sequence} in V13; this checks the new value.
 function Sequence:is_master()
     return self.kind == "master"
 end

@@ -59,15 +59,16 @@ local _current              = nil
 ---
 --- Browser items arrive normalized by `browser_state.normalize_*`:
 ---   * item_type="master_clip" — top-level clip from imported media.
----     `master_sequence_id` names the underlying master sequence.
+---     `sequence_id` names the underlying master sequence (master clip
+---     IS-A sequences.kind='master' row; same id by construction).
 ---   * item_type="timeline"    — a nested sequence. `id` names it.
 ---   * bins / other entries    — not insertable; returns nil.
 function M.master_seq_id_of(item)
     if type(item) ~= "table" then return nil end
     if item.item_type == "master_clip"
-       and type(item.master_sequence_id) == "string"
-       and item.master_sequence_id ~= "" then
-        return item.master_sequence_id
+       and type(item.sequence_id) == "string"
+       and item.sequence_id ~= "" then
+        return item.sequence_id
     end
     if item.item_type == "timeline"
        and type(item.id) == "string" and item.id ~= "" then

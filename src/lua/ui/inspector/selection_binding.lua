@@ -181,14 +181,11 @@ local function resolve_inspectables(items)
             })
             schema_id = "clip"
         elseif item.item_type == "master_clip" then
-            -- A master clip IS-A sequences.kind='master' row; the item's
-            -- sequence_id identifies it. master_sequence_id is the
-            -- project-browser-side alias; accept either so source_viewer
-            -- (sequence_id) and project_browser (master_sequence_id) can
-            -- both publish without coercion.
-            local seq_id = item.sequence_id or item.master_sequence_id
+            -- A master clip IS-A sequences.kind='master' row; both
+            -- producers (source_viewer + browser_state) publish the
+            -- canonical `sequence_id`. Factory asserts presence.
             inspectable = inspectable_factory.master_clip({
-                sequence_id = seq_id,
+                sequence_id = item.sequence_id,
                 project_id  = item.project_id,
                 sequence    = item.sequence,
             })
