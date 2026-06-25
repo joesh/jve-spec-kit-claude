@@ -161,15 +161,16 @@ local function normalize_timeline(item, context)
     local project_id = sequence.project_id or (context and context.project_id)
     assert(project_id and project_id ~= "", "browser_state.normalize_timeline: missing project_id for sequence " .. tostring(sequence.id))
     entry.project_id = project_id
-    local ok, inspectable = pcall(inspectable_factory.sequence, {
+    -- Direct call: sequence row is in-hand (passed as opts.sequence) so
+    -- the factory's require_sequence path is unreachable. A construction
+    -- failure here is an upstream bug, not a swallow-able variant.
+    local inspectable = inspectable_factory.sequence({
         sequence_id = sequence.id,
-        project_id = project_id,
-        sequence = sequence
+        project_id  = project_id,
+        sequence    = sequence,
     })
-    if ok and inspectable then
-        entry.inspectable = inspectable
-        entry.schema = inspectable:get_schema_id()
-    end
+    entry.inspectable = inspectable
+    entry.schema      = inspectable:get_schema_id()
 
     return entry
 end

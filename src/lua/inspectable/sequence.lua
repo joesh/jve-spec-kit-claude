@@ -20,10 +20,10 @@ function SequenceInspectable.new(opts)
     -- Browser's database.load_sequences() may pass a partial record (id +
     -- name + frame_rate + width + height); lazy_fill_record below pulls
     -- the rest on first miss. Selection paths that don't pre-load pass
-    -- only sequence_id + project_id and rely on Sequence.load here.
-    self._record = opts.sequence or base.load_sequence(opts.sequence_id)
-    assert(self._record, string.format(
-        "SequenceInspectable.new: sequence %s not found", opts.sequence_id))
+    -- only sequence_id + project_id and rely on require_sequence here —
+    -- which distinguishes "no DB" from "row not found" in its assert.
+    self._record = opts.sequence
+        or base.require_sequence(opts.sequence_id, "SequenceInspectable.new")
     return self
 end
 
@@ -32,11 +32,8 @@ function SequenceInspectable:get_schema_id()
 end
 
 function SequenceInspectable:refresh()
-    local reloaded = base.load_sequence(self.sequence_id)
-    assert(reloaded, string.format(
-        "SequenceInspectable:refresh: sequence %s vanished from the DB",
-        self.sequence_id))
-    self._record = reloaded
+    self._record = base.require_sequence(
+        self.sequence_id, "SequenceInspectable:refresh")
 end
 
 -- Schema field keys are SQL column names (so SetSequenceMetadata's whitelist
@@ -51,10 +48,13 @@ local COLUMN_TO_MODEL_FIELD = {
     mark_out_frame       = "mark_out",
 }
 
+-- Schema field key → command name. Each command's payload-key lives
+-- in sequence_row_base.COMMAND_PAYLOAD_KEY (single source of truth);
+-- adapters only own the field→command mapping.
 local SPECIALIZED_COMMANDS = {
-    mark_in_frame  = { command = "SetMarkIn",   param = "frame"             },
-    mark_out_frame = { command = "SetMarkOut",  param = "frame"             },
-    playhead_frame = { command = "SetPlayhead", param = "playhead_position" },
+    mark_in_frame  = "SetMarkIn",
+    mark_out_frame = "SetMarkOut",
+    playhead_frame = "SetPlayhead",
 }
 
 -- The browser's database.load_sequences() builds a minimal record (id, name,

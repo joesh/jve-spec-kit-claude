@@ -34,9 +34,8 @@ function MasterClipInspectable.new(opts)
     local self = setmetatable({}, MasterClipInspectable)
     self.sequence_id = opts.sequence_id
     self.project_id  = opts.project_id
-    self._record     = opts.sequence or base.load_sequence(opts.sequence_id)
-    assert(self._record, string.format(
-        "MasterClipInspectable.new: sequence %s not found", opts.sequence_id))
+    self._record     = opts.sequence
+        or base.require_sequence(opts.sequence_id, "MasterClipInspectable.new")
     assert(self._record.kind == "master", string.format(
         "MasterClipInspectable.new: sequence %s is kind='%s'; "
         .. "MasterClipInspectable requires kind='master' (use SequenceInspectable for record sequences)",
@@ -50,11 +49,8 @@ function MasterClipInspectable:get_schema_id()
 end
 
 function MasterClipInspectable:refresh()
-    local reloaded = base.load_sequence(self.sequence_id)
-    assert(reloaded, string.format(
-        "MasterClipInspectable:refresh: sequence %s vanished from the DB",
-        self.sequence_id))
-    self._record      = reloaded
+    self._record = base.require_sequence(
+        self.sequence_id, "MasterClipInspectable:refresh")
     self._primary_ref = Sequence.get_primary_media_ref(self.sequence_id)
 end
 
@@ -69,10 +65,12 @@ local SEQUENCE_FIELD_MAP = {
     playhead_frame = "playhead_position",
 }
 
+-- Schema field key → command name. Each command's payload-key lives
+-- in sequence_row_base.COMMAND_PAYLOAD_KEY (single source of truth).
 local SPECIALIZED_COMMANDS = {
-    mark_in        = { command = "SetMarkIn",   param = "frame"             },
-    mark_out       = { command = "SetMarkOut",  param = "frame"             },
-    playhead_frame = { command = "SetPlayhead", param = "playhead_position" },
+    mark_in        = "SetMarkIn",
+    mark_out       = "SetMarkOut",
+    playhead_frame = "SetPlayhead",
 }
 
 function MasterClipInspectable:get(field)

@@ -7,18 +7,42 @@
 --- lens differs.
 
 local command_manager = require("core.command_manager")
+local database        = require("core.database")
 local Sequence        = require("models.sequence")
 
 local M = {}
 
---- Load a sequence row. Returns the model object, or nil when there is no
---- live DB connection / no row with that id. Raises on actual DB failures
---- (Sequence.load uses `error()` for query failures). The previous adapter
---- code wrapped this in pcall and discarded errors — that hid DB failures
---- behind misleading "not found" messages.
+--- Soft load. Returns the model object, nil for missing-row OR
+--- missing-DB, raises on real DB failures. Used by lazy_fill_record
+--- paths that legitimately tolerate absence.
 function M.load_sequence(sequence_id)
     return Sequence.load(sequence_id)
 end
+
+--- Strict load. Asserts with distinct messages for "no DB connection"
+--- vs "row not found" so the inspector adapter's fail-fast message
+--- doesn't lie about which contract was violated. Used by adapter
+--- constructors and refresh().
+function M.require_sequence(sequence_id, caller)
+    assert(database.has_connection(), string.format(
+        "%s: no active database connection — cannot load sequence %s",
+        caller, sequence_id))
+    local record = Sequence.load(sequence_id)
+    assert(record, string.format(
+        "%s: sequence %s not found in active project",
+        caller, sequence_id))
+    return record
+end
+
+--- Single source of truth for each command's payload-key contract.
+--- Adapter SPECIALIZED_COMMANDS tables map a schema field → command
+--- name; the base looks the param name up here. Renaming a command's
+--- payload key changes one row in this table; both adapters pick it up.
+local COMMAND_PAYLOAD_KEY = {
+    SetMarkIn   = "frame",
+    SetMarkOut  = "frame",
+    SetPlayhead = "playhead_position",
+}
 
 --- "%d fps" when integer; "%.3f fps" otherwise. nil for malformed input.
 function M.format_frame_rate_display(fr)
@@ -45,17 +69,20 @@ function M.validate_timecode(caller, field, payload_value)
 end
 
 --- Dispatch a field write: specialized command if `field` is in
---- `specialized_map`, else the generic SetSequenceMetadata. Each
---- specialized entry carries `{command, param}` — the param name
---- (`frame`, `playhead_position`, etc.) is the command's payload key.
---- The base never branches on caller-domain field names.
+--- `specialized_map` (schema field → command name), else the generic
+--- SetSequenceMetadata. The command's payload-key comes from the
+--- central COMMAND_PAYLOAD_KEY table — each command owns its own
+--- payload contract; the base never repeats it per-adapter.
 function M.execute_sequence_field_set(self, field, payload_value, specialized_map)
-    local spec = specialized_map[field]
-    if spec then
-        return command_manager.execute_interactive(spec.command, {
-            sequence_id  = self.sequence_id,
-            project_id   = self.project_id,
-            [spec.param] = payload_value,
+    local command_name = specialized_map[field]
+    if command_name then
+        local payload_key = assert(COMMAND_PAYLOAD_KEY[command_name], string.format(
+            "execute_sequence_field_set: no payload key registered for %s "
+            .. "(add to sequence_row_base.COMMAND_PAYLOAD_KEY)", command_name))
+        return command_manager.execute_interactive(command_name, {
+            sequence_id   = self.sequence_id,
+            project_id    = self.project_id,
+            [payload_key] = payload_value,
         })
     end
     return command_manager.execute_interactive("SetSequenceMetadata", {
