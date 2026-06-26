@@ -10,6 +10,16 @@ export default defineWorkersConfig({
                 wrangler: { configPath: "./wrangler.toml" },
                 miniflare: {
                     compatibilityFlags: ["nodejs_compat"],
+                    d1Databases: ["DB"],
+                    r2Buckets: ["BUCKET"],
+                    bindings: {
+                        GITHUB_OWNER: "joeshapiro",
+                        GITHUB_REPO: "jve-bugs",
+                        WIRE_SCHEMA_VERSION: "1",
+                        ISSUE_COMMENT_EVERY_N: "10",
+                        GITHUB_BOT_TOKEN: "test_gh_token",
+                        JOE_PROMOTE_SECRET: "test_promote_secret",
+                    },
                 },
                 singleWorker: false,
             },
