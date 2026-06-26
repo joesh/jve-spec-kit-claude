@@ -497,11 +497,33 @@ end
 -- treat the re-pick as a real selection change and discard pending edits
 -- per FR-013a.
 local function pick_implied_timeline_clip(project_id)
-    local playhead = timeline_state.get_playhead_position()
-    if type(playhead) ~= "number" then return nil end
-
     local displayed_seq_id = timeline_state.get_displayed_tab_id()
     if not (displayed_seq_id and displayed_seq_id ~= "") then return nil end
+
+    -- Source-tab is showing a master sequence — the implied target is
+    -- the MASTER ITSELF (lensed through MasterClipInspectable: file
+    -- metadata, source range, channels), not a clip-on-master-timeline
+    -- at the playhead. The clip-pick heuristic is for record sequences,
+    -- where the user is editing into a track stack; on a master timeline
+    -- the user is inspecting/marking the master.
+    if timeline_state.get_displayed_tab_kind() == "source" then
+        local inspectable = inspectable_factory.master_clip({
+            sequence_id = displayed_seq_id,
+            project_id  = project_id,
+        })
+        return {
+            item_type    = "master_clip",
+            inspectable  = inspectable,
+            schema       = inspectable:get_schema_id(),
+            display_name = inspectable:get_display_name(),
+            project_id   = project_id,
+            sequence_id  = displayed_seq_id,
+            _implied     = true,
+        }
+    end
+
+    local playhead = timeline_state.get_playhead_position()
+    if type(playhead) ~= "number" then return nil end
 
     local tracks = {}
     for _, t in ipairs(timeline_state.get_video_tracks()) do table.insert(tracks, t) end
