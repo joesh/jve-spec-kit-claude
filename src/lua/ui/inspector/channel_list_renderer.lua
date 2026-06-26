@@ -42,7 +42,13 @@ local M = {}
 -- the only owner.
 M._focused_channel = nil
 
+-- Drag-reorder mime type. Distinct from any timeline-clip mime so a
+-- channel-row drag can't accidentally drop on a timeline strip and vice
+-- versa.
+local MIME_CHANNEL_REORDER = "application/x-jve-channel-reorder"
+
 local focus_handler_seq = 0
+local drag_handler_seq  = 0
 
 -- Dirty-protocol hooks for non-flat sections (consumed by
 -- selection_binding.discard_pending / any_dirty / populate_non_flat_sections
@@ -160,6 +166,48 @@ local function build_row(section_obj)
     end)
     assert(commit_conn, "channel_list_renderer: editingFinished connect failed")
 
+    -- Drag-reorder: the row is BOTH a drag source (carries its track_id
+    -- as payload) AND a drop target (receives a peer row's track_id and
+    -- moves it to this row's display slot). Each handler reads LIVE
+    -- entry fields (track_id, inspectable, display_index) so rebinding
+    -- at populate-time is the only mutation needed when the master
+    -- changes — no re-installing filters.
+    drag_handler_seq = drag_handler_seq + 1
+    local provider_name = string.format(
+        "channel_list_renderer_drag_payload_%d", drag_handler_seq)
+    _G[provider_name] = function()
+        -- Empty string when the row isn't bound to a channel: signals
+        -- no payload (Qt's drag start will still fire, but the mime
+        -- match on the drop side filters self-drops harmlessly).
+        return tostring(entry.track_id or "")
+    end
+
+    local drop_handler_name = string.format(
+        "channel_list_renderer_drop_handler_%d", drag_handler_seq)
+    _G[drop_handler_name] = function(_x, _y, payload)
+        assert(type(payload) == "string",
+            "channel_list_renderer drop handler: payload must be a string")
+        if payload == "" then return end
+        if not (entry.track_id and entry.inspectable and entry.display_index) then
+            return  -- hidden / unbound row; ignore stray events
+        end
+        if payload == entry.track_id then return end  -- self-drop is a no-op
+        local ok, err = entry.inspectable:move_channel(payload, entry.display_index)
+        assert(ok, err)
+    end
+
+    -- luacheck: globals qt_install_drag_source qt_install_drop_target
+    runtime_mode.assert_production(qt_install_drag_source,
+        "channel_list_renderer: qt_install_drag_source binding missing")
+    runtime_mode.assert_production(qt_install_drop_target,
+        "channel_list_renderer: qt_install_drop_target binding missing")
+    if qt_install_drag_source then
+        qt_install_drag_source(row, MIME_CHANNEL_REORDER, provider_name)
+    end
+    if qt_install_drop_target then
+        qt_install_drop_target(row, MIME_CHANNEL_REORDER, drop_handler_name)
+    end
+
     local add_result = section_obj:addContentWidget(row)
     if type(add_result) == "table" and add_result.success == false then
         error("channel_list_renderer: addContentWidget failed for channel row")
@@ -231,16 +279,23 @@ function M.populate(section_view, inspectable, opts)
             row._programmatic = false
             row.dirty         = false
         end
+        -- display_index always reflects the model's current ordinal so
+        -- a drop on this row routes to the right slot, even if the row
+        -- kept its in-flight name edit above (keep_user_edit doesn't
+        -- gate this — it gates the visible label only).
+        row.display_index = ch.display_index
         qt_constants.DISPLAY.SET_VISIBLE(row.widget, true)
     end
 
-    -- Hide unused slots AND drop their identity so a stale focus event on
-    -- an off-screen row can't dispatch a rename against the previous master.
+    -- Hide unused slots AND drop their identity so a stale focus / drop
+    -- event on an off-screen row can't dispatch against the previous
+    -- master (rename via name_edit, reorder via drop target).
     for i = n + 1, #pool do
         qt_constants.DISPLAY.SET_VISIBLE(pool[i].widget, false)
-        pool[i].track_id    = nil
-        pool[i].inspectable = nil
-        pool[i].dirty       = false
+        pool[i].track_id      = nil
+        pool[i].inspectable   = nil
+        pool[i].display_index = nil
+        pool[i].dirty         = false
     end
 
     log.event("channel_list_renderer: populated section=%s rows=%d pool=%d preserve_dirty=%s",
