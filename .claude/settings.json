@@ -77,6 +77,10 @@
           {
             "type": "command",
             "command": "cozempic checkpoint 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "/Users/joe/Local/jve-spec-kit-claude/.claude/hooks/citation_gate.py"
           }
         ]
       }
