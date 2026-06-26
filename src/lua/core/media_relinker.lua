@@ -167,6 +167,16 @@ local function probe_result_from_emp_info(info)
             if fps_int > 0 and info.has_video_tc_origin then
                 result.start_tc_value = info.first_frame_tc
                 result.start_tc_rate = fps_int
+                -- Surface every distinct video TC the container holds
+                -- (multi-tmcd files: render TC + original TC). Primary
+                -- equals start_tc_value (vec[0] by EMP contract). Matchers
+                -- that need to consider alternative TCs walk this list.
+                assert(info.all_video_tc_origins
+                    and #info.all_video_tc_origins > 0
+                    and info.all_video_tc_origins[1] == info.first_frame_tc,
+                    "probe_result_from_emp_info: all_video_tc_origins[1] "
+                    .. "must equal first_frame_tc (primary)")
+                result.all_video_tc_origins = info.all_video_tc_origins
             end
             -- Audio TC for video-with-audio files. EMP derives this from
             -- video_tc on the shared-clock assumption when the audio stream
@@ -185,6 +195,12 @@ local function probe_result_from_emp_info(info)
                     .. " for " .. tostring(info.path))
                 result.start_tc_audio_samples = info.first_sample_tc
                 result.start_tc_audio_rate = info.audio_sample_rate
+                assert(info.all_audio_tc_origins
+                    and #info.all_audio_tc_origins > 0
+                    and info.all_audio_tc_origins[1] == info.first_sample_tc,
+                    "probe_result_from_emp_info: all_audio_tc_origins[1] "
+                    .. "must equal first_sample_tc (primary)")
+                result.all_audio_tc_origins = info.all_audio_tc_origins
             end
             -- Only derive duration_frames when EMP reports an
             -- authoritative duration source (has_duration). A
@@ -248,6 +264,12 @@ local function probe_result_from_emp_info(info)
         if info.has_audio_tc_origin then
             result.start_tc_audio_samples = info.first_sample_tc
             result.start_tc_audio_rate    = sr
+            assert(info.all_audio_tc_origins
+                and #info.all_audio_tc_origins > 0
+                and info.all_audio_tc_origins[1] == info.first_sample_tc,
+                "probe_result_from_emp_info (audio-only): all_audio_tc_origins[1] "
+                .. "must equal first_sample_tc (primary)")
+            result.all_audio_tc_origins = info.all_audio_tc_origins
         end
         if info.has_duration and info.duration_us and info.duration_us > 0 then
             local samples = math.floor(
@@ -396,6 +418,31 @@ local function probe_file_ffprobe(file_path)
                         if frames then
                             result.start_tc_value = frames
                             result.start_tc_rate = fps
+                            -- Walk every stream + format-level timecode tag,
+                            -- collect distinct frame values. Primary (vec[1])
+                            -- equals start_tc_value to mirror EMP contract.
+                            local origins = { frames }
+                            local seen = { [frames] = true }
+                            local function try_add(s)
+                                if not s then return end
+                                local f = tc_to_frames(s, fps)
+                                if f and not seen[f] then
+                                    seen[f] = true
+                                    origins[#origins + 1] = f
+                                end
+                            end
+                            if data.format and data.format.tags then
+                                try_add(data.format.tags.timecode
+                                    or data.format.tags.TIMECODE)
+                            end
+                            if data.streams then
+                                for _, s in ipairs(data.streams) do
+                                    if s.tags then
+                                        try_add(s.tags.timecode or s.tags.TIMECODE)
+                                    end
+                                end
+                            end
+                            result.all_video_tc_origins = origins
                         end
                     end
                 end
@@ -441,6 +488,10 @@ local function probe_file_ffprobe(file_path)
             if sample_rate and sample_rate > 0 and not result.width then
                 result.start_tc_audio_samples = time_ref
                 result.start_tc_audio_rate    = sample_rate
+                -- Audio TC sources are exclusive (BWF is the only source
+                -- here). Single-entry array preserves shape uniformity
+                -- with the video side.
+                result.all_audio_tc_origins = { time_ref }
             end
         end
     end

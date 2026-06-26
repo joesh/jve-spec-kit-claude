@@ -199,6 +199,24 @@ static void push_media_file_info_table(lua_State* L, const emp::MediaFileInfo& i
     lua_setfield(L, -2, "first_sample_tc");
     lua_pushboolean(L, info.has_audio_tc_origin);
     lua_setfield(L, -2, "has_audio_tc_origin");
+
+    // Full TC inventory: every distinct video TC and audio TC found in
+    // the container (multiple tmcd tracks, format-level + stream tags).
+    // Primary first_frame_tc / first_sample_tc are the first entry. Empty
+    // when the corresponding has_*_tc_origin is false.
+    lua_newtable(L);
+    for (size_t i = 0; i < info.all_video_tc_origins.size(); ++i) {
+        lua_pushinteger(L, static_cast<lua_Integer>(info.all_video_tc_origins[i]));
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    lua_setfield(L, -2, "all_video_tc_origins");
+    lua_newtable(L);
+    for (size_t i = 0; i < info.all_audio_tc_origins.size(); ++i) {
+        lua_pushinteger(L, static_cast<lua_Integer>(info.all_audio_tc_origins[i]));
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    lua_setfield(L, -2, "all_audio_tc_origins");
+
     // Legacy alias
     lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
     lua_setfield(L, -2, "start_tc");
@@ -767,6 +785,29 @@ static int lua_emp_tmb_set_audio_format(lua_State* L) {
     return 0;
 }
 
+// EMP.TMB_SET_EFFECTIVE_VIDEO_TRACKS(tmb, {index, index, ...})
+// Compositor-pushed contract: which video tracks composite into output.
+// REFILL workers gate eligibility on this; tracks not in the set are
+// skipped by REFILL (ineligible — not in effective set).
+static int lua_emp_tmb_set_effective_video_tracks(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    int n = static_cast<int>(lua_objlen(L, 2));
+    std::vector<int> indices;
+    indices.reserve(static_cast<size_t>(n));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L,
+                "TMB_SET_EFFECTIVE_VIDEO_TRACKS: element %d is not a number", i);
+        }
+        indices.push_back(static_cast<int>(lua_tointeger(L, -1)));
+        lua_pop(L, 1);
+    }
+    tmb->SetEffectiveVideoTracks(indices);
+    return 0;
+}
+
 // EMP.TMB_SET_TRACK_CLIPS(tmb, type_string, track_index, clips_table)
 // clips_table = array of { clip_id, media_path, sequence_start, duration, source_in, rate_num, rate_den, speed_ratio }
 static int lua_emp_tmb_set_track_clips(lua_State* L) {
@@ -1059,8 +1100,6 @@ static int lua_emp_tmb_get_video_frame(lua_State* L) {
     lua_setfield(L, -2, "clip_end_frame");
     lua_pushboolean(L, result.offline);
     lua_setfield(L, -2, "offline");
-    lua_pushboolean(L, result.obscured);
-    lua_setfield(L, -2, "obscured");
     if (!result.error_msg.empty()) {
         lua_pushstring(L, result.error_msg.c_str());
         lua_setfield(L, -2, "error_msg");
@@ -2027,7 +2066,9 @@ static int lua_playback_reload_all_clips(lua_State* L) {
 
 // PLAYBACK.SET_EFFECTIVE_VIDEO_TRACKS(controller, {index, index, ...})
 // The video tracks that composite into the output (mute/solo resolved by Lua).
-// Composite-time only — prefetch keeps all tracks decoded so unmute is instant.
+// Pushed to both the compositor (deliverFrame) and TMB (REFILL eligibility):
+// REFILL decodes only eligible tracks, so unmute requires a playhead nudge
+// to re-trigger REFILL for the newly-eligible track.
 static int lua_playback_set_effective_video_tracks(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
@@ -2866,6 +2907,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_SET_SEQUENCE_RESOLUTION");
     lua_pushcfunction(L, lua_emp_tmb_set_audio_format);
     lua_setfield(L, -2, "TMB_SET_AUDIO_FORMAT");
+    lua_pushcfunction(L, lua_emp_tmb_set_effective_video_tracks);
+    lua_setfield(L, -2, "TMB_SET_EFFECTIVE_VIDEO_TRACKS");
     lua_pushcfunction(L, lua_emp_tmb_set_track_clips);
     lua_setfield(L, -2, "TMB_SET_TRACK_CLIPS");
     lua_pushcfunction(L, lua_emp_tmb_add_clips);

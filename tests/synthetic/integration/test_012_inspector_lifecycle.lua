@@ -53,7 +53,7 @@ local function make_real_ui_state(mode, field_entries)
     assert(apply_btn, "make_real_ui_state: CREATE apply_btn returned nil")
     assert(reset_btn, "make_real_ui_state: CREATE reset_btn returned nil")
 
-    local schema_view = { field_widgets = field_entries or {} }
+    local schema_view = { field_widgets = field_entries or {}, sections = {} }
     return {
         mode               = mode,
         error_banner       = banner,
@@ -208,7 +208,10 @@ do
     local e_clean = make_entry({ field_key = "b", dirty = false })
     local e_err   = make_entry({ field_key = "c", dirty = true, err = true, model_value = 100 })
 
-    selection_binding._discard_pending({ field_widgets = { a = e_dirty, b = e_clean, c = e_err } })
+    selection_binding._discard_pending({
+        field_widgets = { a = e_dirty, b = e_clean, c = e_err },
+        sections = {},  -- non-flat dirty walk requires sections list (empty in this fixture)
+    })
 
     -- dirty-valid: clear_dirty fires
     assert(e_dirty.clear_dirty_calls == 1, string.format(
@@ -241,7 +244,7 @@ do
     local entry = make_entry({ field_key = "mark_in", dirty = true, err = true, model_value = 50 })
     assert(entry.error, "precondition: entry must start in error state")
 
-    selection_binding._discard_pending({ field_widgets = { mark_in = entry } })
+    selection_binding._discard_pending({ field_widgets = { mark_in = entry }, sections = {} })
 
     assert(not entry.error, "DR-DISCARD-ERR: error flag must be cleared after discard")
     print("  PASS DR-DISCARD-ERR")

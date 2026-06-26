@@ -58,7 +58,15 @@ local log = require("core.logger").for_area("media")
 -- them (BRAW SDK). Pre-v4 cache entries lack these fields, and the
 -- relinker would silently fall back to the lossy duration_us
 -- round-trip — exactly the bug being fixed. Bump forces re-probe.
-local CACHE_VERSION = 4
+--
+-- v5 (2026-06-25): EMP now surfaces all_video_tc_origins /
+-- all_audio_tc_origins — every distinct TC found in the container
+-- (multi-tmcd files: render TC + original-source TC). The relinker's
+-- probe_result_from_emp_info gates on has_video_tc_origin /
+-- has_audio_tc_origin and then ASSERTS the corresponding array is
+-- non-empty (first entry == primary). Pre-v5 cache entries lack these
+-- arrays — the assert would fire on stale hits. Bump forces re-probe.
+local CACHE_VERSION = 5
 
 -- Fields that MUST be present on every cached info to consider the
 -- entry fresh. The relinker's downstream logic gates behavior on

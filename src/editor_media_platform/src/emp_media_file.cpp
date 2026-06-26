@@ -44,6 +44,91 @@ Result<void> MediaFile::ProbeCodec() const {
     return {};
 }
 
+// Forward decl — definition lives near Open() / ProbeMetadata() further
+// down. ProbeCodecExistence needs the log-level guard like every other
+// avformat_open_input caller in this TU.
+static void ensure_ffmpeg_log_level_set();
+
+// Cheap decoder-availability probe. Skips avformat_find_stream_info
+// (which reads up to 5 MB and may decode frames to confirm pix_fmt) —
+// the codec_id from avformat_open_input alone is sufficient for our
+// only consumer: `avcodec_find_decoder(codec_id) != nullptr`.
+//
+// On a project open this used to add ~4.7 GB of disk reads + VT-engine
+// contention across 945 files (see media_status.start_background_probe);
+// thinning to avformat_open_input alone drops that ~80× and removes VT
+// contention entirely. Existing playback-path callers of MediaFile::Open
+// keep their full-fidelity probe — only codec_probe_worker swaps in here.
+Result<void> MediaFile::ProbeCodecExistence(const std::string& path) {
+    if (impl::is_braw_file(path)) {
+        // BRAW: SDK IS the decoder. Existence = SDK present (which is a
+        // build-time fact, not per-file). Mirror ProbeCodec's branch.
+        return {};
+    }
+
+    ensure_ffmpeg_log_level_set();
+
+    AVFormatContext* fmt = nullptr;
+    int ret = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr);
+    if (ret < 0) {
+        if (ret == AVERROR(ENOENT)) {
+            return Error::file_not_found(path);
+        }
+        return impl::ffmpeg_error(ret, "avformat_open_input(" + path + ")");
+    }
+    // RAII close — every return below pays the close, including the
+    // find_stream_info fallback below.
+    struct FmtCloser {
+        AVFormatContext** p;
+        ~FmtCloser() { if (p && *p) avformat_close_input(p); }
+    } closer{&fmt};
+
+    // Walk header-declared streams for a video stream (skip attached
+    // pic = album-art covers). codec_type comes from the container parse
+    // — no packet read required.
+    int video_idx = -1;
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+        AVStream* st = fmt->streams[i];
+        if (!st || !st->codecpar) continue;
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) continue;
+        if (st->disposition & AV_DISPOSITION_ATTACHED_PIC) continue;
+        video_idx = static_cast<int>(i);
+        break;
+    }
+    if (video_idx < 0) {
+        // Audio-only or attached-pic-only — no video codec to gate on.
+        // Mirrors ProbeCodec's m_info.has_video == false branch.
+        return {};
+    }
+
+    AVCodecID codec_id = fmt->streams[video_idx]->codecpar->codec_id;
+    if (codec_id == AV_CODEC_ID_NONE) {
+        // Container header didn't tell us (raw elementary streams,
+        // certain MPEG-TS encodes). Pay for find_stream_info here —
+        // it's the only reliable codec_id source for these files. Rare
+        // path; common formats (MOV/MP4/MXF/MKV) carry codec_id in the
+        // header and never reach this branch.
+        ret = avformat_find_stream_info(fmt, nullptr);
+        if (ret < 0) {
+            return impl::ffmpeg_error(ret,
+                "ProbeCodecExistence find_stream_info fallback(" + path + ")");
+        }
+        codec_id = fmt->streams[video_idx]->codecpar->codec_id;
+        if (codec_id == AV_CODEC_ID_NONE) {
+            return Error::unsupported(
+                "ProbeCodecExistence: codec_id unknown after find_stream_info: "
+                + path);
+        }
+    }
+
+    const AVCodec* decoder = avcodec_find_decoder(codec_id);
+    if (!decoder) {
+        return Error::unsupported(
+            std::string("No decoder for codec ") + avcodec_get_name(codec_id));
+    }
+    return {};
+}
+
 // Select nominal rate using FFmpeg heuristic (from spec)
 static Rate select_nominal_rate(AVStream* stream, bool* is_vfr_out) {
     *is_vfr_out = false;
@@ -131,6 +216,50 @@ static const char* find_timecode_tag(AVFormatContext* fmt, AVStream* video_strea
     }
     AVDictionaryEntry* e = av_dict_get(fmt->metadata, "timecode", nullptr, 0);
     return (e && e->value) ? e->value : nullptr;
+}
+
+// Collect every distinct video-rate TC (in frames at video_fps) found in any
+// stream's "timecode" tag or the format-level "timecode" tag. The primary TC
+// (find_timecode_tag's first hit) is the first entry; additional distinct
+// values follow. A QuickTime file with separate camera-TC and render-TC
+// tmcd tracks (or sidecar-derived TC carried in stream metadata) surfaces
+// each here. Dedupe is by frame value — same TC repeated across video stream
+// + paired tmcd track collapses to one entry.
+//
+// Invariant: returned vector is empty iff has_video_tc_origin would be false.
+// When non-empty, vec[0] == first_frame_tc (the primary TC).
+static std::vector<int64_t> collect_all_video_tc_origins(
+        AVFormatContext* fmt, AVStream* video_stream, const MediaFileInfo& info) {
+    std::vector<int64_t> out;
+    if (info.video_fps_num <= 0 || info.video_fps_den <= 0) return out;
+
+    auto try_add = [&](const char* tc_str) {
+        if (!tc_str) return;
+        int64_t tc = parse_timecode_tag(tc_str, info.video_fps_num, info.video_fps_den);
+        for (int64_t existing : out) {
+            if (existing == tc) return;
+        }
+        out.push_back(tc);
+    };
+
+    // Order matches find_timecode_tag's preference: video_stream first, then
+    // format. After those, walk remaining streams (other tmcd data tracks,
+    // audio streams that carry timecode) so the secondary entries are
+    // discoverable for matchers.
+    if (video_stream) {
+        AVDictionaryEntry* e = av_dict_get(video_stream->metadata, "timecode", nullptr, 0);
+        if (e) try_add(e->value);
+    }
+    AVDictionaryEntry* e = av_dict_get(fmt->metadata, "timecode", nullptr, 0);
+    if (e) try_add(e->value);
+
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+        AVStream* s = fmt->streams[i];
+        if (s == video_stream) continue;
+        AVDictionaryEntry* se = av_dict_get(s->metadata, "timecode", nullptr, 0);
+        if (se) try_add(se->value);
+    }
+    return out;
 }
 
 // Extract video TC origin in frames at video rate.
@@ -400,6 +529,27 @@ static Result<MediaFileInfo> build_ffmpeg_info(impl::FFmpegFormatContext& fmt_ct
     // video and audio share a common recording clock (camera MOVs, etc.).
     // Primary-source audio TC wins when available.
     derive_audio_tc_from_video(info);
+
+    // Multi-TC discovery: collect every distinct video TC and audio TC
+    // from the container. Mirrors the primary extraction above — primary
+    // is vec[0] when present — so back-compat callers reading
+    // first_frame_tc / first_sample_tc see the same value.
+    if (info.has_video_tc_origin) {
+        info.all_video_tc_origins =
+            collect_all_video_tc_origins(fmt, video_stream, info);
+        assert(!info.all_video_tc_origins.empty() &&
+            "all_video_tc_origins must be non-empty when has_video_tc_origin");
+        assert(info.all_video_tc_origins[0] == info.first_frame_tc &&
+            "all_video_tc_origins[0] must equal first_frame_tc (primary)");
+    }
+    if (info.has_audio_tc_origin) {
+        // Audio TC sources are exclusive (BWF wins over stream start_time
+        // wins over video-derive) — there's only ever one. Single-entry
+        // vector keeps the shape uniform with the video side and lets
+        // future expansion (e.g. multi-track audio TC) drop in without
+        // changing the Lua contract.
+        info.all_audio_tc_origins.push_back(info.first_sample_tc);
+    }
 
     assert(info.first_frame_tc >= 0 && "build_ffmpeg_info: first_frame_tc must be >= 0");
     assert(info.first_sample_tc >= 0 && "build_ffmpeg_info: first_sample_tc must be >= 0");

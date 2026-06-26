@@ -79,6 +79,25 @@ struct MediaFileInfo {
     // to 0 — same semantics as has_video_tc_origin.
     bool has_audio_tc_origin = false;
 
+    // Every distinct TC value found in any stream's "timecode" tag or
+    // the format-level "timecode" tag, in frames at video_fps_num/den.
+    // first_frame_tc IS the first entry (preserved for back-compat); any
+    // additional entries are distinct TCs from other tmcd tracks or
+    // format metadata. Empty when no TC source was found
+    // (has_video_tc_origin == false).
+    //
+    // Use case: Resolve-style conform allows matching against multiple
+    // TC sources in one file. A file may carry both a render-time TC
+    // (elapsed-time tmcd) and an original-source TC (sidecar/atom).
+    // Matchers iterate this list when a single primary TC misses.
+    std::vector<int64_t> all_video_tc_origins;
+
+    // Every distinct audio TC value (samples at audio_sample_rate)
+    // found via BWF time_reference, audio stream start_time >= 1s, or
+    // derivation from a video TC origin. first_sample_tc IS the first
+    // entry. Empty when has_audio_tc_origin == false.
+    std::vector<int64_t> all_audio_tc_origins;
+
     // Rotation in degrees (0, 90, 180, 270) from display matrix metadata
     // Applies to phone footage recorded in portrait/landscape modes
     int rotation;
@@ -160,6 +179,19 @@ public:
     // Check if the video codec has a decoder available (no VT negotiation, no Reader).
     // Returns Ok if decodable, Error{Unsupported} if no decoder found.
     Result<void> ProbeCodec() const;
+
+    // Cheap decoder-availability probe. Opens the container only
+    // (avformat_open_input), inspects the video stream's codec_id from
+    // the container header, and calls avcodec_find_decoder. Avoids
+    // avformat_find_stream_info — which reads up to 5 MB and may decode
+    // frames to confirm pix_fmt — so this stays O(64 KB) per file for
+    // container-tagged formats (MOV/MP4/MXF/MKV/...). Falls back to
+    // find_stream_info ONLY if codec_id is unknown after open (rare:
+    // raw elementary streams). For audio-only files returns Ok.
+    //
+    // This is the codec_probe path; never use it where stream metadata
+    // (duration, fps, pix_fmt) is needed — use Open / ProbeMetadata.
+    static Result<void> ProbeCodecExistence(const std::string& path);
 
     // Internal: Constructor is public but MediaFileImpl is opaque, so only EMP can create MediaFiles
     explicit MediaFile(std::unique_ptr<MediaFileImpl> impl, MediaFileInfo info);
