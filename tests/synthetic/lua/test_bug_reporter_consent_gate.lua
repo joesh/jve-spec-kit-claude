@@ -117,6 +117,8 @@ os.execute("/bin/rm -rf " .. TMP)
 -- dialog_prefs writes to the real ~/.jve/bug_reporter_prefs.json
 -- because dialog_prefs.path_for reads HOME directly; clean up that
 -- pollution at exit.
-local real_prefs = (os.getenv("HOME") or "") .. "/.jve/bug_reporter_prefs.json"
-os.remove(real_prefs)
+local real_home = os.getenv("HOME")
+if real_home and real_home ~= "" then
+    os.remove(real_home .. "/.jve/bug_reporter_prefs.json")
+end
 print("✅ test_bug_reporter_consent_gate.lua passed")
