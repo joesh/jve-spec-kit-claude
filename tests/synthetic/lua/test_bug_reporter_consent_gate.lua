@@ -68,6 +68,11 @@ end
 -- (2) Accept: /register fires; install_id.json exists.
 do
     http_calls = {}
+    -- Reset pref to the never-set state — case (1) saved pref=false on
+    -- decline; case (2) simulates a fresh user (no prior decline).
+    if type(telemetry.set_pref_for_tests) == "function" then
+        telemetry.set_pref_for_tests(nil)
+    end
     telemetry.set_consent_outcome_for_tests("accept")
     os.remove(TMP .. "/.jve/install_id.json")
     telemetry.init()
@@ -86,6 +91,9 @@ end
 -- (3) Decline → flip pref ON → next interaction issues /register first.
 do
     http_calls = {}
+    if type(telemetry.set_pref_for_tests) == "function" then
+        telemetry.set_pref_for_tests(nil)  -- fresh-user state
+    end
     telemetry.set_consent_outcome_for_tests("decline")
     os.remove(TMP .. "/.jve/install_id.json")
     telemetry.init()  -- decline path; no register
@@ -106,4 +114,9 @@ do
 end
 
 os.execute("/bin/rm -rf " .. TMP)
+-- dialog_prefs writes to the real ~/.jve/bug_reporter_prefs.json
+-- because dialog_prefs.path_for reads HOME directly; clean up that
+-- pollution at exit.
+local real_prefs = (os.getenv("HOME") or "") .. "/.jve/bug_reporter_prefs.json"
+os.remove(real_prefs)
 print("✅ test_bug_reporter_consent_gate.lua passed")

@@ -67,6 +67,36 @@ if not _G.qt_fs_path_exists then
     end
 end
 
+-- qt_get_cpu_info / qt_get_system_memory_mb / qt_get_uname /
+-- qt_get_gpu_info_metal — production via hardware_bindings.{cpp,mm}.
+-- Harness stubs return plausible synthetic values so telemetry-side
+-- tests can drive register/heartbeat paths.
+if not _G.qt_get_uname then
+    _G.qt_get_uname = function()
+        return { platform = "Darwin", os_version = "24.6.0", arch = "arm64" }
+    end
+end
+if not _G.qt_get_cpu_info then
+    _G.qt_get_cpu_info = function()
+        return {
+            model = "Apple M2 Pro (stub)",
+            cores_physical = 10, cores_logical = 10,
+            perf_cores = 8, eff_cores = 2,
+        }
+    end
+end
+if not _G.qt_get_system_memory_mb then
+    _G.qt_get_system_memory_mb = function() return 32768 end
+end
+if not _G.qt_get_gpu_info_metal then
+    _G.qt_get_gpu_info_metal = function()
+        return {
+            vendor = "Apple", model = "Apple M2 Pro GPU (stub)",
+            memory_mb = 22016, api = "Metal", unified_memory = true,
+        }
+    end
+end
+
 -- qt_hmac_sha256 — production via crypto_bindings.cpp (OpenSSL HMAC).
 -- Harness stubs via /usr/bin/openssl dgst -mac HMAC -macopt hexkey:<...>
 -- so standalone luajit tests for transport.lua can drive HMAC paths.
