@@ -223,6 +223,23 @@ target_include_directories(JVECore PUBLIC
     ${ZSTD_INCLUDE_DIRS}
 )
 
+# Build-time git SHA injection for bug-reporter version attribution
+# (feature 027 T001). Runs on EVERY build invocation; configure_file()
+# inside the helper script leaves the output untouched when the SHA is
+# unchanged, so non-SHA-bumping rebuilds do not invalidate every TU that
+# includes jve_build_info.h.
+add_custom_target(generate_build_info ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DREPO_ROOT=${CMAKE_SOURCE_DIR}
+        -DINPUT_TEMPLATE=${CMAKE_SOURCE_DIR}/src/jve_build_info.h.in
+        -DOUTPUT_HEADER=${CMAKE_SOURCE_DIR}/src/jve_build_info.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/generate_build_info.cmake
+    BYPRODUCTS ${CMAKE_SOURCE_DIR}/src/jve_build_info.h
+    COMMENT "Updating jve_build_info.h with current git SHA"
+    VERBATIM
+)
+add_dependencies(JVECore generate_build_info)
+
 # Main application executable
 add_executable(jve
     src/main.cpp

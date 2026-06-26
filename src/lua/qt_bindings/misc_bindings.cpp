@@ -1,5 +1,6 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
+#include "../../jve_build_info.h" // Generated; carries JVE_GIT_SHA for qt_get_build_info
 #include "../../timeline_renderer.h" // For lua_create_timeline_renderer
 #include <chrono>
 #include <sys/stat.h>      // ::stat for nanosecond mtime/atime (POSIX)
@@ -64,6 +65,17 @@ static int lua_qt_monotonic_s(lua_State* L) {
     auto now = std::chrono::steady_clock::now().time_since_epoch();
     double seconds = std::chrono::duration<double>(now).count();
     lua_pushnumber(L, seconds);
+    return 1;
+}
+
+// Build provenance — short git SHA the binary was compiled from. Used
+// by the bug-reporter pipeline (feature 027) to stamp captures so every
+// cluster signature includes a verifiable version anchor. SHA frozen at
+// compile time via cmake/generate_build_info.cmake.
+static int lua_qt_get_build_info(lua_State* L) {
+    lua_newtable(L);
+    lua_pushstring(L, JVE_GIT_SHA);
+    lua_setfield(L, -2, "git_sha");
     return 1;
 }
 

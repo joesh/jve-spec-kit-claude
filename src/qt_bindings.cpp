@@ -352,6 +352,10 @@ void registerQtBindings(lua_State* L)
     // per-project pidlock owner check (replaces ps shellout).
     lua_pushcfunction(L, lua_qt_get_pid); lua_setglobal(L, "qt_get_pid");
 
+    // Build provenance for the bug-reporter pipeline (feature 027 T001).
+    // Returns {git_sha = "<7-char short SHA the binary was compiled from>"}.
+    lua_pushcfunction(L, lua_qt_get_build_info); lua_setglobal(L, "qt_get_build_info");
+
     // Thread sleep + FS existence — replace the helper_supervisor
     // wait_for_bind shellouts (test -S / sleep). The fork-per-tick pattern
     // broke under Finder-launched .app's stripped PATH.
