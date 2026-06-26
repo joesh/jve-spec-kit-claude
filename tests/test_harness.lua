@@ -67,6 +67,51 @@ if not _G.qt_fs_path_exists then
     end
 end
 
+-- qt_fs_remove_dir_recursive / qt_fs_listdir — production via
+-- misc_bindings.cpp (QDir). Harness stubs use POSIX rm -rf / ls; the
+-- bug_reporter exporter calls these to clean up per-capture
+-- screenshots/ subdir before payload zips.
+if not _G.qt_fs_remove_dir_recursive then
+    _G.qt_fs_remove_dir_recursive = function(path)
+        assert(type(path) == "string" and path ~= "",
+            "qt_fs_remove_dir_recursive: path required")
+        local rc = os.execute(string.format("/bin/rm -rf %q", path))
+        if rc == 0 or rc == true then return true end
+        return false, string.format("/bin/rm -rf exited %s", tostring(rc))
+    end
+end
+if not _G.qt_fs_listdir then
+    _G.qt_fs_listdir = function(path)
+        assert(type(path) == "string" and path ~= "",
+            "qt_fs_listdir: path required")
+        local p = io.popen("/bin/ls -1A " .. string.format("%q", path) .. " 2>/dev/null")
+        if not p then return nil, "popen failed" end
+        local out = {}
+        for line in p:lines() do out[#out + 1] = line end
+        p:close()
+        return out
+    end
+end
+
+-- qt_get_build_info — production via misc_bindings.cpp returns the
+-- generated JVE_GIT_SHA; harness stub returns a syntactically valid
+-- 7-hex-char SHA so core.build_info loads without asserting. Tests
+-- that need the actual SHA (none yet) can stub themselves.
+if not _G.qt_get_build_info then
+    _G.qt_get_build_info = function() return { git_sha = "0000000" } end
+end
+
+-- qt_monotonic_s — production via misc_bindings.cpp::lua_qt_monotonic_s
+-- (chrono::steady_clock). Harness uses os.time + a synthetic offset so
+-- the bug_reporter ring buffer can compute elapsed-ms. Tests that need
+-- deterministic time injection monkey-patch _G.qt_monotonic_s directly
+-- (e.g. test_bug_reporter_capture_monotonic). For tests that don't, the
+-- real os.time gives them a real wall clock that survives across calls.
+if not _G.qt_monotonic_s then
+    local start = os.time()
+    _G.qt_monotonic_s = function() return os.time() - start end
+end
+
 -- qt_sha256 — production via src/bug_reporter/crypto_bindings.cpp
 -- (OpenSSL EVP_Digest). Harness stubs via /usr/bin/shasum -a 256 on a
 -- temp file (handles arbitrary bytes including embedded NULs without
