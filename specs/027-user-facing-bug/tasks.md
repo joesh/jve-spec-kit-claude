@@ -135,12 +135,11 @@
   - Create helper module `src/lua/bug_reporter/zip_writer.lua` exporting `M.zip_files(output_path, file_paths) -> ok, errmsg`. The `-j` flag strips directory components so the zip contains just the basenames. Assert on non-zero exit.
   - Acceptance: a small Lua snippet zips two files; `unzip -l` shows them as flat entries.
 
-- [ ] **T014b** Add `qt_reveal_in_finder` binding.
-  - NEW binding in `src/lua/qt_bindings/misc_bindings.cpp`.
-  - On macOS: ObjC++ snippet calling `[[NSWorkspace sharedWorkspace] selectFile:inFileViewerRootedAtPath:]`. Requires linking `AppKit` framework; check `CMakeLists.txt` mac-only section for existing AppKit link (or add it).
-  - On Linux/Windows: stub returning `false` immediately. Documented limitation.
-  - **Test hook**: if env var `JVE_BUG_REPORT_REVEAL_HOOK` is set to a file path, instead of calling Finder, write the supplied path string to that file and return true. This is the test-hook mechanism for T006 — production code branches on the env var (off by default), no sentinel-in-production pollution.
-  - Acceptance: `qt_reveal_in_finder("/tmp")` opens a Finder window (manual); with `JVE_BUG_REPORT_REVEAL_HOOK=/tmp/x` set, writes `/tmp` to `/tmp/x`.
+- [ ] **T014b** Add reveal-in-Finder helper. **Spec sync (impl pass)**: implemented as the Lua module `src/lua/bug_reporter/reveal.lua` shelling `/usr/bin/open -R` rather than a `qt_reveal_in_finder` C++ binding. The C++ approach would have required AppKit framework linkage + objc_msgSend plumbing for a single one-shot user-visible action — disproportionate scope. The Lua module honors the same `JVE_BUG_REPORT_REVEAL_HOOK` test hook semantics.
+  - On macOS: `/usr/bin/open -R <path>` via `os.execute` (absolute binary path defeats Finder-launched stripped-PATH trap).
+  - On Linux/Windows: returns `false` immediately. Documented limitation per spec out-of-scope.
+  - **Test hook**: if env var `JVE_BUG_REPORT_REVEAL_HOOK` is set to a file path, write the supplied path string to that file and return true. Production code branches on the env var (off by default in production launches), no sentinel-in-production pollution.
+  - Acceptance: `require("bug_reporter.reveal").reveal("/tmp")` opens a Finder window (manual); with `JVE_BUG_REPORT_REVEAL_HOOK=/tmp/x` set, writes `/tmp` to `/tmp/x`.
 
 - [ ] **T014c** Modify `src/lua/core/commands/report_bug.lua` for Phase A submit handler.
   - Rename internal `test_path` → `capture_path` (cosmetic, recon-confirmed in research D-02 note).
