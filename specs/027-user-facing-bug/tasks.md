@@ -60,7 +60,7 @@
 
 - [ ] **T006 [P]** Write failing test `tests/synthetic/lua/test_bug_reporter_dialog_wiring.lua`.
   - Requires `--test` mode (absolute path).
-  - Set env `JVE_BUG_REPORT_REVEAL_HOOK=/tmp/jve_test_reveal_<pid>.txt` BEFORE launching. The reveal-in-finder binding (T014b) writes to this path instead of calling Finder when env var is set. **NO sentinel-in-production**: production code only consults the env var; if unset, calls Finder.
+  - Set env `JVE_BUG_REPORT_REVEAL_HOOK=/tmp/jve_test_reveal_<pid>.txt` IN THE PARENT SHELL before launching jve — Lua stdlib has no `setenv`, so the test invocation is `JVE_BUG_REPORT_REVEAL_HOOK=/tmp/... ./build/bin/jve.app/.../jve --test <abs-path>`. The reveal-in-finder binding (T014b) writes to this path instead of calling Finder when env var is set. **NO sentinel-in-production**: production code only consults the env var; if unset, calls Finder.
   - Open submission dialog. Read state model's `is_submittable` — assert false. Set title via state setter — assert `is_submittable` becomes true.
   - Invoke Cancel handler — assert dialog closes, env-var sentinel file NOT written.
   - Re-open, set title, invoke Submit handler — assert env-var sentinel file IS written and contains a zip path.
