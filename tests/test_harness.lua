@@ -67,6 +67,29 @@ if not _G.qt_fs_path_exists then
     end
 end
 
+-- qt_sha256 — production via src/bug_reporter/crypto_bindings.cpp
+-- (OpenSSL EVP_Digest). Harness stubs via /usr/bin/shasum -a 256 on a
+-- temp file (handles arbitrary bytes including embedded NULs without
+-- shell-escaping). Used by bug_reporter.signature and the worker
+-- transport's payload hash.
+if not _G.qt_sha256 then
+    _G.qt_sha256 = function(s)
+        assert(type(s) == "string", "qt_sha256: argument must be a string")
+        local tmppath = os.tmpname()
+        local f = assert(io.open(tmppath, "wb"))
+        f:write(s)
+        f:close()
+        local p = assert(io.popen("/usr/bin/shasum -a 256 < " .. tmppath))
+        local line = p:read("*l")
+        p:close()
+        os.remove(tmppath)
+        assert(line, "qt_sha256 stub: shasum produced no output")
+        local hex = line:match("^(%x+)")
+        assert(hex and #hex == 64, "qt_sha256 stub: unexpected shasum line " .. tostring(line))
+        return hex
+    end
+end
+
 -- Now we can require modules
 local command_manager = require("core.command_manager")
 
