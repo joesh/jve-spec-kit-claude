@@ -53,6 +53,9 @@ globals = {
     "qt_get_pid",
     -- spec 027 T001 — build provenance for bug reporter (git SHA at compile time).
     "qt_get_build_info",
+    -- spec 027 T010b — QPixmap dimension accessors used by bug-reporter capture tests.
+    "qpixmap_width",
+    "qpixmap_height",
     -- spec 023 — helper_supervisor wait_for_bind: replaces test/sleep shellouts.
     "qt_thread_msleep",
     "qt_fs_path_exists",
