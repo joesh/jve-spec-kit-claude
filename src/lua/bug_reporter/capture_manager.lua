@@ -1,21 +1,31 @@
 --- capture_manager.lua
 -- Continuous ring buffer capture system for bug reporting
 -- Captures gestures, commands, logs, and screenshots in memory
-local utils = require("bug_reporter.utils")
 local log = require("core.logger").for_area("ui")
 local path_utils = require("core.path_utils")
 
--- Configuration constants
-local MAX_GESTURES_IN_BUFFER = 200
-local MAX_CAPTURE_TIME_MINUTES = 5
+-- Configuration constants. Feature 027 T009 adds per-stream count caps
+-- so commands/logs/screenshots also stop accumulating once their cap
+-- is hit (gesture cap was the only pre-existing one). Without these
+-- caps the 5-minute wall window meant nothing for streams that fire
+-- fast enough — a stuck render loop could emit thousands of log lines
+-- in seconds and the report payload would exceed FR-024a's 10 MB cap.
+local MAX_GESTURES_IN_BUFFER     = 200
+local MAX_COMMANDS_IN_BUFFER     = 200
+local MAX_LOGS_IN_BUFFER         = 1000
+local MAX_SCREENSHOTS_IN_BUFFER  = 300
+local MAX_CAPTURE_TIME_MINUTES   = 5
 local MAX_CAPTURE_TIME_MS = MAX_CAPTURE_TIME_MINUTES * 60 * 1000  -- 5 minutes = 300000ms
 local SCREENSHOT_INTERVAL_SECONDS = 1
 local SCREENSHOT_INTERVAL_MS = SCREENSHOT_INTERVAL_SECONDS * 1000  -- 1 second = 1000ms
 
 local CaptureManager = {
     -- Configuration
-    max_gestures = MAX_GESTURES_IN_BUFFER,
-    max_time_ms = MAX_CAPTURE_TIME_MS,
+    max_gestures    = MAX_GESTURES_IN_BUFFER,
+    max_commands    = MAX_COMMANDS_IN_BUFFER,
+    max_logs        = MAX_LOGS_IN_BUFFER,
+    max_screenshots = MAX_SCREENSHOTS_IN_BUFFER,
+    max_time_ms     = MAX_CAPTURE_TIME_MS,
     screenshot_interval_ms = SCREENSHOT_INTERVAL_MS,
     capture_enabled = true,  -- User preference
 
@@ -31,10 +41,14 @@ local CaptureManager = {
     next_command_id = 1,
 }
 
--- Initialize capture manager
+-- Initialize capture manager. Feature 027 T009 swaps os.clock() for
+-- qt_monotonic_s() — os.clock() is process CPU time, not wall time, so
+-- the 5-minute trim never fired on a mostly-idle JVE (the user reads
+-- "last 5 minutes" at F12; we'd ship 12 hours).
 function CaptureManager:init()
-    -- Use os.clock() for monotonic, high-resolution timing (not affected by system clock changes)
-    self.session_start_time = os.clock()
+    -- Global lookup each call so tests can stub qt_monotonic_s for
+    -- deterministic wall-time injection (T003 monkey-patches _G.qt_monotonic_s).
+    self.session_start_time = qt_monotonic_s()
     self.gesture_ring_buffer = {}
     self.command_ring_buffer = {}
     self.log_ring_buffer = {}
@@ -45,14 +59,12 @@ function CaptureManager:init()
     log.event("Capture manager initialized (enabled=%s)", tostring(self.capture_enabled))
 end
 
--- Get elapsed milliseconds since session start
--- Uses os.clock() for monotonic, millisecond-precision timing
--- os.clock() is not affected by system clock changes and provides sub-second resolution
+-- Elapsed milliseconds since session start using monotonic wall time.
 function CaptureManager:get_elapsed_ms()
     if not self.session_start_time then
-        self.session_start_time = os.clock()
+        self.session_start_time = qt_monotonic_s()
     end
-    return (os.clock() - self.session_start_time) * 1000
+    return (qt_monotonic_s() - self.session_start_time) * 1000
 end
 
 -- Log a gesture event
@@ -186,21 +198,20 @@ function CaptureManager:trim_buffers()
         end
     end
 
-    -- Trim gestures by count AND time
+    -- Trim every stream by both wall-age and per-stream count cap so
+    -- bursty streams (logs from a stuck loop, screenshots from rapid
+    -- redraw) can't blow past the 10 MB payload limit (FR-024a).
     local gesture_remove = count_removals(self.gesture_ring_buffer, cutoff_time, self.max_gestures)
     batch_remove(self.gesture_ring_buffer, gesture_remove)
 
-    -- Trim commands by time only (they're sparse)
-    local command_remove = count_removals(self.command_ring_buffer, cutoff_time, nil)
+    local command_remove = count_removals(self.command_ring_buffer, cutoff_time, self.max_commands)
     batch_remove(self.command_ring_buffer, command_remove)
 
-    -- Trim log messages by time only
-    local log_remove = count_removals(self.log_ring_buffer, cutoff_time, nil)
+    local log_remove = count_removals(self.log_ring_buffer, cutoff_time, self.max_logs)
     batch_remove(self.log_ring_buffer, log_remove)
 
-    -- Trim screenshots by time only (they're dense at 1/second)
-    -- Screenshots contain QPixmap userdata that may need explicit cleanup
-    local screenshot_remove = count_removals(self.screenshot_ring_buffer, cutoff_time, nil)
+    -- Screenshots contain QPixmap userdata that may need explicit cleanup.
+    local screenshot_remove = count_removals(self.screenshot_ring_buffer, cutoff_time, self.max_screenshots)
     local function cleanup_screenshot(entry)
         -- Attempt to explicitly clean up QPixmap if delete() method exists
         -- Otherwise rely on Lua GC with __gc metamethod
@@ -281,29 +292,15 @@ function CaptureManager:export_capture(metadata)
     local was_enabled = self.capture_enabled
     self.capture_enabled = false
 
-    -- Take database snapshot (if database module available)
-    local db_snapshot_path = nil
-    if database and database.backup_to_file then
-        local suffix = utils.human_datestamp_for_filename(os.time())
-        local snapshot_dir = path_utils.resolve_repo_path("tests/captures")
-        db_snapshot_path = snapshot_dir .. "/bug-" .. suffix .. ".db"
-        local success, err = database.backup_to_file(db_snapshot_path)
-        if not success then
-            log.warn("Database backup failed: %s", err or "unknown")
-            db_snapshot_path = nil
-        end
-    end
-
-    -- Prepare capture data
+    -- Feature 027 FR-011a: .jvp content MUST NOT ship in any payload.
+    -- The legacy database-snapshot branch is removed entirely; metadata
+    -- no longer carries a database_snapshot_after field.
     local capture_data = {
         gestures = self.gesture_ring_buffer,
         commands = self.command_ring_buffer,
         logs = self.log_ring_buffer,
         screenshots = self.screenshot_ring_buffer
     }
-
-    -- Add capture configuration to metadata
-    metadata.database_snapshot_after = db_snapshot_path
     metadata.screenshot_interval_ms = self.screenshot_interval_ms
 
     -- Set default output directory
