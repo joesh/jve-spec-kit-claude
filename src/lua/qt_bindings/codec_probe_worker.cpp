@@ -61,21 +61,19 @@ void CodecProbeWorker::worker_loop() {
         CodecProbeResult result;
         result.path = path;
 
-        // Two-stage probe: container open, then decoder availability check.
-        // ProbeCodec uses avcodec_find_decoder — no VT negotiation, no Reader,
-        // no "SW decode" warnings.
-        auto open_result = emp::MediaFile::Open(path);
-        if (open_result.is_error()) {
+        // Thin probe: avformat_open_input only, header-derived codec_id,
+        // avcodec_find_decoder. NO avformat_find_stream_info, NO VT
+        // negotiation, NO frame decode. Cuts per-file I/O from ~5 MB
+        // (Open() default probesize) to ~64 KB for container-tagged
+        // formats — critical when this worker runs concurrently with
+        // playback, where the 5 MB pulls were thrashing the page cache
+        // and contending for the VT hardware engine.
+        auto probe_result = emp::MediaFile::ProbeCodecExistence(path);
+        if (probe_result.is_error()) {
             result.offline = true;
-            result.error_code = emp::error_code_to_string(open_result.error().code);
+            result.error_code = emp::error_code_to_string(probe_result.error().code);
         } else {
-            auto probe_result = open_result.value()->ProbeCodec();
-            if (probe_result.is_error()) {
-                result.offline = true;
-                result.error_code = emp::error_code_to_string(probe_result.error().code);
-            } else {
-                result.offline = false;
-            }
+            result.offline = false;
         }
 
         batch.push_back(std::move(result));
