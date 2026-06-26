@@ -97,11 +97,9 @@ function BugReporter.capture_screenshot()
     local transport = require("core.playback.transport")
     local engine = transport.record_engine
     if engine and engine:is_playing() then
-        log.event("bug_reporter timer fired during play — SKIPPING grab")
-        return
+        return  -- 1 Hz log line dropped per T010b; play-skip is the only quiet behavior worth its own line.
     end
 
-    log.event("bug_reporter timer fired — calling grab_window")
     local pixmap = grab_window()
     if pixmap then
         capture_manager:capture_screenshot(pixmap)

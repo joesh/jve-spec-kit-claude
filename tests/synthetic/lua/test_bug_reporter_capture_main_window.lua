@@ -30,17 +30,21 @@ end
 -- Build the JVE main window so lua_grab_window has something to find by
 -- objectName. T010a sets `objectName = "JVEMainWindow"` on this widget.
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
+-- Mirror layout.lua (T010a): the grab path looks up the main window by
+-- objectName; without this call, lua_grab_window will fail-loud with
+-- T010a-not-wired (which is correct production behavior, but here we
+-- DO want a main window to find).
+qt_set_object_name(main_window, "JVEMainWindow")
 qt_constants.PROPERTIES.SET_SIZE(main_window, 1400, 900)
 qt_constants.DISPLAY.SHOW(main_window)
 
 -- Open an auxiliary dialog so it becomes the focused top-level (this is
 -- the misdirection trap the legacy grab_window fell into).
-local dialog = qt_constants.DIALOG.CREATE(main_window, "Auxiliary modal", false)
-qt_constants.PROPERTIES.SET_SIZE(dialog, 398, 292)
+local dialog = qt_constants.DIALOG.CREATE("Auxiliary modal", 398, 292, main_window)
 qt_constants.DISPLAY.SHOW(dialog)
 
 -- Let the windowserver assign geometry + focus.
-qt_constants.APP.PROCESS_EVENTS()
+qt_constants.CONTROL.PROCESS_EVENTS()
 
 -- Trigger capture through the same path F12's 1 Hz timer uses.
 local bug_reporter = require("bug_reporter")

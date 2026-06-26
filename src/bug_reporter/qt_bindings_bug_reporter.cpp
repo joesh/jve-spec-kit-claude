@@ -119,41 +119,50 @@ static int lua_set_gesture_logger_enabled(lua_State* L) {
  * Captures screenshot of widget.
  */
 static int lua_grab_window(lua_State* L) {
-    // For now, grab the main application widget
-    QWidget* mainWidget = qApp->activeWindow();
-    if (!mainWidget) {
-        // Try to get any top-level widget
-        QWidgetList topLevel = qApp->topLevelWidgets();
-        if (!topLevel.isEmpty()) {
-            mainWidget = topLevel.first();
+    // Feature 027 T010b: target the JVE main window by objectName so a
+    // transient dialog focused at F12 time can't poison the capture.
+    // The main window's objectName is set in src/lua/ui/layout.lua just
+    // after WIDGET.CREATE_MAIN_WINDOW (T010a). If no widget matches,
+    // fail loud — per Constitution VI we do NOT silently fall back to
+    // whatever activeWindow happens to be.
+    QWidget* mainWidget = nullptr;
+    for (QWidget* w : qApp->topLevelWidgets()) {
+        if (w && w->objectName() == QStringLiteral("JVEMainWindow")) {
+            mainWidget = w;
+            break;
         }
     }
-
     if (!mainWidget) {
-        lua_pushnil(L);
-        lua_pushstring(L, "No window available to capture");
-        return 2;
+        return luaL_error(L,
+            "bug_reporter grab_window: no top-level widget has objectName 'JVEMainWindow' — "
+            "is layout.lua's qt_set_object_name call wired (T010a)?");
     }
 
-    // Grab the window — INSTRUMENTED to measure main-thread stall.
-    // Suspected cause of 1 Hz periodic playback cadence outliers; log every
-    // call's wall-clock duration so we can correlate with the playback diag.
-    QElapsedTimer grab_timer;
-    grab_timer.start();
     QPixmap pixmap = mainWidget->grab();
-    qint64 grab_ms = grab_timer.elapsed();
-    JVE_LOG_EVENT(Ui, "bug_reporter grab_window: %lld ms (widget=%p size=%dx%d)",
-        (long long)grab_ms, (void*)mainWidget,
-        pixmap.width(), pixmap.height());
 
     // Create QPixmap userdata
     QPixmap** userData = (QPixmap**)lua_newuserdata(L, sizeof(QPixmap*));
     *userData = new QPixmap(pixmap);
 
-    // Set metatable (we'll define this below)
     luaL_getmetatable(L, "QPixmap");
     lua_setmetatable(L, -2);
 
+    return 1;
+}
+
+/**
+ * qpixmap_width(pixmap) / qpixmap_height(pixmap) — accessors used by
+ * the bug-reporter main-window capture test (T004). Trivial wrappers
+ * over QPixmap::width()/height().
+ */
+static int lua_qpixmap_width(lua_State* L) {
+    QPixmap** userData = (QPixmap**)luaL_checkudata(L, 1, "QPixmap");
+    lua_pushinteger(L, (*userData)->width());
+    return 1;
+}
+static int lua_qpixmap_height(lua_State* L) {
+    QPixmap** userData = (QPixmap**)luaL_checkudata(L, 1, "QPixmap");
+    lua_pushinteger(L, (*userData)->height());
     return 1;
 }
 
@@ -463,6 +472,9 @@ void registerBugReporterBindings(lua_State* L) {
 
     // Register screenshot functions
     lua_register(L, "grab_window", lua_grab_window);
+    // QPixmap dimension accessors — feature 027 T010b
+    lua_register(L, "qpixmap_width", lua_qpixmap_width);
+    lua_register(L, "qpixmap_height", lua_qpixmap_height);
 
     // Register timer functions
     lua_register(L, "create_timer", lua_create_timer);
