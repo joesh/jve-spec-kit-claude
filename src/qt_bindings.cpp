@@ -365,6 +365,11 @@ void registerQtBindings(lua_State* L)
     // qt_sha256 (and later qt_hmac_sha256) into the global table.
     register_bug_reporter_crypto_bindings(L);
 
+    // Feature 027 T011 — filesystem helpers used by the bug-reporter
+    // exporter (rm screenshots/ after slideshow build; list files).
+    lua_pushcfunction(L, lua_qt_fs_listdir); lua_setglobal(L, "qt_fs_listdir");
+    lua_pushcfunction(L, lua_qt_fs_remove_dir_recursive); lua_setglobal(L, "qt_fs_remove_dir_recursive");
+
     // Thread sleep + FS existence — replace the helper_supervisor
     // wait_for_bind shellouts (test -S / sleep). The fork-per-tick pattern
     // broke under Finder-launched .app's stripped PATH.

@@ -4,6 +4,7 @@ local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
 local log = require("core.logger").for_area("ui")
 local uuid = require("uuid")
+local build_info = require("core.build_info")
 
 local JsonExporter = {}
 
@@ -83,6 +84,14 @@ function JsonExporter.export(capture_data, metadata, output_dir)
         if video_path then
             slideshow_path = video_path
             log.event("Slideshow video generated: %s", video_path)
+            -- Feature 027 FR-011 + FR-015: raw PNGs MUST NOT ship in
+            -- the payload. Delete the screenshots/ subdir now that the
+            -- slideshow.mp4 carries the visual record. Fail-loud per
+            -- Constitution VI — a stale dir means the next capture
+            -- ships duplicated content.
+            local rm_ok, rm_err = qt_fs_remove_dir_recursive(screenshot_dir)
+            assert(rm_ok, "json_exporter: failed to remove " .. screenshot_dir ..
+                " after slideshow build: " .. tostring(rm_err))
         else
             log.warn("Slideshow generation failed: %s", gen_err or "unknown")
         end
@@ -99,7 +108,7 @@ function JsonExporter.export(capture_data, metadata, output_dir)
         capture_metadata = {
             capture_type = metadata.capture_type or "automatic",
             capture_timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", timestamp),
-            jve_version = metadata.jve_version or "0.1.0-dev",
+            jve_version = metadata.jve_version or build_info.git_sha,
             platform = metadata.platform or JsonExporter.get_platform_info(),
             user_description = metadata.user_description,
             user_expected_behavior = metadata.user_expected_behavior,
@@ -113,24 +122,16 @@ function JsonExporter.export(capture_data, metadata, output_dir)
         command_log = JsonExporter.convert_command_log(capture_data.commands),
         log_output = JsonExporter.convert_log_output(capture_data.logs),
 
-        database_snapshots = {
-            before = metadata.database_snapshot_before,
-            after = metadata.database_snapshot_after
-        },
-
+        -- Feature 027 FR-011a: .jvp DB content MUST NOT ship in any
+        -- payload — database_snapshots block dropped entirely.
+        -- FR-011: only slideshow.mp4 + capture.json ride along; the
+        -- video_recording / YouTube block dropped with the Dec-2025
+        -- upload stack.
         screenshots = {
-            ring_buffer = screenshot_dir,
             screenshot_count = screenshot_count,
             screenshot_interval_ms = metadata.screenshot_interval_ms or 1000,
-            slideshow_video = slideshow_path  -- Phase 3: Now implemented!
+            slideshow_video = slideshow_path,
         },
-
-        video_recording = {
-            youtube_url = nil,  -- Phase 6
-            youtube_uploaded = false,
-            local_file = nil,
-            duration_seconds = 0
-        }
     }
 
     -- Write JSON file

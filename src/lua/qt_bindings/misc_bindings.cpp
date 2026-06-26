@@ -284,6 +284,56 @@ static int lua_qt_fs_mkdir_p(lua_State* L) {
     return 2;
 }
 
+// Feature 027 T011: list a directory's regular files (no dirs, no
+// dotfiles). Used by the bug-reporter export to enumerate screenshots
+// before slideshow.mp4 build (the slideshow generator already does its
+// own scan, but qt_fs_listdir is the generic primitive for any future
+// caller). Returns a Lua array of basenames; nil on missing directory.
+static int lua_qt_fs_listdir(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    QDir dir(QString::fromUtf8(path));
+    if (!dir.exists()) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "qt_fs_listdir: directory does not exist: %s", path);
+        return 2;
+    }
+    QStringList names = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+    lua_newtable(L);
+    for (int i = 0; i < names.size(); ++i) {
+        lua_pushstring(L, names[i].toUtf8().constData());
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+// Feature 027 T011: recursive directory removal. Used to delete the
+// per-capture screenshots/ subdir after slideshow.mp4 is built — raw
+// PNGs MUST NOT ship in the payload (FR-011, FR-015). Returns
+// (true, nil) on success, (false, "<reason>") on failure. Missing
+// directory is idempotent success (caller pattern is "rm after a
+// build step that may have already cleaned up").
+static int lua_qt_fs_remove_dir_recursive(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    if (path[0] == '\0') {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "qt_fs_remove_dir_recursive: path must not be empty");
+        return 2;
+    }
+    QDir dir(QString::fromUtf8(path));
+    if (!dir.exists()) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (dir.removeRecursively()) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushboolean(L, 0);
+    lua_pushfstring(L, "QDir::removeRecursively failed for %s (likely "
+        "permission denied or open file handle on a child)", path);
+    return 2;
+}
+
 namespace {
 constexpr int kBracketHeight = 20;
 constexpr int kBracketBarWidth = 2;
