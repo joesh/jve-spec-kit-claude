@@ -348,6 +348,12 @@ end, 50)
 -- Create main window
 log.event("About to create main window...")
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
+-- Feature 027 T010a: identify the JVE main window by objectName so the
+-- bug-reporter capture path can find it regardless of focus state.
+-- lua_grab_window (T010b) walks qApp->topLevelWidgets() looking for
+-- this name and asserts if missing — fail-fast, never silently grab
+-- whichever transient dialog happens to be focused.
+qt_set_object_name(main_window, "JVEMainWindow")
 log.event("Main window created successfully")
 log.event("Applying main window stylesheet...")
 assert(ui_constants and ui_constants.STYLES and type(ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR) == "string" and ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR ~= "",

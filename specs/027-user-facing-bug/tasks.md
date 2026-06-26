@@ -91,8 +91,7 @@
   - Acceptance: T003 passes; capture_manager file size doesn't grow significantly (this is correction + minor additions).
 
 - [ ] **T010a** Set `objectName("JVEMainWindow")` on the JVE main window.
-  - Per recon (R-02): main window is created in Lua at `src/lua/ui/layout.lua:350` via `qt_constants.WIDGET.CREATE_MAIN_WINDOW()`. No objectName is set today.
-  - Add a Lua binding `qt_set_object_name(widget, name)` in `src/lua/qt_bindings/widget_bindings.cpp` (wrapper around `QObject::setObjectName(QString)`). Register as `qt_set_object_name` global.
+  - Per recon (R-02 + impl pass): main window is created in Lua at `src/lua/ui/layout.lua:350` via `qt_constants.WIDGET.CREATE_MAIN_WINDOW()`. `qt_set_object_name` binding already exists in `src/lua/qt_bindings/misc_bindings.cpp:854` (registered in `src/qt_bindings.cpp:396` as a global — implementation lives in misc_bindings rather than widget_bindings to avoid a forced QWidget cast). No new binding work; just the call site.
   - In `layout.lua`, immediately after `local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()` (line 350), add: `qt_set_object_name(main_window, "JVEMainWindow")`.
   - Acceptance: a small `--test` script that walks `qApp->topLevelWidgets()` finds a widget whose objectName is `"JVEMainWindow"`. Inline as a check in T004.
 
