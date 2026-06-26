@@ -3,10 +3,13 @@
 #include "jve_lua_callback.h" // Shared pcall error drain for all binding callbacks
 #include <QPointer>
 
-// File-scope declaration so qt_bindings.cpp can call the C-linkage
-// registration entry defined in src/bug_reporter/crypto_bindings.cpp
-// (feature 027 T007).
-extern "C" void register_bug_reporter_crypto_bindings(lua_State*);
+// File-scope declarations so qt_bindings.cpp can call the C-linkage
+// registration entries defined in src/bug_reporter/.
+extern "C" void register_bug_reporter_crypto_bindings(lua_State*);            // T007 + T030
+extern "C" void register_bug_reporter_hardware_cpu_bindings(lua_State*);      // T031 (CPU + memory + uname)
+#if defined(__APPLE__)
+extern "C" void register_bug_reporter_hardware_gpu_bindings(lua_State*);      // T031 (Metal GPU)
+#endif
 
 // Include all the newly split binding files. These files contain the implementations
 // of the Lua C functions and are compiled as part of this module.
@@ -362,8 +365,15 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_qt_get_build_info); lua_setglobal(L, "qt_get_build_info");
 
     // Bug-reporter crypto bindings (feature 027 T007 + T030). Wires
-    // qt_sha256 (and later qt_hmac_sha256) into the global table.
+    // qt_sha256 + qt_hmac_sha256 into the global table.
     register_bug_reporter_crypto_bindings(L);
+
+    // Feature 027 T031 — hardware introspection (CPU + memory + uname
+    // on every platform, GPU via Metal on macOS only).
+    register_bug_reporter_hardware_cpu_bindings(L);
+#if defined(__APPLE__)
+    register_bug_reporter_hardware_gpu_bindings(L);
+#endif
 
     // Feature 027 T011 — filesystem helpers used by the bug-reporter
     // exporter (rm screenshots/ after slideshow build; list files).

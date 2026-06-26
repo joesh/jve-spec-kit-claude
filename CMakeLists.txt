@@ -152,6 +152,7 @@ set(CORE_SOURCES
     src/bug_reporter/gesture_logger.cpp
     src/bug_reporter/qt_bindings_bug_reporter.cpp
     src/bug_reporter/crypto_bindings.cpp        # feature 027 T007 — qt_sha256 (+ T030 qt_hmac_sha256)
+    src/bug_reporter/hardware_bindings.cpp      # feature 027 T031 — CPU + memory + uname
 
     # Audio Output Platform
     src/audio_output_platform/aop.cpp
@@ -172,10 +173,15 @@ set(UI_SOURCES
 if(APPLE)
     list(APPEND UI_SOURCES src/gpu_video_surface.mm)
     list(APPEND UI_SOURCES src/playback_controller.mm)
+    # feature 027 T031 — GPU introspection via Metal for bug reporter
+    list(APPEND UI_SOURCES src/bug_reporter/hardware_bindings.mm)
     set_source_files_properties(src/gpu_video_surface.mm PROPERTIES
         COMPILE_FLAGS "-x objective-c++"
     )
     set_source_files_properties(src/playback_controller.mm PROPERTIES
+        COMPILE_FLAGS "-x objective-c++"
+    )
+    set_source_files_properties(src/bug_reporter/hardware_bindings.mm PROPERTIES
         COMPILE_FLAGS "-x objective-c++"
     )
 endif()
