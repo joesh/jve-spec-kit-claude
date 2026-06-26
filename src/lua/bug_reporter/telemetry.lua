@@ -103,17 +103,21 @@ function M.register(consent_version)
     return false
 end
 
--- Used by T028's consent-toggle test path AND wired by T039's
--- TogglePreferenceBugReporting command.
-function M.toggle_pref_for_tests(value)
+-- Apply a pref toggle (used by both T039's TogglePreferenceBugReporting
+-- command in production and T028's tests). Turning ON without an
+-- install file triggers consent + register so the next backend
+-- interaction happens with a valid install_id (FR-002 / AS #15).
+function M.apply_pref_toggle(value)
     save_pref(value)
     if value and install.read() == nil then
-        -- Toggle ON without an install file → register before any
-        -- other backend interaction (FR-002 / AS #15).
         local outcome = show_consent()
         if outcome == "accept" then M.register(1) end
     end
 end
+-- Tests use the same entry under its original name (T028 still calls
+-- toggle_pref_for_tests directly); keep as a shallow alias so the
+-- production callsite reads as production, not test-instrumentation.
+M.toggle_pref_for_tests = M.apply_pref_toggle
 
 -- The Submit path (used by T029). Pref OFF → notice; pref ON → delegate
 -- to report_bug.submit which calls transport.post_report.
