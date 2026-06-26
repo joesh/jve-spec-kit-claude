@@ -256,10 +256,18 @@ end
 
 --- Build persist map — all cache entries are authoritative (only authoritative
 -- sources write to status_cache: bg probe, TMB, FS watcher, load_persisted).
+-- `mtime` carries the file mtime at the moment of the last successful
+-- probe; mtime-gated skip in start_background_probe uses it to avoid
+-- re-probing files whose content hasn't changed. Nil for offline entries
+-- (we didn't capture an mtime; the file wasn't present).
 local function build_persist_map()
     local map = {}
     for path, status in pairs(status_cache) do
-        map[path] = { offline = status.offline, error_code = status.error_code }
+        map[path] = {
+            offline = status.offline,
+            error_code = status.error_code,
+            mtime = path_mtime[path],
+        }
     end
     return map
 end
@@ -344,6 +352,14 @@ function M.load_persisted(project_id)
                 offline = entry.offline,
                 error_code = entry.error_code,
             }
+            -- Restore the previously-stamped mtime so start_background_probe
+            -- can mtime-gate-skip files whose content hasn't changed. The
+            -- field is absent in entries persisted before this carried mtime
+            -- (forward-compat with old projects); those paths will simply
+            -- get probed once and the skip kicks in from then on.
+            if type(entry.mtime) == "number" then
+                path_mtime[path] = entry.mtime
+            end
             if entry.offline then
                 error_count = error_count + 1
             else
@@ -566,8 +582,13 @@ function M.start_background_probe(active_sequence_id)
     local db = get_database()
 
     -- Collect media paths: active sequence first, then the rest.
-    -- Always re-probe ALL paths — persisted cache is a first-paint hint,
-    -- not authoritative. Files may have moved/deleted between sessions.
+    -- Mtime-gated skip below cuts files whose content hasn't changed
+    -- since last successful probe — what we used to call "first-paint
+    -- hint" is now authoritative for those, because the decoder
+    -- availability for a given codec_id can't drift unless the file
+    -- bytes change (mtime catches that) or the JVE binary changes
+    -- (load_persisted clears stale "Unsupported" entries so a new
+    -- build's added decoder-support gets re-probed).
     local active_paths = {}
     local active_set = {}
     if active_sequence_id and active_sequence_id ~= "" then
@@ -602,10 +623,38 @@ function M.start_background_probe(active_sequence_id)
         return
     end
 
-    log.event("media_status: bg probe starting (%d to scan, %d active-seq)",
-        #all_paths, #active_paths)
+    -- Mtime gate: skip paths whose cached mtime matches the current
+    -- on-disk mtime. Both stats must be present; nil mtime (file
+    -- missing) or absent cache forces a probe. file_mtime is a single
+    -- stat(2) syscall — cheap enough to do for all 945 paths upfront
+    -- and dwarfed by what we save on the avformat side.
+    local to_probe = {}
+    local skipped_unchanged = 0
+    for _, p in ipairs(all_paths) do
+        local cached_entry = status_cache[p]
+        local cached_mtime = path_mtime[p]
+        local current_mtime = fs_utils.file_mtime(p)
+        if cached_entry ~= nil
+            and cached_mtime ~= nil
+            and current_mtime ~= nil
+            and cached_mtime == current_mtime then
+            skipped_unchanged = skipped_unchanged + 1
+        else
+            to_probe[#to_probe + 1] = p
+        end
+    end
 
-    emp.CODEC_PROBE_START(all_paths, function(results, is_final)
+    if #to_probe == 0 then
+        log.event("media_status: bg probe skipped — all %d paths unchanged since last probe",
+            #all_paths)
+        Signals.emit("media_probe_complete")
+        return
+    end
+
+    log.event("media_status: bg probe starting (%d to scan, %d skipped unchanged, %d active-seq)",
+        #to_probe, skipped_unchanged, #active_paths)
+
+    emp.CODEC_PROBE_START(to_probe, function(results, is_final)
         -- Main thread callback: update cache, register watches, signal changes
         local changed_count = 0
         for path, result in pairs(results) do
