@@ -1,5 +1,5 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T056c / CT-C20c (013): ExpandAudio undo.
+-- T056c / CT-C20c (013): ExpandAudio undo — Phase 4a (master_track_id identity).
 --
 -- A single ExpandAudio.undo restores the source composite clip + its
 -- per-channel overrides + its link_group membership AND removes all N
@@ -70,9 +70,10 @@ local function build_fixture()
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg', 'cv', 'video', 0, 1),
                ('lg', 'ca', 'audio', 0, 1);
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('ca', 1, 0, -6.0),
-               ('ca', 2, 1, -3.0);
+        -- Two overrides on the composite source: m-a2 disabled, m-a3 at -3dB.
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('ca', 'm-a2', 0, -6.0),
+               ('ca', 'm-a3', 1, -3.0);
     ]]))
     require("test_env").touch_media_fixtures()
     return db
@@ -124,9 +125,10 @@ local function snapshot_state(db)
         stmt:finalize()
     end
     do
+        -- Key by clip_id:master_track_id (stable UUID, not integer).
         local stmt = db:prepare(
-            "SELECT clip_id, channel_index, enabled, gain_db "
-            .. "FROM clip_channel_override ORDER BY clip_id, channel_index")
+            "SELECT clip_id, master_track_id, enabled, gain_db "
+            .. "FROM clip_channel_override ORDER BY clip_id, master_track_id")
         assert(stmt:exec())
         while stmt:next() do
             local key = stmt:value(0) .. ":" .. stmt:value(1)

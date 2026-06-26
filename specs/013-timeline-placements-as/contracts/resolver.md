@@ -2,6 +2,18 @@
 
 **Feature**: 013-timeline-placements-as — Phase 1 contract
 
+> **Phase 4a addendum (2026-06-25):** `ResolvedEntry.channel_index`
+> (integer slot) is replaced by `master_track_id` (TEXT — `tracks.id` UUID
+> of the master AUDIO track keyed against `media_refs_channel_state` /
+> `clip_channel_override`). The override-application step looks up
+> `(clip.id, master_track_id)` instead of `(clip.id, channel_index)`.
+> Section §3 "Channel state" applies verbatim with `channel_index → master_track_id`.
+> The composite-fan case (one media_ref with N file channels) emits N
+> entries that all share the same `master_track_id` (one inspector
+> Channels-row controls the slot); `source_channel` distinguishes them
+> for the decoder. INV-5 (channel_index < master count) is removed —
+> FK CASCADE on `tracks(id)` makes the violation impossible.
+
 The resolver is the single Lua-side function that walks the clip → nested sequence → (recurse) → media_ref → media chain for a given sequence and time range. It is the only code path both playback and export use (FR-019).
 
 ---

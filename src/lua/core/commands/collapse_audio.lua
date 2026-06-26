@@ -27,14 +27,17 @@
 ---     3. INSERT one composite clip on the topmost selected track
 ---        (lowest track_index among the selection) with
 ---        master_audio_track_id=NULL.
----     4. Project per-channel state onto the composite:
----        - Unselected nested track N → INSERT
----          clip_channel_override(composite_id, ch=track_index_of_N - 1,
----          enabled=0, gain_db=0). (1-channel-per-track first-landing.)
----        - Selected clip's per-channel overrides → copy to composite at
----          ch = the original clip's track_index - 1.
----        - Selected clip with non-unity volume → INSERT gain override
----          on composite for that clip's channel(s).
+---     4. Project per-channel state onto the composite (identity is
+---        master_track_id end-to-end — no slot remap):
+---        - Unselected nested track T → INSERT
+---          clip_channel_override(composite_id, master_track_id=T.id,
+---          enabled=0, gain_db=0). Audibly silent for that track,
+---          matching pre-collapse where those tracks played from now-
+---          untouched per-track clips.
+---        - Selected clip S (master_audio_track_id=M)'s own override
+---          row (keyed by M) projects onto composite at master_track=M.
+---        - Selected clip with non-unity volume folds into that
+---          composite override's gain.
 ---     5. Re-link: append composite to the (existing) link_group.
 ---     6. sequence_content_changed(sequence_id).
 ---
@@ -190,10 +193,11 @@ local function insert_composite_clip(sequence_id, first, topmost)
     return composite_id
 end
 
--- Compose (enabled, gain_db) for one selected source clip's channel,
--- folding source overrides + clip.volume + clip.enabled. 1-channel-per-
--- track first-landing assumption: source clip's ch=0 override (if any)
--- maps to composite at ch = master_audio_track.track_index - 1.
+-- Compose (enabled, gain_db) for one selected source clip's channel by
+-- folding source override + clip.volume + clip.enabled. The source clip
+-- (expanded form) references exactly ONE master track via
+-- master_audio_track_id, so its only override row in the new schema is
+-- keyed by that same master_track_id.
 local function composite_state_for_source(source_clip, source_captures)
     local cap_overrides = {}
     for _, sc in ipairs(source_captures) do
@@ -205,7 +209,7 @@ local function composite_state_for_source(source_clip, source_captures)
     end
     local enabled, gain_db = source_clip.enabled, 0.0
     for _, ov in ipairs(cap_overrides) do
-        if ov.channel_index == 0 then
+        if ov.master_track_id == source_clip.master_audio_track_id then
             if not ((ov.enabled == 1) or (ov.enabled == true)) then
                 enabled = false
             end
@@ -225,32 +229,28 @@ local function composite_state_for_source(source_clip, source_captures)
     return enabled, gain_db
 end
 
--- Project per-channel state onto the composite: unselected tracks become
--- per-channel disables; selected clips' overrides + volume + enabled fold
--- into per-channel state at their respective composite channel index.
+-- Project per-channel state onto the composite. Identity is the master
+-- AUDIO track id end-to-end: unselected master tracks become per-track
+-- disables; selected clips' overrides + volume + enabled fold into
+-- per-track state at their respective master_track_id.
 local function project_channel_state(composite_id, unselected_tracks, selected,
                                      source_captures)
     for _, t in ipairs(unselected_tracks) do
         Override.insert({
-            clip_id       = composite_id,
-            channel_index = t.track_index - 1,
-            enabled       = false,
-            gain_db       = 0.0,
+            clip_id         = composite_id,
+            master_track_id = t.id,
+            enabled         = false,
+            gain_db         = 0.0,
         })
     end
     for _, s in ipairs(selected) do
-        local mt = Track.load(s.row.master_audio_track_id)
-        assert(mt, string.format(
-            "CollapseAudio: master_audio_track %s for clip %s missing "
-            .. "(internal error after refusal gate)",
-            s.row.master_audio_track_id, s.row.id))
         local enabled, gain_db = composite_state_for_source(s.row, source_captures)
         if (not enabled) or gain_db ~= 0 then
             Override.insert({
-                clip_id       = composite_id,
-                channel_index = mt.track_index - 1,
-                enabled       = enabled,
-                gain_db       = gain_db,
+                clip_id         = composite_id,
+                master_track_id = s.row.master_audio_track_id,
+                enabled         = enabled,
+                gain_db         = gain_db,
             })
         end
     end

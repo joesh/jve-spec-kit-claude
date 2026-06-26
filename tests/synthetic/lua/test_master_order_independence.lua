@@ -168,32 +168,57 @@ assert(video_file_sig(va[1]) == video_file_sig(vb[1]), string.format(
     video_file_sig(va[1]), video_file_sig(vb[1])))
 
 -- AUDIO entries: same channel layout, same file ranges.
-local function audio_file_sig(e)
-    return string.format("media=%s in=%s out=%s ch=%s media_kind=%s",
+-- Identity moved from a slot integer to a per-master track UUID under
+-- Phase 4a, so master A and B will NOT share master_track_ids. Compare
+-- on the cross-master-invariant fields: media_id, source ranges,
+-- source_channel (file channel index), and master_track_id resolves to
+-- the SAME tracks.name on both sides (the name carries the channel role).
+local function audio_file_sig(e, track_name_by_id)
+    local name = track_name_by_id[e.master_track_id]
+    assert(name, "audio entry references unknown master_track_id "
+        .. tostring(e.master_track_id))
+    return string.format("media=%s in=%s out=%s source_ch=%s name=%s media_kind=%s",
         tostring(e.media_id), tostring(e.source_in), tostring(e.source_out),
-        tostring(e.channel_index), tostring(e.media_kind))
+        tostring(e.source_channel), name, tostring(e.media_kind))
 end
--- Sort both by channel_index for deterministic comparison. AUDIO entries
--- MUST carry channel_index (rule 2.13 — assert rather than fall back to a
--- sentinel that would silently mis-order on missing data).
-local function assert_audio_channels(label, entries)
+
+-- Build a track_id → tracks.name lookup so we can compare by name across
+-- masters with different UUIDs.
+local function load_track_names(seq_id)
+    local out = {}
+    local stmt = db:prepare(
+        "SELECT id, name FROM tracks WHERE sequence_id = ? AND track_type = 'AUDIO'")
+    assert(stmt and stmt:bind_value(1, seq_id) and stmt:exec(),
+        "load_track_names: query failed for " .. seq_id)
+    while stmt:next() do out[stmt:value(0)] = stmt:value(1) end
+    stmt:finalize()
+    return out
+end
+local names_a = load_track_names("m-a")
+local names_b = load_track_names("m-b")
+
+local function assert_audio_tracks(label, entries)
     for i, e in ipairs(entries) do
-        assert(type(e.channel_index) == "number", string.format(
-            "%s entry %d missing channel_index: %s",
-            label, i, tostring(e.channel_index)))
+        assert(type(e.master_track_id) == "string" and e.master_track_id ~= "",
+            string.format("%s entry %d missing master_track_id: %s",
+                label, i, tostring(e.master_track_id)))
     end
 end
-local function by_channel(t)
-    table.sort(t, function(x, y) return x.channel_index < y.channel_index end)
+local function by_source_channel(t)
+    table.sort(t, function(x, y)
+        return tostring(x.source_channel) < tostring(y.source_channel)
+    end)
     return t
 end
-assert_audio_channels("aa", aa)
-assert_audio_channels("ab", ab)
-aa = by_channel(aa); ab = by_channel(ab)
+assert_audio_tracks("aa", aa)
+assert_audio_tracks("ab", ab)
+aa = by_source_channel(aa); ab = by_source_channel(ab)
 for i = 1, #aa do
-    assert(audio_file_sig(aa[i]) == audio_file_sig(ab[i]), string.format(
+    local sa = audio_file_sig(aa[i], names_a)
+    local sb = audio_file_sig(ab[i], names_b)
+    assert(sa == sb, string.format(
         "AUDIO entry %d differs across masters:\n  A: %s\n  B: %s",
-        i, audio_file_sig(aa[i]), audio_file_sig(ab[i])))
+        i, sa, sb))
 end
 
 -- NSF Half 2: signature equality is vacuous if both sides happen to be
@@ -206,9 +231,9 @@ assert(vb[1].media_id == "med", string.format(
     "master B video must resolve to 'med'; got %s", tostring(vb[1].media_id)))
 for i = 1, #aa do
     assert(aa[i].media_id == "med",
-        "master A audio channel " .. tostring(aa[i].channel_index) .. " offline")
+        "master A audio source_channel " .. tostring(aa[i].source_channel) .. " offline")
     assert(ab[i].media_id == "med",
-        "master B audio channel " .. tostring(ab[i].channel_index) .. " offline")
+        "master B audio source_channel " .. tostring(ab[i].source_channel) .. " offline")
 end
 
 print(string.format("ok — %d video + %d audio entries identical across masters",

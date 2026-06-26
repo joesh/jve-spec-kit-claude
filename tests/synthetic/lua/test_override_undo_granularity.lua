@@ -1,5 +1,5 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T052 (013): FR-020 per-override undo granularity.
+-- T052 (013): FR-020 per-override undo granularity — Phase 4a (master_track_id identity).
 --
 -- "Each clip-level override change ... MUST be a single undoable
 --  command with a descriptive human-readable label. Override changes
@@ -14,17 +14,17 @@
 --   * Five undos in reverse order restore the clip to its pre-toggle
 --     state.
 --
--- Note: command_manager-level persistence grouping (the `commands`
--- table rows) is the responsibility of command_manager itself; that
--- end-to-end check is blocked on database.load_clips being migrated
--- from V8-shape (clip_kind / media_id / master_clip_id / offline) to
--- V13 — an unrelated cleanup task. The command-layer mechanism this
--- test pins is what command_manager builds atop.
+-- Under Phase 4a: command arg is master_track_id (track UUID), not
+-- channel_index. Fixture provides 5 master AUDIO tracks so each toggle
+-- targets a distinct track identity.
 
 require("test_env")
 local database = require("core.database")
 
 local DB_PATH = "/tmp/jve/test_override_undo_granularity.db"
+
+-- Stable track UUIDs for the 5 master AUDIO tracks.
+local MASTER_TRACKS = { "m-a1", "m-a2", "m-a3", "m-a4", "m-a5" }
 
 local function fresh_db()
     os.remove(DB_PATH)
@@ -47,6 +47,10 @@ local function build_fixture()
         VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
+               ('m-a2', 'm', 'A2', 'AUDIO', 2),
+               ('m-a3', 'm', 'A3', 'AUDIO', 3),
+               ('m-a4', 'm', 'A4', 'AUDIO', 4),
+               ('m-a5', 'm', 'A5', 'AUDIO', 5),
                ('e-a1', 'e', 'A1', 'AUDIO', 1);
         INSERT INTO media (id, project_id, name, file_path, duration_frames,
             fps_numerator, fps_denominator, audio_channels,
@@ -83,12 +87,12 @@ local function override_count(db, clip_id)
     return n
 end
 
-local function override_for(db, clip_id, channel_index)
+local function override_for(db, clip_id, master_track_id)
     local stmt = db:prepare(
         "SELECT enabled, gain_db FROM clip_channel_override "
-        .. "WHERE clip_id = ? AND channel_index = ?")
+        .. "WHERE clip_id = ? AND master_track_id = ?")
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec())
     local row
     if stmt:next() then
@@ -104,34 +108,34 @@ print("-- 5 rapid toggles produce 5 distinct undo captures, each independent --"
 do
     local db = build_fixture()
 
-    -- Five toggles, one per channel.
+    -- Five toggles, one per master AUDIO track.
     local captures = {}
-    for ch = 0, 4 do
-        captures[ch + 1] = ToggleClipChannel.execute({
-            sequence_id   = "e",
-            clip_id       = "ca",
-            channel_index = ch,
+    for i, mt in ipairs(MASTER_TRACKS) do
+        captures[i] = ToggleClipChannel.execute({
+            sequence_id    = "e",
+            clip_id        = "ca",
+            master_track_id = mt,
         })
-        assert(override_count(db, "ca") == ch + 1, string.format(
-            "after toggle %d, expected %d override rows", ch, ch + 1))
+        assert(override_count(db, "ca") == i, string.format(
+            "after toggle %d, expected %d override rows", i, i))
     end
 
-    -- Each capture is distinct (different channel_index, different
+    -- Each capture is distinct (different master_track_id, different
     -- prior_existed/prior_enabled state). Sanity:
     for i = 1, 5 do
         assert(captures[i] ~= captures[(i % 5) + 1],
             "captures are distinct objects (no shared identity)")
-        assert(captures[i].channel_index == i - 1,
-            "capture i targets channel i-1")
+        assert(captures[i].master_track_id == MASTER_TRACKS[i],
+            "capture i targets MASTER_TRACKS[i]")
         assert(captures[i].prior_existed == false,
-            "first toggle on each channel records prior_existed=false")
+            "first toggle on each track records prior_existed=false")
     end
 
     -- All 5 override rows materialized, each enabled=false (the master's
     -- channels were enabled by default; toggle flipped them).
-    for ch = 0, 4 do
-        local row = override_for(db, "ca", ch)
-        assert(row, "ch=" .. ch .. " override exists")
+    for _, mt in ipairs(MASTER_TRACKS) do
+        local row = override_for(db, "ca", mt)
+        assert(row, mt .. " override exists")
         assert(row.enabled == false,
             "toggle from enabled=true (inherited default) → enabled=false")
     end
@@ -152,33 +156,34 @@ do
     print("  ok")
 end
 
-print("-- 5 toggles on the SAME channel produce 5 distinct captures --")
+print("-- 5 toggles on the SAME master track produce 5 distinct captures --")
 do
     -- This case pins the "no coalescing" guarantee from FR-020 even
-    -- when the user toggles the same channel rapidly. Each call must
+    -- when the user toggles the same track rapidly. Each call must
     -- be independent — capture #2's undo restores capture #1's state,
     -- not the original.
     local db = build_fixture()
+    local mt = "m-a1"  -- single master track, toggled 5 times
 
     local captures = {}
     for i = 1, 5 do
         captures[i] = ToggleClipChannel.execute({
-            sequence_id   = "e",
-            clip_id       = "ca",
-            channel_index = 0,
+            sequence_id    = "e",
+            clip_id        = "ca",
+            master_track_id = mt,
         })
     end
 
-    -- After 5 toggles on ch=0:
+    -- After 5 toggles on m-a1:
     --   #1: no row → INSERT (enabled=false). prior_existed=false.
     --   #2: row exists (enabled=false) → UPDATE to enabled=true.
     --   #3: row exists (enabled=true) → UPDATE to enabled=false.
     --   #4: enabled=false → enabled=true.
     --   #5: enabled=true → enabled=false.
     -- Final state: enabled=false. One row.
-    local row = override_for(db, "ca", 0)
+    local row = override_for(db, "ca", mt)
     assert(row and row.enabled == false,
-        "after 5 toggles on ch=0, final enabled=false")
+        "after 5 toggles on m-a1, final enabled=false")
     assert(captures[1].prior_existed == false,
         "first toggle: no prior row")
     for i = 2, 5 do
@@ -195,12 +200,12 @@ do
     -- Undo in reverse — each undo restores the previous state.
     for i = 5, 2, -1 do
         ToggleClipChannel.undo(captures[i])
-        local r = override_for(db, "ca", 0)
+        local r = override_for(db, "ca", mt)
         assert(r, "row still exists during undo (down to capture 2)")
     end
     -- Undo capture 1: should DELETE the row (prior_existed was false).
     ToggleClipChannel.undo(captures[1])
-    assert(override_for(db, "ca", 0) == nil,
+    assert(override_for(db, "ca", mt) == nil,
         "undo of first toggle deletes the row")
     print("  ok")
 end

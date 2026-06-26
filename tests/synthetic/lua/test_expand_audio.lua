@@ -1,5 +1,5 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T056a / CT-C20 (013): ExpandAudio happy path.
+-- T056a / CT-C20 (013): ExpandAudio happy path — Phase 4a (master_track_id identity).
 --
 -- Per FR-023 + commands.md §ExpandAudio:
 --   Args: { sequence_id, clip_id }. sequence_id is the clip's
@@ -17,7 +17,8 @@
 --        (creating one if the source had none).
 --     3. Project per-clip channel overrides onto the corresponding
 --        expanded clip(s) — for first-landing 1-channel-per-track
---        masters, override(source, ch=N) → override(expanded[N], ch=0).
+--        masters, override(source, master_track_id='m-aN') maps to
+--        override(expanded[N], master_track_id='m-aN', ch single-channel).
 --     4. DELETE the source clip.
 --
 -- This test pins the happy path: V + composite A clip referencing a
@@ -149,12 +150,13 @@ local function clips_in_link_group(db, lg)
     return rows
 end
 
-local function override_for(db, clip_id, channel_index)
+-- Returns the override row for (clip_id, master_track_id), or nil.
+local function override_for(db, clip_id, master_track_id)
     local stmt = db:prepare(
         "SELECT enabled, gain_db FROM clip_channel_override "
-        .. "WHERE clip_id = ? AND channel_index = ?")
+        .. "WHERE clip_id = ? AND master_track_id = ?")
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec())
     local row
     if stmt:next() then
@@ -169,13 +171,11 @@ local ExpandAudio = require("core.commands.expand_audio")
 print("-- happy path: 4 A tracks created, 4 A clips replace source --")
 do
     local db = build_fixture()
-    -- Add a per-channel override on the source: channel 2 disabled.
-    -- Under 1-channel-per-track masters (this fixture), source channel
-    -- index 2 corresponds to nested A track index 3 (channel 2 = the
-    -- 3rd audio entry the resolver emits, which is nested A3).
+    -- Add a per-channel override on the source: master track m-a3 disabled.
+    -- Under 1-channel-per-track masters this represents the 3rd audio stream.
     assert(db:exec([[
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('ca', 2, 0, -3.0)
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('ca', 'm-a3', 0, -3.0)
     ]]))
 
     local result = ExpandAudio.execute({
@@ -216,16 +216,22 @@ do
         "link group should contain V + 4 expanded A clips (5); got %d",
         #lg_clips))
 
-    -- Override projection: source had channel 2 disabled. That maps to
-    -- nested track A3 (channels 0/1/2/3 → A1/A2/A3/A4 under one-channel-
-    -- per-track masters). The expanded clip on m-a3 should have
-    -- override(channel=0, enabled=0, gain=-3).
+    -- Override projection: source had m-a3 disabled. The expanded clip
+    -- whose master_audio_track_id = 'm-a3' should carry override(m-a3,
+    -- enabled=false, gain=-3). Other expanded clips have no override.
     local a3_clip = seen["m-a3"]
     assert(a3_clip, "no expanded clip for m-a3")
-    local ov = override_for(db, a3_clip.id, 0)
-    assert(ov, "expected override on a3-clip channel 0")
+    local ov = override_for(db, a3_clip.id, "m-a3")
+    assert(ov, "expected override on a3-clip for m-a3")
     assert(ov.enabled == false and math.abs(ov.gain_db - (-3.0)) < 1e-9,
         "override projected: enabled=false gain=-3")
+
+    -- Other expanded clips must have no override.
+    for _, mt in ipairs({ "m-a1", "m-a2", "m-a4" }) do
+        local c = seen[mt]
+        assert(override_for(db, c.id, mt) == nil,
+            "expanded clip for " .. mt .. " must have no override")
+    end
 
     -- Result reports.
     assert(result.expanded_clip_ids and #result.expanded_clip_ids == 4,

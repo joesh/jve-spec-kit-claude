@@ -20,7 +20,7 @@
 ---   * Sequence.set_start_tc(id, medium, value)
 ---   * Sequence.effective_audio_sample_rate(seq)
 ---   * Sequence.count_master_audio_channels(master_id)
----   * Sequence.get_master_channel_state(master_id, channel_index)
+---   * Sequence.get_master_channel_state(master_track_id)
 ---   * Sequence.get_primary_media_ref(master_id)
 
 local database = require("core.database")
@@ -363,7 +363,7 @@ end
 
 --- Count the audio channels exposed by a master sequence's tracks. Sum
 --- of media.audio_channels across the master's A-track media_refs. Used
---- by ToggleClipChannel/SetClipChannelGain for channel_index bounds checks.
+--- by master-clip channel-count display + MasterClipInspectable.iter_channels.
 ---
 --- @param master_id string  must reference a kind='master' sequence
 --- @return integer  total audio channel count
@@ -428,26 +428,23 @@ function Sequence.count_master_audio_channels(master_id)
     return n
 end
 
---- Read a master's per-channel state from media_refs_channel_state.
---- Returns (enabled_bool, gain_db_number); on absent row returns the
---- resolver-default contract (true, 0). Used by ToggleClipChannel /
---- SetClipChannelGain to materialize inherited state at first override.
+--- Read a master AUDIO track's per-channel state from
+--- media_refs_channel_state. Returns (enabled_bool, gain_db_number);
+--- on absent row returns the resolver-default contract (true, 0).
+--- Used by ToggleClipChannel / SetClipChannelGain to materialize
+--- inherited state at first override.
 ---
---- @param master_id string
---- @param channel_index integer  0-based
-function Sequence.get_master_channel_state(master_id, channel_index)
-    assert(master_id and master_id ~= "",
-        "Sequence.get_master_channel_state: master_id required")
-    assert(type(channel_index) == "number",
-        "Sequence.get_master_channel_state: channel_index must be integer")
+--- @param master_track_id string  master AUDIO track's id (tracks.id)
+function Sequence.get_master_channel_state(master_track_id)
+    assert(type(master_track_id) == "string" and master_track_id ~= "",
+        "Sequence.get_master_channel_state: master_track_id required")
     local conn = resolve_db()
     local stmt = conn:prepare([[
         SELECT enabled, default_gain_db FROM media_refs_channel_state
-        WHERE owner_sequence_id = ? AND channel_index = ?
+        WHERE master_track_id = ?
     ]])
     assert(stmt, "Sequence.get_master_channel_state: prepare failed")
-    stmt:bind_value(1, master_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(1, master_track_id)
     assert(stmt:exec(), "Sequence.get_master_channel_state: exec failed")
     local enabled, gain_db = true, 0.0   -- resolver default contract
     if stmt:next() then

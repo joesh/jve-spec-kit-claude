@@ -22,11 +22,11 @@
 ---     2. Source clip's link_group: append every expanded A clip; if
 ---        no link_group existed, create one containing only the
 ---        expanded clips.
----     3. Project per-channel overrides: for each
----        clip_channel_override(source.id, ch=N), copy the override
----        onto the Nth expanded clip's channel 0 (first-landing scope:
----        1-channel-per-track masters). Multi-channel-per-track masters
----        are a follow-up.
+---     3. Project per-channel overrides: each source row
+---        clip_channel_override(source.id, master_track=T) copies onto
+---        the expanded clip whose master_audio_track_id == T, keyed by
+---        that same T (identity is the master track UUID end-to-end —
+---        no slot remap).
 ---     4. DELETE the source clip + its overrides + its link_group entry.
 ---
 ---   Undo: full restoration via Clip.restore_state on the source +
@@ -137,9 +137,10 @@ end
 
 -- Insert one expanded clip per plan entry, each with a distinct
 -- master_audio_track_id selector. Returns expanded_ids[] (in plan order)
--- and expanded_by_index[track_index → clip_id].
+-- and expanded_by_master_track[master_track_id → clip_id] for projecting
+-- the source's per-master-track overrides onto the expanded children.
 local function insert_expanded_clips(plan, clip, sequence_id)
-    local expanded_ids, by_index = {}, {}
+    local expanded_ids, by_master_track = {}, {}
     local outer_lo = clip.sequence_start_frame
     for _, p in ipairs(plan) do
         local new_id = uuid.generate()
@@ -165,10 +166,10 @@ local function insert_expanded_clips(plan, clip, sequence_id)
             volume                = clip.volume,
             playhead_frame        = clip.playhead_frame,
         })
-        expanded_ids[#expanded_ids + 1] = new_id
-        by_index[p.track_index]         = new_id
+        expanded_ids[#expanded_ids + 1]    = new_id
+        by_master_track[p.nested_track_id] = new_id
     end
-    return expanded_ids, by_index
+    return expanded_ids, by_master_track
 end
 
 -- Append expanded clips to the source's link group, or build a fresh
@@ -189,22 +190,23 @@ local function relink_expanded_clips(source_lg, expanded_ids)
 end
 
 -- Project the source clip's per-channel overrides onto the matching
--- expanded clip. 1-channel-per-track first-landing: source ch=N maps to
--- the expanded clip whose master_audio_track is at track_index N+1, at
--- ch=0 there. Out-of-bounds source channels are dropped (captured in
--- undo via source_capture).
-local function project_source_overrides(source_capture, expanded_by_index)
+-- expanded clip. Identity is master_track_id end-to-end: a source
+-- override keyed by master-track T projects onto the expanded clip whose
+-- master_audio_track_id == T, keyed by the same T. Overrides whose track
+-- no longer maps to any expanded clip (e.g. an orphan from a since-
+-- removed master channel) are dropped — captured in undo via source_capture.
+local function project_source_overrides(source_capture, expanded_by_master_track)
     -- capture_state always populates overrides as an array.
     assert(type(source_capture) == "table" and type(source_capture.overrides) == "table",
         "ExpandAudio: source_capture/overrides missing")
     for _, ov in ipairs(source_capture.overrides) do
-        local target_clip_id = expanded_by_index[ov.channel_index + 1]
+        local target_clip_id = expanded_by_master_track[ov.master_track_id]
         if target_clip_id then
             Override.insert({
-                clip_id       = target_clip_id,
-                channel_index = 0,
-                enabled       = ov.enabled,
-                gain_db       = ov.gain_db,
+                clip_id         = target_clip_id,
+                master_track_id = ov.master_track_id,
+                enabled         = ov.enabled,
+                gain_db         = ov.gain_db,
             })
         end
     end
@@ -238,9 +240,10 @@ function M.execute(args)
     -- clip — the same track is one of the destinations.
     Clip.delete_by_ids({ clip_id })
 
-    local expanded_ids, expanded_by_index = insert_expanded_clips(plan, clip, sequence_id)
+    local expanded_ids, expanded_by_master_track =
+        insert_expanded_clips(plan, clip, sequence_id)
     local final_lg = relink_expanded_clips(source_lg, expanded_ids)
-    project_source_overrides(source_capture, expanded_by_index)
+    project_source_overrides(source_capture, expanded_by_master_track)
 
     log.event("ExpandAudio: clip=%s -> %d expanded clips on tracks [%s]",
         clip_id, #expanded_ids, track_index_list(plan))

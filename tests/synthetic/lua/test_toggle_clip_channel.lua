@@ -1,12 +1,13 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T049 / CT-C10 (013): ToggleClipChannel.
+-- T049 / CT-C10 (013): ToggleClipChannel — Phase 4a (master_track_id identity).
 --
 -- Domain behavior (commands.md §ToggleClipChannel):
 --
 -- (a) First toggle on a clip with no override row materializes the
---     inherited state and flips enabled. Concretely: master channel 2
---     is enabled with gain -3 dB; first ToggleClipChannel(c, 2) inserts
---     clip_channel_override(c, 2, enabled=0, gain_db=-3).
+--     inherited state and flips enabled. Concretely: master track m-a2
+--     (second AUDIO track) is enabled with gain -3 dB; first
+--     ToggleClipChannel(c, master_track_id='m-a2') inserts
+--     clip_channel_override(c, 'm-a2', enabled=0, gain_db=-3).
 --
 -- (b) Undo of first toggle DELETES the override row (back to
 --     "tracking master").
@@ -15,10 +16,6 @@
 --     in-place; gain_db unchanged. Undo restores prior enabled value.
 --
 -- (d) sequence_id arg is required (rule 2.29 regression).
---
--- (e) channel_index out of bounds (master has 2 audio channels, attempt
---     channel 5) is refused with a loud message naming the bad index
---     (FR-014 + channel_index must be < master's audio channel count).
 --
 -- Black-box: tests inspect clip_channel_override rows directly.
 
@@ -48,12 +45,13 @@ local function build_fixture()
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
 
+        -- Two master AUDIO tracks so tests can target a specific track UUID.
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
+               ('m-a2', 'm', 'A2', 'AUDIO', 2),
                ('e-a1', 'e', 'A1', 'AUDIO', 1);
         UPDATE sequences SET default_video_layer_track_id = NULL WHERE id = 'm';
 
-        -- Master has 2 audio channels (encoded in media.audio_channels).
         INSERT INTO media (id, project_id, name, file_path, duration_frames,
             fps_numerator, fps_denominator, audio_channels,
             created_at, modified_at)
@@ -65,11 +63,10 @@ local function build_fixture()
         VALUES ('mr', 'p1', 'm', 'm-a1', 'med', 0, 48000, 0, 48000, 48000,
                 1, 1.0, 0, 0, 0);
 
-        -- Master-level channel state: channel 2 enabled with -3 dB
-        -- (channel_index=1 since the index is 0-based per data-model.md).
+        -- Master-level channel state: track m-a2 enabled with -3 dB.
         INSERT INTO media_refs_channel_state
-            (owner_sequence_id, channel_index, enabled, default_gain_db)
-        VALUES ('m', 1, 1, -3.0);
+            (master_track_id, enabled, default_gain_db)
+        VALUES ('m-a2', 1, -3.0);
 
         -- The clip on the edit timeline references the master.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
@@ -87,13 +84,13 @@ local function build_fixture()
     return db
 end
 
-local function load_override(db, clip_id, channel_index)
+local function load_override(db, clip_id, master_track_id)
     local stmt = db:prepare([[
         SELECT enabled, gain_db FROM clip_channel_override
-        WHERE clip_id = ? AND channel_index = ?
+        WHERE clip_id = ? AND master_track_id = ?
     ]])
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec(), "load_override exec failed")
     local row
     if stmt:next() then
@@ -103,23 +100,22 @@ local function load_override(db, clip_id, channel_index)
     return row
 end
 
--- TDD gate: this fails until T054 lands toggle_clip_channel.lua.
 local ToggleClipChannel = require("core.commands.toggle_clip_channel")
 
 print("-- (a) First toggle materializes inherited state, flips enabled --")
 do
     build_fixture()
     local db = database.get_connection()
-    assert(load_override(db, "c", 1) == nil,
-        "fixture clip starts with no override row on channel 1")
+    assert(load_override(db, "c", "m-a2") == nil,
+        "fixture clip starts with no override row for m-a2")
 
     local capture = ToggleClipChannel.execute({
-        sequence_id   = "e",
-        clip_id       = "c",
-        channel_index = 1,
+        sequence_id    = "e",
+        clip_id        = "c",
+        master_track_id = "m-a2",
     })
 
-    local row = load_override(db, "c", 1)
+    local row = load_override(db, "c", "m-a2")
     assert(row, "first toggle must INSERT an override row")
     assert(row.enabled == false, string.format(
         "first toggle materializes inherited (enabled=true) and flips it; "
@@ -130,7 +126,7 @@ do
 
     -- (b) Undo deletes the row (restoring "tracking master").
     ToggleClipChannel.undo(capture)
-    assert(load_override(db, "c", 1) == nil,
+    assert(load_override(db, "c", "m-a2") == nil,
         "undo of first toggle deletes the override row")
     print("  ok")
 end
@@ -139,19 +135,19 @@ print("-- (c) Second toggle on existing override flips enabled in-place --")
 do
     build_fixture()
     local db = database.get_connection()
-    -- Pre-existing override: enabled=0, gain_db=-6.
+    -- Pre-existing override on m-a2: enabled=0, gain_db=-6.
     assert(db:exec([[
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('c', 1, 0, -6.0)
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('c', 'm-a2', 0, -6.0)
     ]]))
 
     local capture = ToggleClipChannel.execute({
-        sequence_id   = "e",
-        clip_id       = "c",
-        channel_index = 1,
+        sequence_id    = "e",
+        clip_id        = "c",
+        master_track_id = "m-a2",
     })
 
-    local row = load_override(db, "c", 1)
+    local row = load_override(db, "c", "m-a2")
     assert(row, "row must remain after toggle")
     assert(row.enabled == true,
         "toggle flips existing enabled=0 to enabled=1")
@@ -159,7 +155,7 @@ do
         "toggle does not touch gain_db on an existing row")
 
     ToggleClipChannel.undo(capture)
-    local restored = load_override(db, "c", 1)
+    local restored = load_override(db, "c", "m-a2")
     assert(restored and restored.enabled == false
         and math.abs(restored.gain_db - (-6.0)) < 1e-9,
         "undo restores prior enabled=0, gain_db=-6")
@@ -170,26 +166,12 @@ print("-- (d) sequence_id required (rule 2.29) --")
 do
     build_fixture()
     local ok, err = pcall(ToggleClipChannel.execute, {
-        clip_id       = "c",
-        channel_index = 1,
+        clip_id        = "c",
+        master_track_id = "m-a2",
     })
     assert(not ok, "missing sequence_id must be refused")
     assert(tostring(err):find("sequence_id"),
         "error must name the missing arg; got: " .. tostring(err))
-    print("  ok")
-end
-
-print("-- (e) channel_index out of bounds is refused (channel_index must be < master's audio channel count) --")
-do
-    build_fixture()
-    local ok, err = pcall(ToggleClipChannel.execute, {
-        sequence_id   = "e",
-        clip_id       = "c",
-        channel_index = 5,  -- master has 2 channels (indices 0..1)
-    })
-    assert(not ok, "out-of-bounds channel_index must be refused")
-    assert(tostring(err):find("channel"),
-        "error must name the constraint; got: " .. tostring(err))
     print("  ok")
 end
 

@@ -59,6 +59,8 @@ local function build_fixture()
 
     Track.create_video("V1", "m", { id = "m-v1", index = 1 }):save()
     Track.create_audio("A1", "m", { id = "m-a1", index = 1 }):save()
+    -- Two master AUDIO tracks so undo override round-trip can target distinct UUIDs.
+    Track.create_audio("A2", "m", { id = "m-a2", index = 2 }):save()
     Track.create_video("V1", seq_id, { id = "e-v1", index = 1 }):save()
     Track.create_audio("A1", seq_id, { id = "e-a1", index = 1 }):save()
     
@@ -246,10 +248,10 @@ print("-- Undo DeleteClip unlinked: row + overrides restored --")
 do
     local db = build_fixture()
     seed_clip("v1", "e-v1", 100, 50, 0, 50)
-    -- Two channel overrides that must survive the round trip.
+    -- Two channel overrides keyed by master AUDIO track UUID (Phase 4a).
     assert(db:exec([[
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('v1', 0, 1, -3.0), ('v1', 1, 0, 0.0);
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('v1', 'm-a1', 1, -3.0), ('v1', 'm-a2', 0, 0.0);
     ]]))
 
     local exec, undo = register(DeleteClip, "DeleteClip", db)
@@ -263,18 +265,21 @@ do
     assert(v1.sequence_start == 100 and v1.duration == 50,
         "v1 timeline restored")
 
+    -- Read back overrides ordered by master_track_id (m-a1 < m-a2 lexicographically).
     local stmt = db:prepare(
-        "SELECT channel_index, enabled, gain_db FROM clip_channel_override WHERE clip_id = ? ORDER BY channel_index")
+        "SELECT master_track_id, enabled, gain_db FROM clip_channel_override WHERE clip_id = ? ORDER BY master_track_id")
     stmt:bind_value(1, "v1")
     assert(stmt:exec())
     local ovs = {}
     while stmt:next() do
-        ovs[#ovs+1] = { ch = stmt:value(0), en = stmt:value(1), g = stmt:value(2) }
+        ovs[#ovs+1] = { mt = stmt:value(0), en = stmt:value(1), g = stmt:value(2) }
     end
     stmt:finalize()
     assert(#ovs == 2, string.format("expected 2 overrides; got %d", #ovs))
-    assert(ovs[1].ch == 0 and ovs[1].en == 1 and ovs[1].g == -3.0)
-    assert(ovs[2].ch == 1 and ovs[2].en == 0 and ovs[2].g == 0.0)
+    assert(ovs[1].mt == "m-a1" and ovs[1].en == 1 and math.abs(ovs[1].g - (-3.0)) < 1e-9,
+        "undo restores m-a1 override: enabled=1, gain=-3")
+    assert(ovs[2].mt == "m-a2" and ovs[2].en == 0 and math.abs(ovs[2].g - 0.0) < 1e-9,
+        "undo restores m-a2 override: enabled=0, gain=0")
     print("  ok")
 end
 

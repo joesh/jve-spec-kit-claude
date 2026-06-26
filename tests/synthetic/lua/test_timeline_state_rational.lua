@@ -202,6 +202,7 @@ local mock_conn = {
 
 
 db.get_connection = function() return mock_conn end
+db.has_connection = function() return true end
 
 
 

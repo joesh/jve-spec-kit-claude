@@ -1,9 +1,8 @@
--- T023 / CT-R6 (013): channel gain composition order.
--- Master has media_refs_channel_state(ch=0, default_gain_db=-3). A clip has
--- clip_channel_override(ch=0, enabled=1, gain_db=-6). Per the override order
--- (layer → channel → gain), the clip-level override wins — effective gain for
--- channel 0 under this clip is -6 dB, not -3 dB.
--- Expected to FAIL until T030 lands.
+-- T023 / CT-R6 (013): channel gain composition order — Phase 4a (master_track_id identity).
+-- Master has media_refs_channel_state(master_track_id='m-a1', default_gain_db=-3).
+-- A clip has clip_channel_override(master_track_id='m-a1', enabled=1, gain_db=-6).
+-- Per the override order (layer → channel → gain), the clip-level override wins —
+-- effective gain for the channel backed by m-a1 under this clip is -6 dB, not -3 dB.
 
 require("test_env")
 local database = require("core.database")
@@ -24,12 +23,12 @@ assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
     .. "VALUES ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
+-- Two master AUDIO tracks so the 2-channel media resolves to two entries.
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
-    .. "VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1)"))
-assert(db:exec(
-    "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
-    .. "VALUES ('e-a1', 'e', 'A1', 'AUDIO', 1)"))
+    .. "VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1), "
+    .. "       ('m-a2', 'm', 'A2', 'AUDIO', 2), "
+    .. "       ('e-a1', 'e', 'A1', 'AUDIO', 1)"))
 assert(db:exec(
     "INSERT INTO media (id, project_id, name, file_path, duration_frames, "
     .. "fps_numerator, fps_denominator, audio_channels, audio_sample_rate, created_at, modified_at) "
@@ -39,12 +38,12 @@ assert(db:exec(
     .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', 'm', 'm-a1', 'med', 0, 48000, 0, 48000, 48000, 1, 1.0, 0, 0, 0)"))
--- Master: channel 0 default gain = -3 dB.
+-- Master channel state: track m-a1 default gain = -3 dB.
 assert(db:exec(
-    "INSERT INTO media_refs_channel_state (owner_sequence_id, channel_index, enabled, default_gain_db) "
-    .. "VALUES ('m', 0, 1, -3.0)"))
--- Clip A: no override — should inherit master's -3 dB on channel 0.
--- Clip B: override to -6 dB on channel 0 — should win.
+    "INSERT INTO media_refs_channel_state (master_track_id, enabled, default_gain_db) "
+    .. "VALUES ('m-a1', 1, -3.0)"))
+-- Clip A: no override — should inherit master's -3 dB on the m-a1 channel.
+-- Clip B: override on m-a1 to -6 dB — should win.
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
     .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
@@ -56,8 +55,8 @@ assert(db:exec(
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('B', 'p1', 'e', 'e-a1', 'm', 'B', 100000, 48000, 0, 48000, 0, 0, 'passthrough', 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
-    "INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db) "
-    .. "VALUES ('B', 0, 1, -6.0)"))
+    "INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db) "
+    .. "VALUES ('B', 'm-a1', 1, -6.0)"))
 
 require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
@@ -68,11 +67,14 @@ local entries = Sequence:pick_in_range("e", 0, 200000, {
     project_fps_mismatch_policy = "passthrough",
 })
 
--- Expect 4 entries: 2 clips × 2 channels. Channel 0 under clip A reads master
--- state (-3 dB); under clip B the override wins (-6 dB).
-local function find_channel(clip_id, ch)
+-- 2-channel composite ref on m-a1 fans to two entries per clip; both share
+-- master_track_id='m-a1'. The channel backed by m-a1 under clip A reads
+-- master state (-3 dB); under clip B the override wins (-6 dB).
+local function find_track_entry(clip_id, master_track_id)
     for _, e in ipairs(entries) do
-        if e.provenance[1] == clip_id and e.channel_index == ch then return e end
+        if e.provenance[1] == clip_id and e.master_track_id == master_track_id then
+            return e
+        end
     end
 end
 
@@ -83,16 +85,16 @@ local function entry_gain_db(e)
     return 20 * math.log10(e.volume)
 end
 
-local a0 = find_channel("A", 0)
-assert(a0, "expected entry for clip A, channel 0")
-local a0_db = entry_gain_db(a0)
-assert(math.abs(a0_db - (-3.0)) < 0.1,
-    string.format("clip A channel 0 should inherit master -3 dB; got %.2f", a0_db))
+local a_m_a1 = find_track_entry("A", "m-a1")
+assert(a_m_a1, "expected entry for clip A on master track m-a1")
+local a_db = entry_gain_db(a_m_a1)
+assert(math.abs(a_db - (-3.0)) < 0.1,
+    string.format("clip A m-a1 should inherit master -3 dB; got %.2f", a_db))
 
-local b0 = find_channel("B", 0)
-assert(b0, "expected entry for clip B, channel 0")
-local b0_db = entry_gain_db(b0)
-assert(math.abs(b0_db - (-6.0)) < 0.1,
-    string.format("clip B channel 0 override must win with -6 dB; got %.2f", b0_db))
+local b_m_a1 = find_track_entry("B", "m-a1")
+assert(b_m_a1, "expected entry for clip B on master track m-a1")
+local b_db = entry_gain_db(b_m_a1)
+assert(math.abs(b_db - (-6.0)) < 0.1,
+    string.format("clip B m-a1 override must win with -6 dB; got %.2f", b_db))
 
 print("✅ test_resolve_channel_gain.lua passed")

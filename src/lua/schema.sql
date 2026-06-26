@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (17);
+INSERT OR IGNORE INTO schema_version (version) VALUES (18);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -412,26 +412,30 @@ CREATE INDEX IF NOT EXISTS idx_patches_sequence_id
 
 -- Master-level per-channel state. Absent row = default (enabled, unity gain)
 -- applied by the resolver. Rule 2.13: materialized rows carry explicit values.
+-- Identity is the master AUDIO track itself (tracks.id) — channel order is
+-- the master's tracks ordering, mutated by reordering tracks, not by
+-- cascading slot remaps. Owner sequence is implied by tracks.sequence_id.
 CREATE TABLE IF NOT EXISTS media_refs_channel_state (
-    owner_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
-    channel_index INTEGER NOT NULL,
+    master_track_id TEXT NOT NULL PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
     enabled INTEGER NOT NULL,
-    default_gain_db REAL NOT NULL,
-    PRIMARY KEY (owner_sequence_id, channel_index)
+    default_gain_db REAL NOT NULL
 );
 
 -- Per-clip channel override. Absent row = inherit nested sequence's state
 -- (which in turn may come from media_refs_channel_state at a leaf master).
+-- Identity is (clip_id, master_track_id) — overrides survive master track
+-- reordering automatically; deleting the master track CASCADES out.
 -- Rule 2.13: no column defaults.
 CREATE TABLE IF NOT EXISTS clip_channel_override (
     clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-    channel_index INTEGER NOT NULL,
+    master_track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     enabled INTEGER NOT NULL,
     gain_db REAL NOT NULL,
-    PRIMARY KEY (clip_id, channel_index)
+    PRIMARY KEY (clip_id, master_track_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_clip_channel_override_clip ON clip_channel_override(clip_id);
+CREATE INDEX IF NOT EXISTS idx_clip_channel_override_track ON clip_channel_override(master_track_id);
 
 -- Clip markers: per-clip-instance markers (e.g. imported from DaVinci Resolve).
 -- Drawn directly on the clip. `frame` is the offset from the clip's start and

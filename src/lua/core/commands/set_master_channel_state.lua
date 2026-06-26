@@ -1,23 +1,24 @@
---- SetMasterChannelState command (Feature 013, T062).
+--- SetMasterChannelState command.
 ---
---- Per FR-006 / FR-007 / contracts/commands.md §SetMasterChannelState:
----   Args: { sequence_id, channel_index, enabled, gain_db }.
----     sequence_id is the master being mutated (rule 2.29).
----   Pre:
----     * sequence_id.kind == 'master'.
----     * channel_index < master's audio channel count.
----     * enabled and gain_db both required (rule 2.13).
----   Mutation: UPSERT media_refs_channel_state(sequence_id, channel_index)
----     with the new (enabled, default_gain_db).
----   Undo: prior row state, or row-absence sentinel.
----   Signal: sequence_content_changed(sequence_id) — every clip that
----     hasn't overridden this channel re-resolves to the new state.
+--- Args: { sequence_id, master_track_id, enabled, gain_db }.
+---   sequence_id is the master being mutated (rule 2.29). The track
+---   must live on that sequence and be AUDIO.
+--- Pre:
+---   * sequence_id.kind == 'master'.
+---   * master_track_id refers to an AUDIO track on that master.
+---   * enabled and gain_db both required (rule 2.13).
+--- Mutation: UPSERT media_refs_channel_state(master_track_id) with the
+---   new (enabled, default_gain_db).
+--- Undo: prior row state, or row-absence sentinel.
+--- Signal: sequence_content_changed(sequence_id) — every clip that
+---   hasn't overridden this channel re-resolves to the new state.
 ---
 --- @file set_master_channel_state.lua
 
 local M = {}
 
 local Sequence  = require("models.sequence")
+local Track     = require("models.track")
 local State     = require("models.media_refs_channel_state")
 local log       = require("core.logger").for_area("commands")
 
@@ -31,13 +32,8 @@ end
 function M.execute(args)
     assert(type(args) == "table",
         "SetMasterChannelState.execute: args table required")
-    local sequence_id = require_string_arg(args, "sequence_id")
-
-    local channel_index = args.channel_index
-    assert(type(channel_index) == "number" and channel_index >= 0
-        and channel_index == math.floor(channel_index), string.format(
-        "SetMasterChannelState: channel_index must be a non-negative integer; "
-        .. "got %s", tostring(channel_index)))
+    local sequence_id     = require_string_arg(args, "sequence_id")
+    local master_track_id = require_string_arg(args, "master_track_id")
 
     assert(args.enabled ~= nil,
         "SetMasterChannelState: 'enabled' required (rule 2.13 — no default)")
@@ -54,43 +50,45 @@ function M.execute(args)
         .. "valid only on master sequences.",
         sequence_id, tostring(seq.kind)))
 
-    local channel_count = Sequence.count_master_audio_channels(sequence_id)
-    assert(channel_index < channel_count, string.format(
-        "SetMasterChannelState: channel_index %d out of bounds for master %s "
-        .. "(has %d audio channels) — channel_index must be < master's audio channel count.",
-        channel_index, sequence_id, channel_count))
+    local track = Track.load(master_track_id)
+    assert(track, string.format(
+        "SetMasterChannelState: master_track %s not found", master_track_id))
+    assert(track.sequence_id == sequence_id, string.format(
+        "SetMasterChannelState: master_track %s belongs to sequence %s, "
+        .. "not the targeted master %s",
+        master_track_id, tostring(track.sequence_id), sequence_id))
+    assert(track.track_type == "AUDIO", string.format(
+        "SetMasterChannelState: master_track %s is %s, not AUDIO",
+        master_track_id, tostring(track.track_type)))
 
-    local existing = State.find(sequence_id, channel_index)
+    local existing = State.find(master_track_id)
     local capture = {
-        sequence_id   = sequence_id,
-        channel_index = channel_index,
+        sequence_id     = sequence_id,
+        master_track_id = master_track_id,
     }
     if existing then
         capture.prior_existed         = true
         capture.prior_enabled         = existing.enabled
         capture.prior_default_gain_db = existing.default_gain_db
         State.update({
-            owner_sequence_id = sequence_id,
-            channel_index     = channel_index,
-            enabled           = enabled,
-            default_gain_db   = gain_db,
+            master_track_id = master_track_id,
+            enabled         = enabled,
+            default_gain_db = gain_db,
         })
-        log.event("SetMasterChannelState: master=%s ch=%d updated -> "
+        log.event("SetMasterChannelState: master=%s track=%s updated -> "
             .. "enabled=%s gain=%s",
-            sequence_id, channel_index, tostring(enabled), tostring(gain_db))
+            sequence_id, master_track_id, tostring(enabled), tostring(gain_db))
     else
         capture.prior_existed = false
         State.insert({
-            owner_sequence_id = sequence_id,
-            channel_index     = channel_index,
-            enabled           = enabled,
-            default_gain_db   = gain_db,
+            master_track_id = master_track_id,
+            enabled         = enabled,
+            default_gain_db = gain_db,
         })
-        log.event("SetMasterChannelState: master=%s ch=%d new row -> "
+        log.event("SetMasterChannelState: master=%s track=%s new row -> "
             .. "enabled=%s gain=%s",
-            sequence_id, channel_index, tostring(enabled), tostring(gain_db))
+            sequence_id, master_track_id, tostring(enabled), tostring(gain_db))
     end
-
 
     return capture
 end
@@ -100,23 +98,21 @@ function M.undo(capture)
         "SetMasterChannelState.undo: capture table required")
     if capture.prior_existed then
         State.update({
-            owner_sequence_id = capture.sequence_id,
-            channel_index     = capture.channel_index,
-            enabled           = capture.prior_enabled,
-            default_gain_db   = capture.prior_default_gain_db,
+            master_track_id = capture.master_track_id,
+            enabled         = capture.prior_enabled,
+            default_gain_db = capture.prior_default_gain_db,
         })
     else
-        State.delete(capture.sequence_id, capture.channel_index)
+        State.delete(capture.master_track_id)
     end
-
 end
 
 local SPEC = {
     args = {
-        sequence_id   = { required = true },
-        channel_index = { required = true },
-        enabled       = { required = true },
-        gain_db       = { required = true },
+        sequence_id     = { required = true },
+        master_track_id = { required = true },
+        enabled         = { required = true },
+        gain_db         = { required = true },
     },
     persisted = {
         prior_existed         = { kind = "boolean" },
@@ -150,9 +146,9 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local args = command:get_all_parameters()
         local prior_existed = args.prior_existed and true or false
         local undo_args = {
-            sequence_id   = args.sequence_id,
-            channel_index = args.channel_index,
-            prior_existed = prior_existed,
+            sequence_id     = args.sequence_id,
+            master_track_id = args.master_track_id,
+            prior_existed   = prior_existed,
         }
         if prior_existed then
             assert(type(args.prior_enabled) == "boolean",

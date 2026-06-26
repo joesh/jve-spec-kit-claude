@@ -1,19 +1,17 @@
---- SetClipChannelGain command (Feature 013, T055).
+--- SetClipChannelGain command.
 ---
---- Per FR-014 / contracts/commands.md §SetClipChannelGain:
----   Args: { sequence_id, clip_id, channel_index, gain_db }
----     sequence_id is the clip's owner_sequence_id (rule 2.29).
----   Mutation:
----     - No prior row: INSERT (channel_index, inherited_enabled, gain_db).
----       Materializing inherited_enabled (rule 2.13) keeps "enable state
----       under user control" once a row exists; we never let SQLite's
----       implicit DEFAULT introduce a phantom value.
----     - Prior row: UPDATE gain_db; enabled untouched.
----   Undo: prior gain_db (or row-absence sentinel).
----   Signal: sequence_content_changed(sequence_id).
+--- Args: { sequence_id, clip_id, master_track_id, gain_db }
+---   sequence_id is the clip's owner_sequence_id (rule 2.29).
+--- Mutation:
+---   - No prior row: INSERT (master_track_id, inherited_enabled, gain_db).
+---     Materializing inherited_enabled (rule 2.13) keeps "enable state
+---     under user control" once a row exists; we never let SQLite's
+---     implicit DEFAULT introduce a phantom value.
+---   - Prior row: UPDATE gain_db; enabled untouched.
+--- Undo: prior gain_db (or row-absence sentinel).
+--- Signal: sequence_content_changed(sequence_id).
 ---
---- First-landing scope: clip.sequence_id must be kind='master'
---- (matches ToggleClipChannel — multi-level inheritance deferred).
+--- First-landing scope: clip.sequence_id must be kind='master'.
 ---
 --- @file set_clip_channel_gain.lua
 
@@ -21,6 +19,7 @@ local M = {}
 
 local Clip      = require("models.clip")
 local Sequence  = require("models.sequence")
+local Track     = require("models.track")
 local Override  = require("models.clip_channel_override")
 local log       = require("core.logger").for_area("commands")
 
@@ -31,20 +30,7 @@ local function require_string_arg(args, name)
     return v
 end
 
-function M.execute(args)
-    assert(type(args) == "table", "SetClipChannelGain.execute: args table required")
-    local sequence_id = require_string_arg(args, "sequence_id")
-    local clip_id     = require_string_arg(args, "clip_id")
-    local channel_index = args.channel_index
-    assert(type(channel_index) == "number" and channel_index >= 0
-        and channel_index == math.floor(channel_index), string.format(
-        "SetClipChannelGain: channel_index must be a non-negative integer; got %s",
-        tostring(channel_index)))
-    local gain_db = args.gain_db
-    assert(type(gain_db) == "number", string.format(
-        "SetClipChannelGain: gain_db must be a number; got %s",
-        tostring(gain_db)))
-
+local function load_clip_directly_on_master(sequence_id, clip_id)
     local clip = Clip.load_row(clip_id)
     assert(clip, string.format(
         "SetClipChannelGain: clip %s not found", clip_id))
@@ -52,7 +38,6 @@ function M.execute(args)
         "SetClipChannelGain: sequence_id mismatch — clip %s owner=%s, args=%s "
         .. "(rule 2.29)",
         clip_id, tostring(clip.owner_sequence_id), tostring(sequence_id)))
-
     local nested = Sequence.find(clip.sequence_id)
     assert(nested, string.format(
         "SetClipChannelGain: clip %s nested sequence %s not found",
@@ -62,18 +47,40 @@ function M.execute(args)
         .. "first-landing supports per-clip channel overrides only when "
         .. "the clip directly references a master.",
         clip_id, tostring(nested.kind)))
+    return clip
+end
 
-    local channel_count = Sequence.count_master_audio_channels(clip.sequence_id)
-    assert(channel_index < channel_count, string.format(
-        "SetClipChannelGain: channel_index %d out of bounds for master %s "
-        .. "(has %d audio channels) — channel_index must be < master's audio channel count.",
-        channel_index, clip.sequence_id, channel_count))
+local function assert_track_is_master_audio(master_track_id, master_seq_id)
+    local track = Track.load(master_track_id)
+    assert(track, string.format(
+        "SetClipChannelGain: master_track %s not found", master_track_id))
+    assert(track.sequence_id == master_seq_id, string.format(
+        "SetClipChannelGain: master_track %s belongs to sequence %s, "
+        .. "not the referenced master %s",
+        master_track_id, tostring(track.sequence_id), master_seq_id))
+    assert(track.track_type == "AUDIO", string.format(
+        "SetClipChannelGain: master_track %s is %s, not AUDIO",
+        master_track_id, tostring(track.track_type)))
+end
 
-    local existing = Override.find(clip_id, channel_index)
+function M.execute(args)
+    assert(type(args) == "table", "SetClipChannelGain.execute: args table required")
+    local sequence_id     = require_string_arg(args, "sequence_id")
+    local clip_id         = require_string_arg(args, "clip_id")
+    local master_track_id = require_string_arg(args, "master_track_id")
+    local gain_db = args.gain_db
+    assert(type(gain_db) == "number", string.format(
+        "SetClipChannelGain: gain_db must be a number; got %s",
+        tostring(gain_db)))
+
+    local clip = load_clip_directly_on_master(sequence_id, clip_id)
+    assert_track_is_master_audio(master_track_id, clip.sequence_id)
+
+    local existing = Override.find(clip_id, master_track_id)
     local capture = {
-        sequence_id    = sequence_id,
-        clip_id        = clip_id,
-        channel_index  = channel_index,
+        sequence_id     = sequence_id,
+        clip_id         = clip_id,
+        master_track_id = master_track_id,
     }
 
     if existing then
@@ -81,29 +88,27 @@ function M.execute(args)
         capture.prior_enabled = existing.enabled
         capture.prior_gain_db = existing.gain_db
         Override.update({
-            clip_id       = clip_id,
-            channel_index = channel_index,
-            enabled       = existing.enabled,
-            gain_db       = gain_db,
+            clip_id         = clip_id,
+            master_track_id = master_track_id,
+            enabled         = existing.enabled,
+            gain_db         = gain_db,
         })
-        log.event("SetClipChannelGain: clip=%s ch=%d gain %s -> %s",
-            clip_id, channel_index,
+        log.event("SetClipChannelGain: clip=%s track=%s gain %s -> %s",
+            clip_id, master_track_id,
             tostring(existing.gain_db), tostring(gain_db))
     else
-        local inh_enabled = Sequence.get_master_channel_state(
-            clip.sequence_id, channel_index)
+        local inh_enabled = Sequence.get_master_channel_state(master_track_id)
         capture.prior_existed = false
         Override.insert({
-            clip_id       = clip_id,
-            channel_index = channel_index,
-            enabled       = inh_enabled,
-            gain_db       = gain_db,
+            clip_id         = clip_id,
+            master_track_id = master_track_id,
+            enabled         = inh_enabled,
+            gain_db         = gain_db,
         })
-        log.event("SetClipChannelGain: clip=%s ch=%d new override gain=%s "
+        log.event("SetClipChannelGain: clip=%s track=%s new override gain=%s "
             .. "(materialized enabled=%s)",
-            clip_id, channel_index, tostring(gain_db), tostring(inh_enabled))
+            clip_id, master_track_id, tostring(gain_db), tostring(inh_enabled))
     end
-
 
     return capture
 end
@@ -113,23 +118,22 @@ function M.undo(capture)
         "SetClipChannelGain.undo: capture table required")
     if capture.prior_existed then
         Override.update({
-            clip_id       = capture.clip_id,
-            channel_index = capture.channel_index,
-            enabled       = capture.prior_enabled,
-            gain_db       = capture.prior_gain_db,
+            clip_id         = capture.clip_id,
+            master_track_id = capture.master_track_id,
+            enabled         = capture.prior_enabled,
+            gain_db         = capture.prior_gain_db,
         })
     else
-        Override.delete(capture.clip_id, capture.channel_index)
+        Override.delete(capture.clip_id, capture.master_track_id)
     end
-
 end
 
 local SPEC = {
     args = {
-        sequence_id   = { required = true },
-        clip_id       = { required = true },
-        channel_index = { required = true },
-        gain_db       = { required = true },
+        sequence_id     = { required = true },
+        clip_id         = { required = true },
+        master_track_id = { required = true },
+        gain_db         = { required = true },
     },
     persisted = {
         prior_existed = { kind = "boolean" },
@@ -163,10 +167,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local args = command:get_all_parameters()
         local prior_existed = args.prior_existed and true or false
         local undo_args = {
-            sequence_id   = args.sequence_id,
-            clip_id       = args.clip_id,
-            channel_index = args.channel_index,
-            prior_existed = prior_existed,
+            sequence_id     = args.sequence_id,
+            clip_id         = args.clip_id,
+            master_track_id = args.master_track_id,
+            prior_existed   = prior_existed,
         }
         if prior_existed then
             assert(type(args.prior_enabled) == "boolean",

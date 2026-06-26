@@ -4,16 +4,19 @@
 --- focused on the model surface (2.6). Public entry point is
 --- M.pick_in_range; helpers are file-private.
 ---
---- Cross-module dependency: emit_audio_channel_entries calls
---- Sequence.count_master_audio_channels for the channel_index < master
---- channel count check inside pick_nested. We lazy-require Sequence inside that
---- helper to avoid the models.sequence ↔ models.sequence.resolver
---- top-level cycle.
----
 --- Callers (Sequence:pick_in_range delegate) inject the open SQLite
 --- connection; this module never opens one itself.
 
 local subframe_math = require("core.subframe_math")
+local log = require("core.logger").for_area("ticks")
+
+-- One-shot dedup for the "clip references master with no coverage at source
+-- range" warning. Playback can cross a corrupt clip 25× per second; warning
+-- every frame would drown the TSO. We warn the first time we see each
+-- (clip_id, sequence_id) pair and stay quiet thereafter for the process
+-- lifetime. Reset on project change happens implicitly via process restart
+-- (Joe regenerates projects freely; this set's residence is acceptable).
+local warned_no_master_coverage = {}
 
 local M = {}
 
@@ -78,16 +81,15 @@ local function assert_track_ref_valid(db, clip_id, seq_id, track_id,
 end
 
 
--- Fetch the effective channel state for a master's channel. Absent row →
--- resolver default (enabled=true, gain=0). Returns {enabled, gain_db}.
-local function fetch_master_channel_state(db, master_seq_id, channel_index)
+-- Fetch the effective channel state for a master AUDIO track. Absent row
+-- → resolver default (enabled=true, gain=0). Returns (enabled, gain_db).
+local function fetch_master_channel_state(db, master_track_id)
     local stmt = db:prepare([[
         SELECT enabled, default_gain_db FROM media_refs_channel_state
-        WHERE owner_sequence_id = ? AND channel_index = ?
+        WHERE master_track_id = ?
     ]])
     assert(stmt, "Sequence.resolve: master-chan-state prepare failed")
-    stmt:bind_value(1, master_seq_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(1, master_track_id)
     assert(stmt:exec(), "Sequence.resolve: master-chan-state exec failed")
     local enabled, gain_db = true, 0.0  -- resolver default
     if stmt:next() then
@@ -99,14 +101,14 @@ local function fetch_master_channel_state(db, master_seq_id, channel_index)
 end
 
 -- Fetch per-clip channel override if present. Returns (found, enabled, gain_db).
-local function fetch_clip_channel_override(db, clip_id, channel_index)
+local function fetch_clip_channel_override(db, clip_id, master_track_id)
     local stmt = db:prepare([[
         SELECT enabled, gain_db FROM clip_channel_override
-        WHERE clip_id = ? AND channel_index = ?
+        WHERE clip_id = ? AND master_track_id = ?
     ]])
     assert(stmt, "Sequence.resolve: clip-override prepare failed")
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec(), "Sequence.resolve: clip-override exec failed")
     local found, enabled, gain_db
     if stmt:next() then
@@ -232,6 +234,19 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
         }
     end
     stmt:finalize()
+    -- Long-standing diagnostic at ticks:detail. When the resolver returns
+    -- "no clip at outer frame X" but Clip.find_overlapping_on_track shows
+    -- one, this confirms whether the SQL itself dropped the row (e.g.
+    -- enabled=0 in DB despite UI saying enabled) or whether downstream
+    -- finalization filtered it. Captures the exact (seq, range, row) tuple.
+    log.detail("list_clips_overlapping seq=%s [%d..%d) -> %d rows",
+        tostring(seq_id), start_frame, end_frame, #rows)
+    for _, r in ipairs(rows) do
+        log.detail("  row: id=%s tt=%s ti=%s start=%s dur=%s enabled=%s",
+            tostring(r.id), tostring(r.track_type), tostring(r.track_index),
+            tostring(r.sequence_start), tostring(r.duration),
+            tostring(r.enabled))
+    end
     return rows
 end
 
@@ -404,9 +419,9 @@ local function build_mref_entry_base(r, lo_f, hi_f, file_in, file_out, outer_cha
 end
 
 local function emit_video_entry(entries, r, base)
-    base.media_kind    = "video"
-    base.track_role    = "video"
-    base.channel_index = nil
+    base.media_kind      = "video"
+    base.track_role      = "video"
+    base.master_track_id = nil
     entries[#entries + 1] = base
 end
 
@@ -420,14 +435,14 @@ end
 -- single-channel ref into all of the file's channels, so every per-channel track
 -- played the whole file (N² entries, all identical waveforms/audio).
 --
--- Two distinct channel numbers are in play:
---   * source_channel — which channel of the underlying FILE to decode
+-- Two distinct channel identities are in play:
+--   * source_channel  — which channel of the underlying FILE to decode
 --     (file-relative; carried on the media_ref). Goes downstream to the decoder.
---   * channel_index  — the master's own channel SLOT, used to key per-channel
---     mix state (media_refs_channel_state / clip_channel_override). It is the
---     audio track's ordinal (track_index - 1), unique within the master. For a
---     single-file master the two coincide; for a synced master (camera track +
---     external-WAV tracks) the WAV tracks' slots continue past the camera's.
+--   * master_track_id — the master AUDIO track this entry's mix-state is
+--     keyed by (media_refs_channel_state / clip_channel_override).
+--     Identity is a stable UUID, so reordering master tracks doesn't
+--     rewrite any override rows and deleting a master track CASCADEs
+--     the channel state out of both tables automatically.
 local function emit_audio_channel_entry(entries, r, base, db, master_seq_id, outer_chain)
     -- Resolver invariant: AUDIO mrefs MUST carry audio_sample_rate (FR-004 /
     -- schema trigger). Surface at the resolver — downstream consumers (TMB
@@ -447,30 +462,35 @@ local function emit_audio_channel_entry(entries, r, base, db, master_seq_id, out
     --   * NULL → a COMPOSITE ref carrying the file's whole channel set (the
     --     018 expand/collapse model); fan it into one entry per file channel.
     -- The per-channel form is preferred; the composite form is kept so existing
-    -- composite masters / collapsed clips still resolve. channel_index is the
-    -- master mix-state slot; source_channel is the decoder's file selector.
-    local function add_entry(slot, source_channel)
+    -- composite masters / collapsed clips still resolve. master_track_id keys
+    -- the per-channel mix state (one row in media_refs_channel_state /
+    -- clip_channel_override per master AUDIO track); source_channel is the
+    -- decoder's file selector. Composite refs fan to N entries that all
+    -- share the same master_track_id, so a single override row controls
+    -- the whole composite slot — symmetric with how the inspector shows one
+    -- Channels row per master track.
+    local function add_entry(source_channel)
         local ms_enabled, ms_gain_db =
-            fetch_master_channel_state(db, master_seq_id, slot)
+            fetch_master_channel_state(db, r.track_id)
         entries[#entries + 1] = {
-            media_path     = base.media_path,
-            media_id       = base.media_id,
-            media_kind     = "audio",
-            source_in      = base.source_in,
-            source_out     = base.source_out,
-            sequence_start = base.sequence_start,
-            duration       = base.duration,
-            track_role     = "audio",
-            channel_index  = slot,           -- master slot (mix-state key)
-            source_channel = source_channel, -- file channel (decoder selector)
-            volume         = base.volume,
-            enabled        = base.enabled,
-            effects        = {},
-            provenance     = build_provenance(outer_chain, r.id),
+            media_path      = base.media_path,
+            media_id        = base.media_id,
+            media_kind      = "audio",
+            source_in       = base.source_in,
+            source_out      = base.source_out,
+            sequence_start  = base.sequence_start,
+            duration        = base.duration,
+            track_role      = "audio",
+            master_track_id = r.track_id,    -- master mix-state key
+            source_channel  = source_channel, -- file channel (decoder selector)
+            volume          = base.volume,
+            enabled         = base.enabled,
+            effects         = {},
+            provenance      = build_provenance(outer_chain, r.id),
             owner_track_index = r.track_index,
             owner_track_type  = r.track_type,
             owner_clip_id     = r.id,
-            channel_state  = { enabled = ms_enabled, gain_db = ms_gain_db },
+            channel_state   = { enabled = ms_enabled, gain_db = ms_gain_db },
             -- 018 FR-004 / FR-008: AUDIO entries carry the mref's denormalized
             -- audio_sample_rate so the playback engine's TMB feeder can match
             -- it against source_in (file-natural samples). Without this the
@@ -486,14 +506,15 @@ local function emit_audio_channel_entry(entries, r, base, db, master_seq_id, out
                 .. "of range for a %d-channel file (track=%s; 023 one-clip-per-stream)",
                 tostring(r.id), tostring(r.source_channel), r.audio_channels,
                 tostring(r.track_id)))
-        assert(type(r.track_index) == "number" and r.track_index >= 1,
-            string.format("emit_audio_channel_entry: mref %s track_index=%s invalid",
-                tostring(r.id), tostring(r.track_index)))
-        add_entry(r.track_index - 1, r.source_channel)
+        assert(type(r.track_id) == "string" and r.track_id ~= "",
+            string.format("emit_audio_channel_entry: mref %s missing track_id",
+                tostring(r.id)))
+        add_entry(r.source_channel)
     else
-        -- Composite ref: fan the whole file into per-channel entries.
+        -- Composite ref: fan the whole file into per-channel entries; all
+        -- share the composite track's master_track_id (one inspector slot).
         for ch = 0, r.audio_channels - 1 do
-            add_entry(ch, ch)
+            add_entry(ch)
         end
     end
 end
@@ -682,39 +703,10 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
                     c.master_audio_track_id, "master_audio_track_id")
             end
 
-            -- channel_index must be < master's audio channel count.
-            -- Iterate the clip's overrides (if any) and assert each is in
-            -- bounds. For first-landing this checks only when the clip
-            -- directly references a master (kind='master') so we have a
-            -- concrete channel count; nested-of-nested defers to the
-            -- master at its leaf via the recursion's downstream check
-            -- on whatever clips the inner sequence holds.
-            do
-                local kind_stmt = db:prepare(
-                    "SELECT kind FROM sequences WHERE id = ?")
-                assert(kind_stmt, "Sequence.resolve (channel_index < master audio channel count): kind prepare failed")
-                kind_stmt:bind_value(1, c.sequence_id)
-                assert(kind_stmt:exec(), "Sequence.resolve (channel_index < master audio channel count): kind exec failed")
-                local nk
-                if kind_stmt:next() then nk = kind_stmt:value(0) end
-                kind_stmt:finalize()
-                if nk == "master" then
-                    local channel_count = require("models.sequence").count_master_audio_channels(
-                        c.sequence_id)
-                    local Override = require("models.clip_channel_override")
-                    for _, ov in ipairs(Override.find_all(c.id)) do
-                        assert(ov.channel_index < channel_count, string.format(
-                            "Sequence.resolve: channel_index must be < master's audio channel count: clip %s has "
-                            .. "clip_channel_override(channel_index=%d) but "
-                            .. "the referenced master sequence %s has only "
-                            .. "%d audio channel(s). The master likely "
-                            .. "shrank since the override was set; clear "
-                            .. "or migrate the override.",
-                            c.id, ov.channel_index,
-                            c.sequence_id, channel_count))
-                    end
-                end
-            end
+            -- (No channel-bounds assert. Identity moved from a slot integer
+            -- to master_track_id with FK ON DELETE CASCADE on tracks(id) —
+            -- removing a master track CASCADEs the override row out, so a
+            -- stale "channel_index >= channel_count" state cannot exist.)
 
             -- Layer to expose at the level THIS clip directly references.
             -- NULL → inherit the referenced sequence's default; explicit →
@@ -783,6 +775,31 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
 
             -- No double-counting: V clips materialize only V media; A only A.
             local want_kind = (c.track_type == "VIDEO") and "video" or "audio"
+            -- Surface data integrity violations loudly (rule 2.32 — no silent
+            -- failures). Pre-2026-06-24 a clip whose source range fell outside
+            -- the referenced master's coverage silently returned 0 entries,
+            -- showing as a "gap" on the timeline while the source viewer's
+            -- clamp_to_master_range happily parked at the master's edge —
+            -- making the bug invisible. The recursion into the master
+            -- legitimately returns some/all entries when the range is partly/
+            -- fully covered; ZERO entries for a clip with a non-empty source
+            -- range means the master has nothing at all there.
+            local has_want_kind = false
+            for _, e in ipairs(inner) do
+                if e.media_kind == want_kind then has_want_kind = true; break end
+            end
+            if not has_want_kind and c.source_in ~= c.source_out then
+                local key = c.id .. "|" .. tostring(c.sequence_id)
+                if not warned_no_master_coverage[key] then
+                    warned_no_master_coverage[key] = true
+                    log.warn("pick_nested: clip %s (track_type=%s) references master %s "
+                        .. "but master has no %s media at source range [%d..%d) — clip "
+                        .. "will not render. Likely cause: master was relinked to a "
+                        .. "narrower file, or clip source_in/out stored in wrong units.",
+                        tostring(c.id), tostring(c.track_type), tostring(c.sequence_id),
+                        want_kind, c.source_in, c.source_out)
+                end
+            end
             for _, e in ipairs(inner) do
                 if e.media_kind == want_kind then
                     -- Translate master-coord -> outer-coord; the inner
@@ -804,13 +821,13 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
                     e.enabled = e.enabled and c.enabled
 
                     -- Per-clip audio channel override: if this clip has a
-                    -- row for the entry's channel, REPLACE the channel_state
-                    -- (the override is the channel state of record at this
-                    -- level — no divide-out gymnastics, no master-leaf
-                    -- divisor problem at depth > 1).
-                    if e.media_kind == "audio" and e.channel_index ~= nil then
+                    -- row for the entry's master track, REPLACE the
+                    -- channel_state (the override is the channel state of
+                    -- record at this level — no divide-out gymnastics, no
+                    -- master-leaf divisor problem at depth > 1).
+                    if e.media_kind == "audio" and e.master_track_id ~= nil then
                         local found, ov_enabled, ov_gain_db =
-                            fetch_clip_channel_override(db, c.id, e.channel_index)
+                            fetch_clip_channel_override(db, c.id, e.master_track_id)
                         if found then
                             e.channel_state = {
                                 enabled = ov_enabled, gain_db = ov_gain_db,

@@ -1,4 +1,4 @@
--- T037 (013): CT-C8 Duplicate copies per-clip overrides.
+-- T037 (013): CT-C8 Duplicate copies per-clip overrides — Phase 4a (master_track_id identity).
 --
 -- Duplicate creates a new clips row with the same shape, shifted by
 -- delta_frames on the same or a different track. Per commands.md §Duplicate:
@@ -6,6 +6,8 @@
 --     enabled, volume, etc. are copied verbatim
 --   - all clip_channel_override rows are cloned to the new clip_id
 --   - sequence_start_frame = original.sequence_start_frame + delta_frames
+--
+-- Overrides are keyed by master_track_id (track UUID) under Phase 4a.
 --
 -- Black-box DB-state assertions.
 
@@ -30,7 +32,7 @@ end
 
 local function build_fixture()
     local db = fresh_db()
-    
+
     local project_id = "p1"
     Project.create("p", {
         id = project_id,
@@ -55,9 +57,13 @@ local function build_fixture()
 
     Track.create_video("V1", "m", { id = "m-v1", index = 1 }):save()
     Track.create_video("V2", "m", { id = "m-v2", index = 2 }):save()
+    -- Three master AUDIO tracks so overrides can target distinct UUIDs.
+    Track.create_audio("A1", "m", { id = "m-a1", index = 1 }):save()
+    Track.create_audio("A2", "m", { id = "m-a2", index = 2 }):save()
+    Track.create_audio("A3", "m", { id = "m-a3", index = 3 }):save()
     Track.create_video("V1", seq_id, { id = "e-v1", index = 1 }):save()
     Track.create_video("V2", seq_id, { id = "e-v2", index = 2 }):save()
-    
+
     db:exec("UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm'")
 
     local media_id = "med"
@@ -110,11 +116,12 @@ local function seed_clip(db, clip_id, master_layer)
     assert(cid == clip_id, "seed_clip failed")
 end
 
-local function seed_override(db, clip_id, channel, enabled, gain_db)
+-- Insert an override keyed by master_track_id (Phase 4a).
+local function seed_override(db, clip_id, master_track_id, enabled, gain_db)
     assert(db:exec(string.format([[
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('%s', %d, %d, %f)
-    ]], clip_id, channel, enabled and 1 or 0, gain_db)))
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('%s', '%s', %d, %f)
+    ]], clip_id, master_track_id, enabled and 1 or 0, gain_db)))
 end
 
 local function load_clip(db, id)
@@ -137,18 +144,18 @@ end
 
 local function load_overrides(db, clip_id)
     local stmt = db:prepare([[
-        SELECT channel_index, enabled, gain_db
+        SELECT master_track_id, enabled, gain_db
         FROM clip_channel_override WHERE clip_id = ?
-        ORDER BY channel_index ASC
+        ORDER BY master_track_id ASC
     ]])
     stmt:bind_value(1, clip_id)
     assert(stmt:exec())
     local rows = {}
     while stmt:next() do
         rows[#rows + 1] = {
-            channel_index = stmt:value(0),
-            enabled       = stmt:value(1) == 1,
-            gain_db       = stmt:value(2),
+            master_track_id = stmt:value(0),
+            enabled         = stmt:value(1) == 1,
+            gain_db         = stmt:value(2),
         }
     end
     stmt:finalize()
@@ -176,9 +183,9 @@ print("-- CT-C8 Duplicate copies master_layer_track_id + policy + overrides --")
 do
     local db = build_fixture()
     seed_clip(db, "c", "m-v2")
-    seed_override(db, "c", 0, true,  -3.0)
-    seed_override(db, "c", 1, false,  0.0)
-    seed_override(db, "c", 2, true,  -6.0)
+    seed_override(db, "c", "m-a1", true,  -3.0)
+    seed_override(db, "c", "m-a2", false,  0.0)
+    seed_override(db, "c", "m-a3", true,  -6.0)
 
     local success, result = execute_cmd(Duplicate, {
         sequence_id     = "e",
@@ -220,14 +227,14 @@ do
     assert(new.enabled == true and math.abs(new.volume - 0.75) < 1e-9,
         "enabled/volume must copy")
 
-    -- Channel override rows.
+    -- Channel override rows: both clips have 3, keyed by master_track_id.
     local orig_ovs = load_overrides(db, "c")
     local new_ovs  = load_overrides(db, new_id)
     assert(#orig_ovs == 3 and #new_ovs == 3, string.format(
         "both clips must have 3 overrides; orig=%d new=%d",
         #orig_ovs, #new_ovs))
     for i = 1, 3 do
-        assert(orig_ovs[i].channel_index == new_ovs[i].channel_index
+        assert(orig_ovs[i].master_track_id == new_ovs[i].master_track_id
                and orig_ovs[i].enabled == new_ovs[i].enabled
                and orig_ovs[i].gain_db == new_ovs[i].gain_db,
             string.format("override[%d] mismatch between original and duplicate", i))

@@ -1900,7 +1900,7 @@ function M.copy_channel_overrides(src_clip_id, dst_clip_id)
         "Clip.copy_channel_overrides: src and dst must differ")
     local db = require("core.database").get_connection()
     local sel = db:prepare([[
-        SELECT channel_index, enabled, gain_db
+        SELECT master_track_id, enabled, gain_db
         FROM clip_channel_override WHERE clip_id = ?
     ]])
     assert(sel, "Clip.copy_channel_overrides: select prepare failed")
@@ -1909,22 +1909,22 @@ function M.copy_channel_overrides(src_clip_id, dst_clip_id)
     local rows = {}
     while sel:next() do
         rows[#rows + 1] = {
-            channel_index = sel:value(0),
-            enabled       = sel:value(1),
-            gain_db       = sel:value(2),
+            master_track_id = sel:value(0),
+            enabled         = sel:value(1),
+            gain_db         = sel:value(2),
         }
     end
     sel:finalize()
     if #rows == 0 then return 0 end
 
     local ins = db:prepare([[
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
         VALUES (?, ?, ?, ?)
     ]])
     assert(ins, "Clip.copy_channel_overrides: insert prepare failed")
     for _, r in ipairs(rows) do
         ins:bind_value(1, dst_clip_id)
-        ins:bind_value(2, r.channel_index)
+        ins:bind_value(2, r.master_track_id)
         ins:bind_value(3, r.enabled)
         ins:bind_value(4, r.gain_db)
         assert(ins:exec(),
@@ -2020,18 +2020,18 @@ function M.capture_state(clip_id)
     local overrides = {}
     do
         local stmt = db:prepare([[
-            SELECT channel_index, enabled, gain_db
+            SELECT master_track_id, enabled, gain_db
             FROM clip_channel_override WHERE clip_id = ?
-            ORDER BY channel_index ASC
+            ORDER BY master_track_id ASC
         ]])
         assert(stmt, "Clip.capture_state: override prepare failed")
         stmt:bind_value(1, clip_id)
         assert(stmt:exec(), "Clip.capture_state: override exec failed")
         while stmt:next() do
             overrides[#overrides + 1] = {
-                channel_index = stmt:value(0),
-                enabled       = stmt:value(1),
-                gain_db       = stmt:value(2),
+                master_track_id = stmt:value(0),
+                enabled         = stmt:value(1),
+                gain_db         = stmt:value(2),
             }
         end
         stmt:finalize()
@@ -2128,13 +2128,13 @@ function M.restore_state(state)
     if state.overrides and #state.overrides > 0 then
         local db = require("core.database").get_connection()
         local stmt = db:prepare([[
-            INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
+            INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
             VALUES (?, ?, ?, ?)
         ]])
         assert(stmt, "Clip.restore_state: override prepare failed")
         for _, o in ipairs(state.overrides) do
             stmt:bind_value(1, r.id)
-            stmt:bind_value(2, o.channel_index)
+            stmt:bind_value(2, o.master_track_id)
             stmt:bind_value(3, o.enabled)
             stmt:bind_value(4, o.gain_db)
             assert(stmt:exec(),

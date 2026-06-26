@@ -3,7 +3,7 @@
 --- Two variants, distinguished by `kind`:
 ---
 ---   kind='channel': Args { sequence_id, clip_id, kind='channel',
----     channel_index }. DELETE the clip_channel_override row.
+---     master_track_id }. DELETE the clip_channel_override row.
 ---     Pre: row exists. Refused if absent (rule 2.13 — no silent no-op).
 ---     Undo: re-INSERT the prior row (enabled, gain_db).
 ---
@@ -31,13 +31,9 @@ local function require_string_arg(args, name)
 end
 
 local function execute_channel(args)
-    local sequence_id = require_string_arg(args, "sequence_id")
-    local clip_id     = require_string_arg(args, "clip_id")
-    local channel_index = args.channel_index
-    assert(type(channel_index) == "number" and channel_index >= 0
-        and channel_index == math.floor(channel_index), string.format(
-        "ClearClipOverride(channel): channel_index must be a non-negative "
-        .. "integer; got %s", tostring(channel_index)))
+    local sequence_id     = require_string_arg(args, "sequence_id")
+    local clip_id         = require_string_arg(args, "clip_id")
+    local master_track_id = require_string_arg(args, "master_track_id")
 
     local clip = Clip.load_row(clip_id)
     assert(clip, string.format(
@@ -47,24 +43,24 @@ local function execute_channel(args)
         .. "owner=%s args=%s (rule 2.29)",
         clip_id, tostring(clip.owner_sequence_id), tostring(sequence_id)))
 
-    local existing = Override.find(clip_id, channel_index)
+    local existing = Override.find(clip_id, master_track_id)
     assert(existing, string.format(
-        "ClearClipOverride(channel): no override exists on clip %s channel %d "
+        "ClearClipOverride(channel): no override exists on clip %s master_track %s "
         .. "(rule 2.13 forbids silently making this a no-op)",
-        clip_id, channel_index))
+        clip_id, master_track_id))
 
-    Override.delete(clip_id, channel_index)
-    log.event("ClearClipOverride(channel): clip=%s ch=%d (was enabled=%s gain=%s)",
-        clip_id, channel_index, tostring(existing.enabled),
+    Override.delete(clip_id, master_track_id)
+    log.event("ClearClipOverride(channel): clip=%s track=%s (was enabled=%s gain=%s)",
+        clip_id, master_track_id, tostring(existing.enabled),
         tostring(existing.gain_db))
 
     return {
-        sequence_id    = sequence_id,
-        clip_id        = clip_id,
-        kind           = "channel",
-        channel_index  = channel_index,
-        prior_enabled  = existing.enabled,
-        prior_gain_db  = existing.gain_db,
+        sequence_id     = sequence_id,
+        clip_id         = clip_id,
+        kind            = "channel",
+        master_track_id = master_track_id,
+        prior_enabled   = existing.enabled,
+        prior_gain_db   = existing.gain_db,
     }
 end
 
@@ -117,10 +113,10 @@ function M.undo(capture)
         "ClearClipOverride.undo: capture table required")
     if capture.kind == "channel" then
         Override.insert({
-            clip_id       = capture.clip_id,
-            channel_index = capture.channel_index,
-            enabled       = capture.prior_enabled,
-            gain_db       = capture.prior_gain_db,
+            clip_id         = capture.clip_id,
+            master_track_id = capture.master_track_id,
+            enabled         = capture.prior_enabled,
+            gain_db         = capture.prior_gain_db,
         })
     elseif capture.kind == "layer" then
         Clip.set_master_layer_track_id(capture.clip_id, capture.prior_track_id)
@@ -132,14 +128,14 @@ end
 
 local SPEC = {
     args = {
-        sequence_id   = { required = true },
-        clip_id       = { required = true },
-        kind          = { required = true },
-        channel_index = {},   -- channel variant only
+        sequence_id     = { required = true },
+        clip_id         = { required = true },
+        kind            = { required = true },
+        master_track_id = {},   -- channel variant only
     },
     persisted = {
         kind             = { kind = "string" },
-        channel_index    = { kind = "number" },
+        master_track_id  = { kind = "string" },
         prior_enabled    = { kind = "boolean" },
         prior_gain_db    = { kind = "number" },
         prior_track_id   = { kind = "string" },
@@ -161,7 +157,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 "ClearClipOverride: channel branch missing prior_enabled")
             assert(type(cap.prior_gain_db) == "number",
                 "ClearClipOverride: channel branch missing prior_gain_db")
-            command:set_parameter("channel_index", cap.channel_index)
+            command:set_parameter("master_track_id", cap.master_track_id)
             command:set_parameter("prior_enabled", cap.prior_enabled)
             command:set_parameter("prior_gain_db", cap.prior_gain_db)
         else
@@ -182,12 +178,12 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             assert(type(args.prior_gain_db) == "number",
                 "ClearClipOverride.undo: channel branch missing prior_gain_db")
             M.undo({
-                sequence_id   = args.sequence_id,
-                clip_id       = args.clip_id,
-                kind          = "channel",
-                channel_index = args.channel_index,
-                prior_enabled = args.prior_enabled,
-                prior_gain_db = args.prior_gain_db,
+                sequence_id     = args.sequence_id,
+                clip_id         = args.clip_id,
+                kind            = "channel",
+                master_track_id = args.master_track_id,
+                prior_enabled   = args.prior_enabled,
+                prior_gain_db   = args.prior_gain_db,
             })
         else
             M.undo({

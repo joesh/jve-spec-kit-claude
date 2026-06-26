@@ -1,7 +1,7 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T056j undo (013): CollapseAudio.undo restores selected clips +
--- overrides + link group membership; removes the composite + its
--- projected overrides. Atomic.
+-- T056j undo (013): CollapseAudio.undo — Phase 4a (master_track_id identity).
+-- Restores selected clips + overrides + link group membership; removes the
+-- composite + its projected overrides. Atomic.
 
 require("test_env")
 local database = require("core.database")
@@ -68,9 +68,10 @@ local function build_fixture()
                ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2', 0, 100, 0, 200000, 0, 0, NULL, 'm-a2','passthrough', 1, 1.0, 0, 0, 0),
                ('ca3', 'p1', 'e', 'e-a3', 'm', 'ca3', 0, 100, 0, 200000, 0, 0, NULL, 'm-a3','passthrough', 1, 1.0, 0, 0, 0),
                ('ca4', 'p1', 'e', 'e-a4', 'm', 'ca4', 0, 100, 0, 200000, 0, 0, NULL, 'm-a4','passthrough', 1, 1.0, 0, 0, 0);
-        -- Add an override on ca2 so the round-trip preserves a non-trivial state.
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('ca2', 0, 0, -6.0);
+        -- Override on ca2 keyed to its master track m-a2 (non-trivial state
+        -- to prove the round-trip preserves override identity).
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('ca2', 'm-a2', 0, -6.0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg', 'cv',  'video', 0, 1),
                ('lg', 'ca1', 'audio', 0, 1),
@@ -120,9 +121,10 @@ local function snapshot_state(db)
         stmt:finalize()
     end
     do
+        -- Key by clip_id:master_track_id (stable UUID identity).
         local stmt = db:prepare(
-            "SELECT clip_id, channel_index, enabled, gain_db "
-            .. "FROM clip_channel_override ORDER BY clip_id, channel_index")
+            "SELECT clip_id, master_track_id, enabled, gain_db "
+            .. "FROM clip_channel_override ORDER BY clip_id, master_track_id")
         assert(stmt:exec())
         while stmt:next() do
             local k = stmt:value(0) .. ":" .. stmt:value(1)

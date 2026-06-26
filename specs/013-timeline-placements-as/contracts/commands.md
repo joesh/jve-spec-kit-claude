@@ -2,6 +2,16 @@
 
 **Feature**: 013-timeline-placements-as — Phase 1 contract
 
+> **Phase 4a addendum (2026-06-25):** the per-channel-override commands swap
+> their `channel_index` arg for `master_track_id` (the master AUDIO track's
+> stable UUID). Affected: ToggleClipChannel, SetClipChannelGain,
+> ClearClipOverride(kind='channel'), SetMasterChannelState. The bounds-check
+> precondition ("channel_index < master's audio channel count") is dropped —
+> FK CASCADE on `tracks(id)` makes a stale identity structurally impossible.
+> ExpandAudio / CollapseAudio project overrides by master_track_id end-to-
+> end (no slot remap). Sections below preserved for historical context; the
+> arg shapes are superseded by the addendum.
+
 All timeline commands rewired to operate on `clips`; new override commands introduced; nest / unnest commands added. Every entry below includes args, preconditions, mutations, undo state, and emitted signals. Commands are TDD-gated: each has a failing contract test before implementation.
 
 ---

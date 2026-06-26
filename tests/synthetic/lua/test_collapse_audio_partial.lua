@@ -1,5 +1,5 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T056e / CT-C21b (013): CollapseAudio partial selection.
+-- T056e / CT-C21b (013): CollapseAudio partial selection — Phase 4a (master_track_id identity).
 --
 -- Per FR-024 + commands.md §CollapseAudio:
 --   Given V + 4 expanded A clips (A1..A4), CollapseAudio on {A1, A2}
@@ -9,6 +9,9 @@
 --
 -- The per-channel disable projection is the FR-024 / Edge Cases
 -- "incomplete coverage doesn't refuse — it projects" contract.
+--
+-- Under Phase 4a: overrides on the composite are keyed by master_track_id
+-- (the UUID of the unselected master AUDIO track).
 
 require("test_env")
 local database = require("core.database")
@@ -107,12 +110,13 @@ local function audio_clips_in(db, seq_id)
     return rows
 end
 
-local function override_for(db, clip_id, channel_index)
+-- Returns override row keyed by master_track_id, or nil if absent.
+local function override_for(db, clip_id, master_track_id)
     local stmt = db:prepare(
         "SELECT enabled, gain_db FROM clip_channel_override "
-        .. "WHERE clip_id = ? AND channel_index = ?")
+        .. "WHERE clip_id = ? AND master_track_id = ?")
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec())
     local row
     if stmt:next() then
@@ -171,21 +175,18 @@ do
         "ca4 untouched on A4")
 
     -- Per-channel disables on composite: tracks not covered by selection
-    -- are A3 (track_index=3, channel=2) and A4 (track_index=4, channel=3).
-    -- Selected tracks A1/A2 → channels 0/1 — no disable, inherit master.
-    local ch2 = override_for(db, composite_id, 2)
-    assert(ch2 and ch2.enabled == false and ch2.gain_db == 0,
-        "composite has disable override on ch=2 (A3 unselected)")
-    local ch3 = override_for(db, composite_id, 3)
-    assert(ch3 and ch3.enabled == false and ch3.gain_db == 0,
-        "composite has disable override on ch=3 (A4 unselected)")
-    -- Channels 0 and 1 should NOT have an override row (selected clips
-    -- had unity volume + no per-channel override → composite tracks
-    -- inherited state; absent override row).
-    assert(override_for(db, composite_id, 0) == nil,
-        "composite ch=0 has no override (selected, default state)")
-    assert(override_for(db, composite_id, 1) == nil,
-        "composite ch=1 has no override (selected, default state)")
+    -- are m-a3 and m-a4. Selected tracks m-a1/m-a2 — no disable, inherit master.
+    local ov_a3 = override_for(db, composite_id, "m-a3")
+    assert(ov_a3 and ov_a3.enabled == false and ov_a3.gain_db == 0,
+        "composite has disable override for m-a3 (unselected)")
+    local ov_a4 = override_for(db, composite_id, "m-a4")
+    assert(ov_a4 and ov_a4.enabled == false and ov_a4.gain_db == 0,
+        "composite has disable override for m-a4 (unselected)")
+    -- Selected tracks m-a1 and m-a2 must NOT have an override row.
+    assert(override_for(db, composite_id, "m-a1") == nil,
+        "composite m-a1 has no override (selected, default state)")
+    assert(override_for(db, composite_id, "m-a2") == nil,
+        "composite m-a2 has no override (selected, default state)")
 
     -- Link group: V + composite + ca3 + ca4 = 4 entries.
     local lg_clips = clips_in_link_group(db, "lg")

@@ -3,6 +3,22 @@
 **Feature**: 013-timeline-placements-as
 **Date**: 2026-04-23
 
+> **Phase 4a addendum (2026-06-25):** per-channel override identity changed
+> from a slot integer (`channel_index`) to a stable UUID (`master_track_id`,
+> referencing `tracks(id)` with `ON DELETE CASCADE`).
+> * `clip_channel_override.channel_index` → `master_track_id TEXT NOT NULL REFERENCES tracks(id)`. PK `(clip_id, master_track_id)`.
+> * `media_refs_channel_state.(owner_sequence_id, channel_index)` collapses
+>   to a single `master_track_id TEXT PRIMARY KEY REFERENCES tracks(id)` —
+>   the owning master sequence is implied by `tracks.sequence_id`.
+> * INV-5 (channel_index < master audio channel count) is removed: FK CASCADE
+>   makes the violation structurally impossible.
+> Command args follow: `channel_index` → `master_track_id` on
+> ToggleClipChannel / SetClipChannelGain / ClearClipOverride(channel) /
+> SetMasterChannelState. Resolver entries now carry `master_track_id`
+> instead of `channel_index`. Schema version 17 → 18.
+> Sections below preserved for historical context; the field/PK shape is
+> superseded by the addendum.
+
 Concrete schema + entity fields + invariants derived from spec.md's Key Entities + research.md's decisions.
 
 ## Vocabulary

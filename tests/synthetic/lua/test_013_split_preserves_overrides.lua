@@ -1,4 +1,5 @@
--- T036 (013): CT-C7 SplitClip preserves per-clip overrides on both halves.
+-- T036 (013): CT-C7 SplitClip preserves per-clip overrides on both halves —
+-- Phase 4a (master_track_id identity).
 --
 -- Split divides one clip row into two at a chosen frame on the owner
 -- timeline. Arithmetic (per commands.md §Split):
@@ -13,7 +14,8 @@
 --
 -- Override preservation (the core of CT-C7): master_layer_track_id,
 -- fps_mismatch_policy, and all clip_channel_override rows present on the
--- original must land on BOTH halves.
+-- original must land on BOTH halves. Overrides are keyed by master_track_id
+-- (track UUID) under Phase 4a.
 --
 -- Black-box DB-state assertions.
 
@@ -38,7 +40,7 @@ end
 
 local function build_fixture(owner_fps_num, nested_fps_num)
     local db = fresh_db()
-    
+
     local project_id = "p1"
     Project.create("p", {
         id = project_id,
@@ -63,8 +65,11 @@ local function build_fixture(owner_fps_num, nested_fps_num)
 
     Track.create_video("V1", "m", { id = "m-v1", index = 1 }):save()
     Track.create_video("V2", "m", { id = "m-v2", index = 2 }):save()
+    -- Two master AUDIO tracks so overrides can target distinct UUIDs.
+    Track.create_audio("A1", "m", { id = "m-a1", index = 1 }):save()
+    Track.create_audio("A2", "m", { id = "m-a2", index = 2 }):save()
     Track.create_video("V1", seq_id, { id = "e-v1", index = 1 }):save()
-    
+
     db:exec("UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm'")
 
     local media_id = "med-v"
@@ -120,11 +125,12 @@ local function seed_clip(clip_id, policy, master_layer_track_id,
     assert(cid == clip_id, "seed_clip failed")
 end
 
-local function seed_override(db, clip_id, channel_index, enabled, gain_db)
+-- Insert an override keyed by master_track_id (Phase 4a).
+local function seed_override(db, clip_id, master_track_id, enabled, gain_db)
     assert(db:exec(string.format([[
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('%s', %d, %d, %f)
-    ]], clip_id, channel_index, enabled and 1 or 0, gain_db)))
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('%s', '%s', %d, %f)
+    ]], clip_id, master_track_id, enabled and 1 or 0, gain_db)))
 end
 
 local function load_clip(id)
@@ -145,18 +151,18 @@ end
 
 local function load_overrides(db, clip_id)
     local stmt = db:prepare([[
-        SELECT channel_index, enabled, gain_db
+        SELECT master_track_id, enabled, gain_db
         FROM clip_channel_override WHERE clip_id = ?
-        ORDER BY channel_index ASC
+        ORDER BY master_track_id ASC
     ]])
     stmt:bind_value(1, clip_id)
     assert(stmt:exec())
     local rows = {}
     while stmt:next() do
         rows[#rows + 1] = {
-            channel_index = stmt:value(0),
-            enabled       = stmt:value(1) == 1,
-            gain_db       = stmt:value(2),
+            master_track_id = stmt:value(0),
+            enabled         = stmt:value(1) == 1,
+            gain_db         = stmt:value(2),
         }
     end
     stmt:finalize()
@@ -180,14 +186,14 @@ end
 -- Clip [100,200) source [0,100), master_layer_track_id='m-v2', policy=passthrough.
 -- Split at owner frame 150: left [100,150) source [0,50), right [150,200)
 -- source [50,100). Both halves keep master_layer_track_id='m-v2' and both
--- channel override rows.
+-- channel override rows (keyed to m-a1 and m-a2).
 -- -------------------------------------------------------------------------
 print("-- CT-C7 Split preserves master_layer_track_id + channel overrides --")
 do
     local db = build_fixture(24, 24)
     seed_clip("c", "passthrough", "m-v2", 100, 100, 0, 100)
-    seed_override(db, "c", 0, true,  -3.0)
-    seed_override(db, "c", 1, false,  0.0)
+    seed_override(db, "c", "m-a1", true,  -3.0)
+    seed_override(db, "c", "m-a2", false,  0.0)
 
     local success, result = execute_cmd(SplitClip, {
         sequence_id = "e", clip_id = "c", split_frame = 150,
@@ -220,13 +226,13 @@ do
     assert(left.owner_sequence_id  == "e" and right.owner_sequence_id  == "e")
     assert(left.source_sequence_id == "m" and right.source_sequence_id == "m")
 
-    -- Channel overrides — same rows on both halves.
+    -- Channel overrides — same rows on both halves, keyed by master_track_id.
     local left_ovs  = load_overrides(db, "c")
     local right_ovs = load_overrides(db, second_id)
     assert(#left_ovs  == 2, string.format("left should have 2 overrides; got %d", #left_ovs))
     assert(#right_ovs == 2, string.format("right should have 2 overrides; got %d", #right_ovs))
     for i = 1, 2 do
-        assert(left_ovs[i].channel_index == right_ovs[i].channel_index
+        assert(left_ovs[i].master_track_id == right_ovs[i].master_track_id
                and left_ovs[i].enabled == right_ovs[i].enabled
                and left_ovs[i].gain_db == right_ovs[i].gain_db,
             string.format("override[%d] mismatch between halves", i))

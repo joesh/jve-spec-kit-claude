@@ -1,5 +1,6 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T056g / CT-C21d (013): Expand → delete → Collapse → ExpandAudio roundtrip.
+-- T056g / CT-C21d (013): Expand → delete → Collapse → ExpandAudio roundtrip —
+-- Phase 4a (master_track_id identity).
 --
 -- Per FR-024 + Edge Cases: deleting an expanded clip is audibly
 -- equivalent to muting it. So Collapse over a partial selection
@@ -9,6 +10,9 @@
 -- preserved. Clearing the disable override restores audibility.
 --
 -- Lossless roundtrip on the audible-state level.
+--
+-- Under Phase 4a: overrides are keyed by master_track_id (track UUID),
+-- not by integer channel_index. ClearClipOverride takes master_track_id.
 
 require("test_env")
 local database = require("core.database")
@@ -100,12 +104,13 @@ local function audio_clip_by_master_track(db, seq_id, master_track_id)
     return id
 end
 
-local function override_for(db, clip_id, channel_index)
+-- Returns override row for (clip_id, master_track_id), or nil if absent.
+local function override_for(db, clip_id, master_track_id)
     local stmt = db:prepare(
         "SELECT enabled, gain_db FROM clip_channel_override "
-        .. "WHERE clip_id = ? AND channel_index = ?")
+        .. "WHERE clip_id = ? AND master_track_id = ?")
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec())
     local row
     if stmt:next() then
@@ -136,17 +141,17 @@ do
     local composite_id = collapse_result.composite_clip_id
     assert(composite_id, "Collapse produces a composite clip")
 
-    -- Composite has disable override on ch=1 (track_index 2-1, m-a2 was unselected).
-    local ch1 = override_for(db, composite_id, 1)
-    assert(ch1 and ch1.enabled == false and ch1.gain_db == 0,
-        "composite has disable on ch=1 (A2 unselected via deletion)")
-    -- Channels 0/2/3 should NOT have an override (selected tracks, default).
-    assert(override_for(db, composite_id, 0) == nil,
-        "ch=0 (selected A1) inherits default state")
-    assert(override_for(db, composite_id, 2) == nil,
-        "ch=2 (selected A3) inherits default state")
-    assert(override_for(db, composite_id, 3) == nil,
-        "ch=3 (selected A4) inherits default state")
+    -- Composite has disable override for m-a2 (unselected via deletion).
+    local ov_a2 = override_for(db, composite_id, "m-a2")
+    assert(ov_a2 and ov_a2.enabled == false and ov_a2.gain_db == 0,
+        "composite has disable for m-a2 (A2 unselected via deletion)")
+    -- Selected tracks m-a1/m-a3/m-a4 must NOT have an override.
+    assert(override_for(db, composite_id, "m-a1") == nil,
+        "m-a1 (selected A1) inherits default state")
+    assert(override_for(db, composite_id, "m-a3") == nil,
+        "m-a3 (selected A3) inherits default state")
+    assert(override_for(db, composite_id, "m-a4") == nil,
+        "m-a4 (selected A4) inherits default state")
 
     -- Step 3: Expand the composite.
     local expand_result = ExpandAudio.execute({
@@ -157,30 +162,30 @@ do
         "Expand produces 4 per-track clips")
 
     -- Step 4: the A2-clip (master_audio_track_id = m-a2) has override
-    -- on ch=0, enabled=false. Other 3 have no override.
+    -- for m-a2, enabled=false. Other 3 have no override for their track.
     local a2_clip_id = audio_clip_by_master_track(db, "e", "m-a2")
     assert(a2_clip_id, "expanded clip on m-a2 exists")
-    local a2_ov = override_for(db, a2_clip_id, 0)
+    local a2_ov = override_for(db, a2_clip_id, "m-a2")
     assert(a2_ov and a2_ov.enabled == false,
-        "expanded A2-clip has disable override on ch=0 (preserved through "
+        "expanded A2-clip has disable override for m-a2 (preserved through "
         .. "Collapse → Expand roundtrip)")
 
     for _, mt in ipairs({ "m-a1", "m-a3", "m-a4" }) do
         local cid = audio_clip_by_master_track(db, "e", mt)
         assert(cid, "expanded clip on " .. mt .. " exists")
-        assert(override_for(db, cid, 0) == nil,
+        assert(override_for(db, cid, mt) == nil,
             "expanded " .. mt .. " has no disable (it was selected at Collapse)")
     end
 
     -- Step 5: clear the disable override on the A2-clip → audibility restored.
     ClearOverride.execute({
-        sequence_id   = "e",
-        clip_id       = a2_clip_id,
-        kind          = "channel",
-        channel_index = 0,
+        sequence_id    = "e",
+        clip_id        = a2_clip_id,
+        kind           = "channel",
+        master_track_id = "m-a2",
     })
-    assert(override_for(db, a2_clip_id, 0) == nil,
-        "after ClearClipOverride, A2-clip ch=0 inherits default (audible)")
+    assert(override_for(db, a2_clip_id, "m-a2") == nil,
+        "after ClearClipOverride, A2-clip m-a2 inherits default (audible)")
 
     print("  ok")
 end

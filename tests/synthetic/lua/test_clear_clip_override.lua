@@ -1,9 +1,9 @@
 -- 018 INV-3 inline subframe migration applied (count=2)
--- T051 / CT-C12 (013): ClearClipOverride.
+-- T051 / CT-C12 (013): ClearClipOverride — Phase 4a (master_track_id identity).
 --
 -- Per contracts/commands.md §ClearClipOverride:
---   Args: { sequence_id, clip_id, kind = 'channel'|'layer', channel_index? }.
---     channel variant DELETEs clip_channel_override(clip_id, channel_index).
+--   Args: { sequence_id, clip_id, kind = 'channel'|'layer', master_track_id? }.
+--     channel variant DELETEs clip_channel_override(clip_id, master_track_id).
 --     layer variant clears clips.master_layer_track_id (sets to NULL).
 --   Pre: the override exists (row, or non-NULL master_layer_track_id).
 --     Calling ClearClipOverride on an absent override is refused (rule
@@ -40,6 +40,7 @@ local function build_fixture()
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-v2', 'm', 'V2', 'VIDEO', 2),
                ('m-a1', 'm', 'A1', 'AUDIO', 1),
+               ('m-a2', 'm', 'A2', 'AUDIO', 2),
                ('e-v1', 'e', 'V1', 'VIDEO', 1),
                ('e-a1', 'e', 'A1', 'AUDIO', 1);
         UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
@@ -67,7 +68,7 @@ local function build_fixture()
                 0, 100, 0, 100, NULL, NULL,
                 'm-v2', 'resample',
                 1, 1.0, 0, 0, 0);
-        -- Audio clip with channel-1 override (enabled=0, gain_db=-9).
+        -- Audio clip with override on master track m-a2 (enabled=0, gain_db=-9).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
@@ -79,8 +80,8 @@ local function build_fixture()
                 0, 100, 0, 100, 0, 0,
                 NULL, 'resample',
                 1, 1.0, 0, 0, 0);
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('ca', 1, 0, -9.0);
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('ca', 'm-a2', 0, -9.0);
     ]]))
     return db
 end
@@ -94,12 +95,12 @@ local function load_layer(db, clip_id)
     return v
 end
 
-local function load_override(db, clip_id, channel_index)
+local function load_override(db, clip_id, master_track_id)
     local stmt = db:prepare(
         "SELECT enabled, gain_db FROM clip_channel_override "
-        .. "WHERE clip_id = ? AND channel_index = ?")
+        .. "WHERE clip_id = ? AND master_track_id = ?")
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec())
     local row
     if stmt:next() then
@@ -115,18 +116,18 @@ print("-- channel: DELETE row; undo restores enabled+gain --")
 do
     build_fixture()
     local db = database.get_connection()
-    assert(load_override(db, "ca", 1), "fixture has override on ca/ch1")
+    assert(load_override(db, "ca", "m-a2"), "fixture has override on ca/m-a2")
 
     local capture = ClearClipOverride.execute({
-        sequence_id   = "e",
-        clip_id       = "ca",
-        kind          = "channel",
-        channel_index = 1,
+        sequence_id    = "e",
+        clip_id        = "ca",
+        kind           = "channel",
+        master_track_id = "m-a2",
     })
-    assert(load_override(db, "ca", 1) == nil, "row deleted")
+    assert(load_override(db, "ca", "m-a2") == nil, "row deleted")
 
     ClearClipOverride.undo(capture)
-    local restored = load_override(db, "ca", 1)
+    local restored = load_override(db, "ca", "m-a2")
     assert(restored, "undo re-inserts row")
     assert(restored.enabled == false, "undo restores enabled=false")
     assert(math.abs(restored.gain_db - (-9.0)) < 1e-9,
@@ -157,10 +158,10 @@ print("-- absent override is refused (rule 2.13 — no silent no-op) --")
 do
     build_fixture()
     local ok, err = pcall(ClearClipOverride.execute, {
-        sequence_id   = "e",
-        clip_id       = "ca",
-        kind          = "channel",
-        channel_index = 0,  -- no override on channel 0
+        sequence_id    = "e",
+        clip_id        = "ca",
+        kind           = "channel",
+        master_track_id = "m-a1",  -- no override on m-a1
     })
     assert(not ok, "absent override must be refused")
     assert(tostring(err):find("override"),
@@ -186,9 +187,9 @@ print("-- sequence_id required (rule 2.29) --")
 do
     build_fixture()
     local ok = pcall(ClearClipOverride.execute, {
-        clip_id       = "ca",
-        kind          = "channel",
-        channel_index = 1,
+        clip_id        = "ca",
+        kind           = "channel",
+        master_track_id = "m-a2",
     })
     assert(not ok, "missing sequence_id refused")
     print("  ok")

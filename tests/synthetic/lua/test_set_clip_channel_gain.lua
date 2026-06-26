@@ -1,5 +1,5 @@
 -- 018 INV-3 inline subframe migration applied (count=1)
--- T050 / CT-C11 (013): SetClipChannelGain.
+-- T050 / CT-C11 (013): SetClipChannelGain — Phase 4a (master_track_id identity).
 --
 -- Domain behavior (commands.md §SetClipChannelGain):
 --
@@ -10,7 +10,6 @@
 -- (c) Undo of (a) deletes the row (back to tracking master).
 -- (d) Undo of (b) restores the prior gain_db (enabled unchanged).
 -- (e) sequence_id required (rule 2.29).
--- (f) channel_index out of bounds: refused (channel_index must be < master's audio channel count).
 
 require("test_env")
 local database = require("core.database")
@@ -38,6 +37,7 @@ local function build_fixture()
         VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
+               ('m-a2', 'm', 'A2', 'AUDIO', 2),
                ('e-a1', 'e', 'A1', 'AUDIO', 1);
         INSERT INTO media (id, project_id, name, file_path, duration_frames,
             fps_numerator, fps_denominator, audio_channels,
@@ -64,12 +64,12 @@ local function build_fixture()
     return db
 end
 
-local function load_override(db, clip_id, channel_index)
+local function load_override(db, clip_id, master_track_id)
     local stmt = db:prepare(
         "SELECT enabled, gain_db FROM clip_channel_override "
-        .. "WHERE clip_id = ? AND channel_index = ?")
+        .. "WHERE clip_id = ? AND master_track_id = ?")
     stmt:bind_value(1, clip_id)
-    stmt:bind_value(2, channel_index)
+    stmt:bind_value(2, master_track_id)
     assert(stmt:exec())
     local row
     if stmt:next() then
@@ -85,21 +85,21 @@ print("-- (a) No prior override: INSERT row with new gain --")
 do
     build_fixture()
     local db = database.get_connection()
-    assert(load_override(db, "c", 0) == nil, "fixture has no override")
+    assert(load_override(db, "c", "m-a1") == nil, "fixture has no override for m-a1")
     local capture = SetClipChannelGain.execute({
-        sequence_id   = "e",
-        clip_id       = "c",
-        channel_index = 0,
-        gain_db       = -12.0,
+        sequence_id    = "e",
+        clip_id        = "c",
+        master_track_id = "m-a1",
+        gain_db        = -12.0,
     })
-    local row = load_override(db, "c", 0)
+    local row = load_override(db, "c", "m-a1")
     assert(row, "row was inserted")
     assert(math.abs(row.gain_db - (-12.0)) < 1e-9, "gain_db = -12")
     assert(row.enabled == true, "inherited enabled (no master state row → default true)")
 
     -- (c) Undo deletes
     SetClipChannelGain.undo(capture)
-    assert(load_override(db, "c", 0) == nil, "undo deletes the row")
+    assert(load_override(db, "c", "m-a1") == nil, "undo deletes the row")
     print("  ok")
 end
 
@@ -107,25 +107,25 @@ print("-- (b) Prior override: UPDATE gain only --")
 do
     build_fixture()
     local db = database.get_connection()
-    -- Pre-existing override: enabled=0, gain_db=-3.
+    -- Pre-existing override on m-a1: enabled=0, gain_db=-3.
     assert(db:exec([[
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('c', 0, 0, -3.0)
+        INSERT INTO clip_channel_override (clip_id, master_track_id, enabled, gain_db)
+        VALUES ('c', 'm-a1', 0, -3.0)
     ]]))
 
     local capture = SetClipChannelGain.execute({
-        sequence_id   = "e",
-        clip_id       = "c",
-        channel_index = 0,
-        gain_db       = 6.0,
+        sequence_id    = "e",
+        clip_id        = "c",
+        master_track_id = "m-a1",
+        gain_db        = 6.0,
     })
-    local row = load_override(db, "c", 0)
+    local row = load_override(db, "c", "m-a1")
     assert(row.enabled == false, "enabled untouched")
     assert(math.abs(row.gain_db - 6.0) < 1e-9, "gain updated to +6")
 
     -- (d) Undo restores prior gain
     SetClipChannelGain.undo(capture)
-    local restored = load_override(db, "c", 0)
+    local restored = load_override(db, "c", "m-a1")
     assert(restored.enabled == false, "enabled still false")
     assert(math.abs(restored.gain_db - (-3.0)) < 1e-9,
         "undo restores prior gain -3")
@@ -136,26 +136,12 @@ print("-- (e) sequence_id required (rule 2.29) --")
 do
     build_fixture()
     local ok, err = pcall(SetClipChannelGain.execute, {
-        clip_id       = "c",
-        channel_index = 0,
-        gain_db       = -6.0,
+        clip_id        = "c",
+        master_track_id = "m-a1",
+        gain_db        = -6.0,
     })
     assert(not ok, "missing sequence_id refused")
     assert(tostring(err):find("sequence_id"), "error names the missing arg")
-    print("  ok")
-end
-
-print("-- (f) channel_index out of bounds (must be < master's audio channel count) --")
-do
-    build_fixture()
-    local ok, err = pcall(SetClipChannelGain.execute, {
-        sequence_id   = "e",
-        clip_id       = "c",
-        channel_index = 5,
-        gain_db       = -6.0,
-    })
-    assert(not ok, "OOB channel refused")
-    assert(tostring(err):find("channel"), "error names the constraint")
     print("  ok")
 end
 
