@@ -56,6 +56,9 @@ globals = {
     -- spec 027 T010b — QPixmap dimension accessors used by bug-reporter capture tests.
     "qpixmap_width",
     "qpixmap_height",
+    -- spec 027 T007 + T030 — bug-reporter crypto (SHA-256 and HMAC-SHA256).
+    "qt_sha256",
+    "qt_hmac_sha256",
     -- spec 023 — helper_supervisor wait_for_bind: replaces test/sleep shellouts.
     "qt_thread_msleep",
     "qt_fs_path_exists",

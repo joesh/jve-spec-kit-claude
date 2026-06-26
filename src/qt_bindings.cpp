@@ -3,6 +3,11 @@
 #include "jve_lua_callback.h" // Shared pcall error drain for all binding callbacks
 #include <QPointer>
 
+// File-scope declaration so qt_bindings.cpp can call the C-linkage
+// registration entry defined in src/bug_reporter/crypto_bindings.cpp
+// (feature 027 T007).
+extern "C" void register_bug_reporter_crypto_bindings(lua_State*);
+
 // Include all the newly split binding files. These files contain the implementations
 // of the Lua C functions and are compiled as part of this module.
 #include "lua/qt_bindings/binding_macros.h" // For get_widget template and other macros
@@ -355,6 +360,10 @@ void registerQtBindings(lua_State* L)
     // Build provenance for the bug-reporter pipeline (feature 027 T001).
     // Returns {git_sha = "<7-char short SHA the binary was compiled from>"}.
     lua_pushcfunction(L, lua_qt_get_build_info); lua_setglobal(L, "qt_get_build_info");
+
+    // Bug-reporter crypto bindings (feature 027 T007 + T030). Wires
+    // qt_sha256 (and later qt_hmac_sha256) into the global table.
+    register_bug_reporter_crypto_bindings(L);
 
     // Thread sleep + FS existence — replace the helper_supervisor
     // wait_for_bind shellouts (test -S / sleep). The fork-per-tick pattern
