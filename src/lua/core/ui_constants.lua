@@ -498,6 +498,10 @@ ui_constants.STYLES = {
     -- Header and label styles
     SECTION_HEADER = "QLabel { color: " .. TEXT_PRIMARY .. "; font-weight: bold; font-size: " .. HEADER_FONT_SIZE .. "; padding: 6px 8px; margin-top: 16px; background: none; border: none; }",
     FIELD_LABEL = "QLabel { color: " .. TEXT_LABEL_DIM .. "; font-size: " .. DEFAULT_FONT_SIZE .. "; font-weight: normal; background: transparent; text-align: right; min-width: 100px; max-width: 100px; }",
+    -- Inspector channel-list drag handle. Six-dot braille (U+283F) sits
+    -- left of the index gutter; readable size + dim color so it reads
+    -- as an affordance, not as content.
+    CHANNEL_DRAG_GRIP = "QLabel { color: " .. TEXT_LABEL_DIM .. "; font-size: 14px; background: transparent; min-width: 12px; max-width: 12px; padding: 0px; }",
 
     -- Form field styles
     STRING_FIELD = "QLineEdit { background: " .. BUTTON_BG .. "; border: 1px solid " .. BORDER_CONTROL .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",

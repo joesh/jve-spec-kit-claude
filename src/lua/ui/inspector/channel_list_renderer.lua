@@ -83,6 +83,17 @@ local function build_row(section_obj)
         ui_constants.LAYOUT.FIELD_MARGIN_BOTTOM)
     qt_constants.LAYOUT.SET_SPACING(layout, ui_constants.LAYOUT.FIELD_SPACING)
 
+    -- Visible drag-handle affordance — discovers the drag-reorder
+    -- gesture. Six-dot braille pattern (U+283F) is the widely-recognized
+    -- "grip" glyph in modern Mac/iOS reorder lists. Sits left of the
+    -- index gutter; matches the row height.
+    local grip = qt_constants.WIDGET.CREATE_LABEL("\xe2\xa0\xbf")  -- ⠿
+    assert(grip, "channel_list_renderer: CREATE_LABEL (grip) returned nil")
+    qt_constants.PROPERTIES.SET_STYLE(grip, ui_constants.STYLES.CHANNEL_DRAG_GRIP)
+    qt_constants.PROPERTIES.SET_ALIGNMENT(grip,
+        qt_constants.PROPERTIES.ALIGN_CENTER)
+    qt_constants.LAYOUT.ADD_WIDGET(layout, grip)
+
     -- Reuse the inspector's standard FIELD_LABEL style (Tier-3 token,
     -- per ui_constants.STYLES) so the index gutter aligns with the
     -- field-label column in adjacent flat-field sections.
