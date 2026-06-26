@@ -48,9 +48,16 @@ local report_bug        = require_or_red("core.commands.report_bug", "T014c")
 
 -- Wire a main window so capture_manual can resolve its grab target.
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
+qt_set_object_name(main_window, "JVEMainWindow")
 qt_constants.PROPERTIES.SET_SIZE(main_window, 1400, 900)
 qt_constants.DISPLAY.SHOW(main_window)
-qt_constants.APP.PROCESS_EVENTS()
+qt_constants.CONTROL.PROCESS_EVENTS()
+
+-- Drive synthetic frames so slideshow.mp4 is producible — see T005.
+local bug_reporter_init = require("bug_reporter")
+for _ = 1, 3 do
+    bug_reporter_init.capture_screenshot()
+end
 
 -- (1) is_submittable starts false (no title), becomes true on set_title.
 local state = submission_state.new()

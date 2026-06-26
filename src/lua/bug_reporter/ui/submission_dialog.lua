@@ -22,11 +22,6 @@ local function build_widgets(state, vbox)
     qt.LAYOUT_ADD_WIDGET(vbox, title_label)
     local title_edit = qt.CREATE_LINE_EDIT(state.title or "")
     qt.LAYOUT_ADD_WIDGET(vbox, title_edit)
-    if qt_set_line_edit_text_changed_handler then
-        qt_set_line_edit_text_changed_handler(title_edit, function(new_text)
-            state:set_title(new_text or "")
-        end)
-    end
 
     local desc_label = qt.CREATE_LABEL("Description:")
     qt.LAYOUT_ADD_WIDGET(vbox, desc_label)
@@ -36,11 +31,6 @@ local function build_widgets(state, vbox)
     -- FR-006: Text-only opt-out.
     local text_only_cb = qt.CREATE_CHECKBOX("Text only (exclude slideshow video)")
     qt.LAYOUT_ADD_WIDGET(vbox, text_only_cb)
-    if _G.qt_set_check_box_state_changed_handler then
-        _G.qt_set_check_box_state_changed_handler(text_only_cb, function(checked)
-            state:set_text_only(checked and true or false)
-        end)
-    end
 
     local btn_row = qt.CREATE_LAYOUT("horizontal")
     qt.LAYOUT_ADD_STRETCH(btn_row)
@@ -57,6 +47,25 @@ local function build_widgets(state, vbox)
         submit_btn = submit_btn,
         cancel_btn = cancel_btn,
     }
+end
+
+-- Pull widget values into the state model. Called from Submit so the
+-- state reflects whatever the user typed (qt_set_line_edit_text_changed
+-- takes a global function NAME not a closure; widget-to-state flow is
+-- simpler as a pull-at-Submit rather than per-keystroke push).
+local function sync_state_from_widgets(state, widgets)
+    if _G.qt_get_text and widgets.title_edit then
+        local text = _G.qt_get_text(widgets.title_edit)
+        if type(text) == "string" then state:set_title(text) end
+    end
+    if _G.qt_get_text and widgets.desc_edit then
+        local text = _G.qt_get_text(widgets.desc_edit)
+        if type(text) == "string" then state:set_description(text) end
+    end
+    if _G.qt_check_box_is_checked and widgets.text_only then
+        local checked = _G.qt_check_box_is_checked(widgets.text_only)
+        state:set_text_only(checked and true or false)
+    end
 end
 
 -- Public: create a submission dialog bound to `state` (T012). Returns
@@ -78,6 +87,7 @@ function M.create(state)
     }
 
     function wrapper.on_submit()
+        sync_state_from_widgets(state, widgets)
         if not state:is_submittable() then
             log.warn("submission_dialog: Submit invoked but state is not submittable — ignoring")
             return false

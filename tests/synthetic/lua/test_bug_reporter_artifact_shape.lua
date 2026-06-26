@@ -38,9 +38,18 @@ end
 
 -- Wire enough of the C++ side for capture_manual to succeed.
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
+qt_set_object_name(main_window, "JVEMainWindow")
 qt_constants.PROPERTIES.SET_SIZE(main_window, 1400, 900)
 qt_constants.DISPLAY.SHOW(main_window)
-qt_constants.APP.PROCESS_EVENTS()
+qt_constants.CONTROL.PROCESS_EVENTS()
+
+-- Drive a few synthetic frames so the slideshow generator has source
+-- material — the 1 Hz screenshot timer isn't running in --test mode
+-- (no event loop heartbeat), so we trigger capture_screenshot directly.
+local bug_reporter_init = require("bug_reporter")
+for _ = 1, 3 do
+    bug_reporter_init.capture_screenshot()
+end
 
 -- Build the state model the way the dialog does.
 local state = submission_state.new()

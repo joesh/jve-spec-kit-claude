@@ -84,18 +84,21 @@ function JsonExporter.export(capture_data, metadata, output_dir)
         if video_path then
             slideshow_path = video_path
             log.event("Slideshow video generated: %s", video_path)
-            -- Feature 027 FR-011 + FR-015: raw PNGs MUST NOT ship in
-            -- the payload. Delete the screenshots/ subdir now that the
-            -- slideshow.mp4 carries the visual record. Fail-loud per
-            -- Constitution VI — a stale dir means the next capture
-            -- ships duplicated content.
-            local rm_ok, rm_err = qt_fs_remove_dir_recursive(screenshot_dir)
-            assert(rm_ok, "json_exporter: failed to remove " .. screenshot_dir ..
-                " after slideshow build: " .. tostring(rm_err))
         else
             log.warn("Slideshow generation failed: %s", gen_err or "unknown")
         end
     end
+
+    -- Feature 027 FR-011 + FR-015: raw PNGs MUST NOT ship in the
+    -- payload. Delete the screenshots/ subdir unconditionally — either
+    -- slideshow.mp4 carries the visual record, slideshow generation
+    -- failed (no PNGs worth retaining), or there were never any
+    -- screenshots to begin with (empty dir, harmless to remove).
+    -- Fail-loud per Constitution VI: a surviving screenshots/ subdir
+    -- would let raw frames leak into the next capture's payload.
+    local rm_ok, rm_err = qt_fs_remove_dir_recursive(screenshot_dir)
+    assert(rm_ok, "json_exporter: failed to remove " .. screenshot_dir ..
+        ": " .. tostring(rm_err))
 
     -- Build JSON structure
     local json_data = {
