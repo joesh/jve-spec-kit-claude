@@ -83,6 +83,25 @@ function BugReporter.capture_screenshot()
         return
     end
 
+    -- Skip during transport playback. QWidget::grab() on the JVE main
+    -- window walks the entire widget tree (timeline view + Metal video
+    -- surface readback) on the GUI thread and stalls it ~300-400 ms;
+    -- at this timer's 1 Hz cadence that's a steady, exactly-periodic
+    -- video judder under play. Gestures + logs still capture during
+    -- playback (the gesture logger isn't tied to this path); only the
+    -- visual frame in the ring buffer is paused while playing.
+    --
+    -- record_engine may be nil before a project is open (transport
+    -- itself loads at startup; the engine is bound on open_project).
+    -- Nil engine = nothing playing → proceed to capture.
+    local transport = require("core.playback.transport")
+    local engine = transport.record_engine
+    if engine and engine:is_playing() then
+        log.event("bug_reporter timer fired during play — SKIPPING grab")
+        return
+    end
+
+    log.event("bug_reporter timer fired — calling grab_window")
     local pixmap = grab_window()
     if pixmap then
         capture_manager:capture_screenshot(pixmap)

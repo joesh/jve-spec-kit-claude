@@ -10,6 +10,7 @@
 #include <QKeyEvent>
 #include <QWheelEvent>
 #include <QThread>
+#include <QElapsedTimer>
 
 namespace bug_reporter {
 
@@ -134,8 +135,16 @@ static int lua_grab_window(lua_State* L) {
         return 2;
     }
 
-    // Grab the window
+    // Grab the window — INSTRUMENTED to measure main-thread stall.
+    // Suspected cause of 1 Hz periodic playback cadence outliers; log every
+    // call's wall-clock duration so we can correlate with the playback diag.
+    QElapsedTimer grab_timer;
+    grab_timer.start();
     QPixmap pixmap = mainWidget->grab();
+    qint64 grab_ms = grab_timer.elapsed();
+    JVE_LOG_EVENT(Ui, "bug_reporter grab_window: %lld ms (widget=%p size=%dx%d)",
+        (long long)grab_ms, (void*)mainWidget,
+        pixmap.width(), pixmap.height());
 
     // Create QPixmap userdata
     QPixmap** userData = (QPixmap**)lua_newuserdata(L, sizeof(QPixmap*));
