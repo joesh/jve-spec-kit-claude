@@ -62,6 +62,14 @@ globals = {
     -- spec 027 T011 — filesystem helpers used by the bug-reporter exporter.
     "qt_fs_listdir",
     "qt_fs_remove_dir_recursive",
+    -- spec 027 T032 — async HTTP for transport.lua.
+    "qt_http_post_json",
+    "qt_http_post_multipart",
+    -- spec 027 T031 — hardware introspection for register/heartbeat.
+    "qt_get_cpu_info",
+    "qt_get_system_memory_mb",
+    "qt_get_gpu_info_metal",
+    "qt_get_uname",
     -- spec 023 — helper_supervisor wait_for_bind: replaces test/sleep shellouts.
     "qt_thread_msleep",
     "qt_fs_path_exists",

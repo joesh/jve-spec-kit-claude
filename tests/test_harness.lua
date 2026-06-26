@@ -67,6 +67,31 @@ if not _G.qt_fs_path_exists then
     end
 end
 
+-- qt_hmac_sha256 — production via crypto_bindings.cpp (OpenSSL HMAC).
+-- Harness stubs via /usr/bin/openssl dgst -mac HMAC -macopt hexkey:<...>
+-- so standalone luajit tests for transport.lua can drive HMAC paths.
+if not _G.qt_hmac_sha256 then
+    _G.qt_hmac_sha256 = function(key_hex, message)
+        assert(type(key_hex) == "string" and key_hex:match("^%x+$"),
+            "qt_hmac_sha256: key must be hex string")
+        assert(type(message) == "string", "qt_hmac_sha256: message must be string")
+        local tmppath = os.tmpname()
+        local f = assert(io.open(tmppath, "wb"))
+        f:write(message)
+        f:close()
+        local cmd = "/usr/bin/openssl dgst -sha256 -mac HMAC -macopt hexkey:" ..
+            key_hex .. " < " .. tmppath
+        local p = assert(io.popen(cmd))
+        local line = p:read("*l")
+        p:close()
+        os.remove(tmppath)
+        assert(line, "qt_hmac_sha256 stub: openssl produced no output")
+        local hex = line:match("(%x+)%s*$")
+        assert(hex and #hex == 64, "qt_hmac_sha256 stub: unexpected output " .. tostring(line))
+        return hex
+    end
+end
+
 -- qt_fs_remove_dir_recursive / qt_fs_listdir — production via
 -- misc_bindings.cpp (QDir). Harness stubs use POSIX rm -rf / ls; the
 -- bug_reporter exporter calls these to clean up per-capture
