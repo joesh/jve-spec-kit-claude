@@ -38,17 +38,35 @@ function M.clamp(capture, opts)
         }
     end
 
+    -- Per-iteration full re-encode is O(N²) for log-heavy captures and
+    -- locks up on the realistic 10k+ entry input. Instead measure once,
+    -- estimate per-entry bytes, drop bulk slices.
     local function total_bytes()
         return slideshow_bytes + encoded_size(capture)
     end
 
-    -- Step 1: drop oldest logs until total fits OR logs exhausted.
-    while total_bytes() > max_bytes and capture.logs and #capture.logs > 0 do
-        table.remove(capture.logs, 1)
+    -- Step 1: drop oldest logs in bulk to get under the cap.
+    if capture.logs and #capture.logs > 0 then
+        local current = total_bytes()
+        local excess = current - max_bytes
+        if excess > 0 then
+            local per_entry = math.max(1, math.floor((current - slideshow_bytes - encoded_size({
+                gestures = capture.gestures, commands = capture.commands,
+                logs = {}, screenshots = capture.screenshots,
+                capture_metadata = capture.capture_metadata,
+            })) / #capture.logs))
+            local drop = math.min(#capture.logs, math.ceil(excess / per_entry) + 16)
+            for _ = 1, drop do table.remove(capture.logs, 1) end
+        end
     end
-    -- Step 2: drop oldest commands until total fits OR commands exhausted.
-    while total_bytes() > max_bytes and capture.commands and #capture.commands > 0 do
-        table.remove(capture.commands, 1)
+
+    -- Step 2: if still over, drop commands in bulk.
+    if total_bytes() > max_bytes and capture.commands and #capture.commands > 0 then
+        local current = total_bytes()
+        local excess = current - max_bytes
+        local per_entry = math.max(1, math.floor(encoded_size({ commands = capture.commands }) / #capture.commands))
+        local drop = math.min(#capture.commands, math.ceil(excess / per_entry) + 4)
+        for _ = 1, drop do table.remove(capture.commands, 1) end
     end
 
     if total_bytes() > max_bytes then

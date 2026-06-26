@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>JVE bug-reporter — promote cluster</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+  pre { background: #f5f5f7; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+  button { padding: 0.5rem 1rem; font-size: 1rem; }
+  .err { color: #c00; }
+  .ok  { color: #060; }
+  label { display: block; margin: 1rem 0 0.25rem; font-weight: bold; }
+  input[type=text], textarea { width: 100%; box-sizing: border-box; padding: 0.4rem; font: inherit; }
+</style>
+<h1>Promote cluster</h1>
+<p>Reads <code>cluster_id</code> from the URL (<code>?id=&lt;uuid&gt;</code>), POSTs to <code>/promote</code> with the bearer secret cached in <code>localStorage</code>.</p>
+<label for="secret">JOE_PROMOTE_SECRET (paste once; cached)</label>
+<input id="secret" type="text" placeholder="bearer secret">
+<label for="cluster">cluster_id</label>
+<input id="cluster" type="text" readonly>
+<label for="title">Title override (optional)</label>
+<input id="title" type="text">
+<label for="body">Body override (optional)</label>
+<textarea id="body" rows="4"></textarea>
+<p><button id="go">Promote</button></p>
+<pre id="out">(no response yet)</pre>
+<script>
+const params = new URLSearchParams(location.search);
+document.getElementById("cluster").value = params.get("id") || "";
+const secret_el = document.getElementById("secret");
+secret_el.value = localStorage.getItem("jve_promote_secret") || "";
+secret_el.addEventListener("blur", () => {
+    localStorage.setItem("jve_promote_secret", secret_el.value);
+});
+document.getElementById("go").addEventListener("click", async () => {
+    const out = document.getElementById("out");
+    out.textContent = "POSTing...";
+    out.className = "";
+    const body = { cluster_id: document.getElementById("cluster").value };
+    const t = document.getElementById("title").value;
+    const b = document.getElementById("body").value;
+    if (t) body.title_override = t;
+    if (b) body.body_override = b;
+    try {
+        const res = await fetch("/promote", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + secret_el.value,
+                "X-Schema-Version": "1",
+            },
+            body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        let parsed;
+        try { parsed = JSON.parse(text); } catch { parsed = text; }
+        out.textContent = JSON.stringify({ status: res.status, body: parsed }, null, 2);
+        out.className = res.ok ? "ok" : "err";
+    } catch (err) {
+        out.textContent = "Request failed: " + err;
+        out.className = "err";
+    }
+});
+</script>

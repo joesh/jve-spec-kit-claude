@@ -44,15 +44,15 @@ local function make_capture(opts)
     return cap
 end
 
--- (1) Clamp shrinks logs first.
+-- (1) Clamp shrinks logs first. We push log byte volume above the cap
+-- so the clamp must drop something; commands stay tiny so they
+-- survive once logs are sufficiently trimmed.
 do
-    local cap = make_capture({ logs = 5000, commands = 50, pad_size = 800 })
+    local cap = make_capture({ logs = 15000, commands = 50, pad_size = 800 })
     local original_log_count = #cap.logs
     local original_cmd_count = #cap.commands
     local result = clamp.clamp(cap, { max_bytes = 10 * 1024 * 1024, slideshow_bytes = 0 })
     assert(result.ok == true, "clamp should succeed by dropping logs")
-    -- Logs must be smaller than they were; commands untouched (logs are
-    -- the dominant byte source here).
     assert(#cap.logs < original_log_count, "logs were not trimmed")
     assert(#cap.commands == original_cmd_count,
         "commands trimmed before logs exhausted — clamp order is wrong")

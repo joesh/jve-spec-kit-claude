@@ -748,6 +748,19 @@ if not show_ok then
 end
 log.event("Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
 
+-- Feature 027 T050: bug-reporter telemetry pulse. pcall so a
+-- consent-dialog failure can never block editor startup; fail-loud
+-- via log.warn (Constitution VI), app survives so the user can
+-- disable bug reporting from Preferences.
+if not is_test_mode then
+    local ok, err = pcall(function()
+        require("bug_reporter.telemetry").init()
+    end)
+    if not ok then
+        log.warn("bug_reporter.telemetry.init: %s", tostring(err))
+    end
+end
+
 -- Destroy welcome screen AFTER main window is visible (no window gap)
 if ws_handle then
     local welcome_screen = require("ui.welcome_screen")
