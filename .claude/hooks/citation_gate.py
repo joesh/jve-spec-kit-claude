@@ -48,6 +48,7 @@ CITATION_RE = re.compile(
     (?:
         `?[\w./\-]+\.(?:lua|cpp|h|hpp|c|cc|mm|sql|md|sh|py|toml|json|jvekeys)
         :\d+`?
+      | `?(?:Makefile|CMakeLists\.txt|Dockerfile):\d+`?
       | line\s+\d+\s+of\s+[\w./\-]+
     )
     """,
@@ -91,6 +92,19 @@ TELLS = [
     ("X is correct/wrong/broken/safe", re.compile(
         r"\b(?:Phase\s*\w+|the\s+\w+|this\s+\w+)\s+(?:is|are|was|were)\s+"
         r"(?:correct|wrong|broken|safe|right|unsafe|incorrect|fine)\b", re.I)),
+    # Negative assertions — "X doesn't Y", "X don't Y" — equally confident,
+    # equally citation-worthy. The earlier tells skewed positive ("X is fine").
+    ("doesn't/don't VERB", re.compile(
+        r"\b(?:doesn'?t|don'?t|do\s+not|does\s+not|didn'?t|did\s+not)\s+"
+        r"(?:share|use|depend|matter|affect|fire|exist|run|call|reach|"
+        r"cascade|propagate|trigger|invalidate|touch|cache|persist|"
+        r"apply|return|emit|handle|cover)\b", re.I)),
+    ("no <noun>",        re.compile(
+        r"\bno\s+(?:meaningful|shared|cached|persistent|nested|hidden|"
+        r"silent|implicit|cross-session|cross-thread|side[-\s]?effect)\s+\w+\b",
+        re.I)),
+    ("in any meaningful way", re.compile(r"\bin\s+(?:any|no)\s+meaningful\s+way\b", re.I)),
+    ("nothing shared",   re.compile(r"\bnothing\s+(?:shared|cached|persistent|carries|crosses)\b", re.I)),
 ]
 
 CONTEXT_RADIUS = 200  # chars on each side to look for a citation
@@ -186,18 +200,21 @@ def find_unsourced_tells(text: str):
 
 
 def is_substantial(text: str) -> bool:
-    """Only gate substantial replies (reviews, audits, technical claims).
-    Threshold: 30 non-blank lines OR mention of review/audit/analysis/claim.
+    """Gate any reply that makes a confident technical claim, not just long
+    reviews. A 6-line "X works this way" answer is exactly as misleading as
+    a 50-line audit — the prior 30-line threshold gave short tells a free
+    pass (2026-06-26 incident: "threads don't share build state in any
+    meaningful way", flat-wrong and short enough to skip scanning).
+
+    Threshold: 8 non-blank lines is enough to be making a claim worth
+    citing. Below that it's almost certainly conversational. The opt-out
+    marker [no-citation-gate] remains for genuinely conversational turns
+    that would otherwise trip the scanner.
     """
     if OPT_OUT_MARKER in text:
         return False
     nonblank = sum(1 for ln in text.splitlines() if ln.strip())
-    if nonblank >= 30:
-        return True
-    keywords = ("review", "audit", "analysis", "verdict", "phase 4",
-                "phase 4a", "phase 4b", "assessment")
-    low = text.lower()
-    return any(k in low for k in keywords) and nonblank >= 8
+    return nonblank >= 8
 
 
 # ---------- main ----------
