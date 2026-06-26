@@ -31,6 +31,26 @@ local log           = require("core.logger").for_area("ui")
 
 local M = {}
 
+-- Dirty-protocol hooks for non-flat sections (consumed by
+-- selection_binding.discard_pending / any_dirty / populate_non_flat_sections
+-- with opts.preserve_dirty). Stamped on `section_view._dirty_hooks` lazily
+-- by populate; idempotent. selection_binding stays agnostic of row shape;
+-- this module owns row identity (track_id) and dirty mechanics.
+local function install_dirty_hooks(section_view, pool)
+    if section_view._dirty_hooks then return end
+    section_view._dirty_hooks = {
+        iter_rows = function()
+            local i = 0
+            return function()
+                i = i + 1
+                return pool[i]
+            end
+        end,
+        row_identity   = function(row) return row.track_id end,
+        clear_row_dirty = function(row) row.dirty = false end,
+    }
+end
+
 local function build_row(section_obj)
     local row = qt_constants.WIDGET.CREATE()
     assert(row, "channel_list_renderer: WIDGET.CREATE returned nil")
@@ -83,17 +103,20 @@ local function build_row(section_obj)
     local commit_conn = qt_signals.connect(name_edit, "editingFinished", function()
         if entry._programmatic then return end
         if not entry.dirty then return end
-        entry.dirty = false
-        local text = qt_constants.PROPERTIES.GET_TEXT(name_edit) or ""
+        local text = qt_constants.PROPERTIES.GET_TEXT(name_edit)
+        assert(type(text) == "string",
+            "channel_list_renderer: GET_TEXT returned non-string on bound name_edit")
         assert(entry.inspectable and entry.track_id, string.format(
             "channel_list_renderer: row committed without bound identity "
             .. "(track_id=%s, inspectable=%s)",
             tostring(entry.track_id), tostring(entry.inspectable)))
+        -- set_channel_name only returns (false, err) via the command-harness
+        -- soft-fail path; SetTrackName itself has no user-facing failure mode
+        -- (no name validation / uniqueness / length constraints). A failure
+        -- here is a wiring/routing bug — assert per 1.14 rather than swallow.
         local ok, err = entry.inspectable:set_channel_name(entry.track_id, text)
-        if not ok then
-            log.warn("channel_list_renderer: set_channel_name failed: %s",
-                tostring(err))
-        end
+        assert(ok, err)
+        entry.dirty = false
     end)
     assert(commit_conn, "channel_list_renderer: editingFinished connect failed")
 
@@ -106,9 +129,17 @@ local function build_row(section_obj)
 end
 
 --- Populate section_view's channel-list section from inspectable:iter_channels.
---- Pool grows monotonically; unused slots hide. Called on every selection
---- change to a master-clip inspectable (selection_binding.load_single).
-function M.populate(section_view, inspectable)
+--- Pool grows monotonically; unused slots hide.
+---
+--- Called from two paths with different semantics (see selection_binding):
+---   * load_single        — fresh selection, opts.preserve_dirty omitted/false:
+---                          clobber every row (the inspectable changed).
+---   * refresh_only_clean_fields — model notify on the SAME inspectable,
+---                          opts.preserve_dirty=true: skip SET_TEXT on rows
+---                          with an in-flight user edit (row.dirty AND
+---                          same identity), matching the flat-field
+---                          "don't overwrite a typing user" contract.
+function M.populate(section_view, inspectable, opts)
     assert(section_view, "channel_list_renderer.populate: section_view required")
     assert(section_view.kind == "channel_list", string.format(
         "channel_list_renderer.populate: section %q has kind=%q, expected 'channel_list'",
@@ -120,6 +151,9 @@ function M.populate(section_view, inspectable)
 
     section_view._channel_pool = section_view._channel_pool or {}
     local pool = section_view._channel_pool
+    install_dirty_hooks(section_view, pool)
+
+    local preserve_dirty = opts and opts.preserve_dirty == true
 
     local n = 0
     for ch in inspectable:iter_channels() do
@@ -131,27 +165,36 @@ function M.populate(section_view, inspectable)
             row = build_row(section_view.section_obj)
             pool[n] = row
         end
-        -- Rebind identity for the editingFinished closure on every populate;
-        -- the row widget persists across selection swaps but the underlying
-        -- master/track changes. _programmatic guards textChanged so the
-        -- SET_TEXT below doesn't flip dirty and stage a phantom rename.
-        row.track_id      = ch.track_id
-        row.inspectable   = inspectable
-        row._programmatic = true
-        qt_constants.PROPERTIES.SET_TEXT(row.index_label, tostring(ch.channel_index))
-        qt_constants.PROPERTIES.SET_TEXT(row.name_edit, ch.name)
-        row._programmatic = false
-        row.dirty         = false
+        -- Preserve in-flight edit: dirty row addressing the SAME (track_id,
+        -- inspectable) as the incoming channel. Identity match guards against
+        -- a selection-swap leaving the prior master's typed text in place.
+        local keep_user_edit = preserve_dirty
+            and row.dirty
+            and row.track_id    == ch.track_id
+            and row.inspectable == inspectable
+        if not keep_user_edit then
+            row.track_id      = ch.track_id
+            row.inspectable   = inspectable
+            row._programmatic = true
+            qt_constants.PROPERTIES.SET_TEXT(row.index_label, tostring(ch.channel_index))
+            qt_constants.PROPERTIES.SET_TEXT(row.name_edit, ch.name)
+            row._programmatic = false
+            row.dirty         = false
+        end
         qt_constants.DISPLAY.SET_VISIBLE(row.widget, true)
     end
 
-    -- Hide rows beyond the current channel count (pool reuse, no widget churn).
+    -- Hide unused slots AND drop their identity so a stale focus event on
+    -- an off-screen row can't dispatch a rename against the previous master.
     for i = n + 1, #pool do
         qt_constants.DISPLAY.SET_VISIBLE(pool[i].widget, false)
+        pool[i].track_id    = nil
+        pool[i].inspectable = nil
+        pool[i].dirty       = false
     end
 
-    log.event("channel_list_renderer: populated section=%s rows=%d pool=%d",
-        section_view.name, n, #pool)
+    log.event("channel_list_renderer: populated section=%s rows=%d pool=%d preserve_dirty=%s",
+        section_view.name, n, #pool, tostring(preserve_dirty))
 end
 
 return M

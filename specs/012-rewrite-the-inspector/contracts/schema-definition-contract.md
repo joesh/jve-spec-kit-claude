@@ -173,9 +173,12 @@ Section: Channels                   (kind = channel_list — non-flat)
   identity for edits). Name resolution at the model layer:
     channel-backed → track.name override → iXML TRACK_LIST probe → ""
     non-channel-backed → track.name override → "A<n>" abbreviated
-  The renderer never sees nil. Phase 3: the name cell rewires to
-  MasterClipInspectable:set_channel_name(track_id, name) → SetTrackName
-  (per-sequence undoable; clearing the name drops the override).
+  The renderer never sees nil. The name cell is a QLineEdit; on
+  editingFinished with a changed value, the row dispatches
+  MasterClipInspectable:set_channel_name(track_id, new_text) →
+  SetTrackName (per-sequence undoable; clearing the name drops the
+  override and the displayed label reverts to the derived form —
+  SetTrackName trims whitespace and normalises "" → NULL).
   Track identity is carried explicitly because rows are addressed by
   track_id, not by a flat-field key.
 ```
@@ -188,6 +191,22 @@ Section: Channels                   (kind = channel_list — non-flat)
   `load_single` and `refresh_only_clean_fields` both call into the
   renderer so the channels track mutation pull-on-notify (FR-016).
 - Any other kind value asserts at build (no silent skip).
+
+**Non-flat dirty protocol (Phase 3.1)**: non-flat sections participate
+in the inspector's dirty machinery on the same terms as flat fields:
+- The renderer stamps `section._dirty_hooks = { iter_rows, row_identity,
+  clear_row_dirty }` on first populate. selection_binding walks these
+  hooks; it stays agnostic of row shape.
+- `populate_non_flat_sections(view, inspectable, {preserve_dirty=true})`
+  — refresh path (model notify): renderer skips SET_TEXT on rows whose
+  `dirty == true` AND identity matches the incoming row. Selection-swap
+  (`load_single`) calls without opts → renderer clobbers (the
+  inspectable changed; prior identity is gone).
+- `any_dirty(view)` returns true if ANY non-flat row is dirty (gates the
+  implied-re-pick drop and the Apply button).
+- `discard_pending(view)` clears non-flat row dirty on schema swap
+  (otherwise stale dirty from the prior master leaks into the new
+  master's same-slot row).
 
 **Sections deliberately omitted vs. the clip schema**: Enable, Audio (volume), Color. These belong to per-instance clips, not to the master.
 

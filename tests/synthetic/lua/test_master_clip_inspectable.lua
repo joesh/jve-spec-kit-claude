@@ -306,6 +306,18 @@ db:exec(string.format([[
         ('rec_seq', 'proj', 'Edit', 'sequence', 24, 1, 48000,
          1920, 1080, 0, 0, 1000, NULL, NULL, 0, 0, 0, 0.5, %d, %d);
 ]], now, now))
+-- Insert an AUDIO track on rec_seq BEFORE the cross-sequence refusal test —
+-- otherwise the pcall hits the "track not found" guard, not the identity-
+-- check branch we mean to exercise. rec_seq's id has no substring overlap
+-- with the master's own id ("master_seq"), so the message-content check
+-- below is unambiguous.
+db:exec([[
+    INSERT INTO tracks
+        (id, sequence_id, name, track_type, track_index, enabled, muted, soloed,
+         locked, sync_mode, autoselect)
+    VALUES
+        ('rec_seq_a1', 'rec_seq', NULL, 'AUDIO', 1, 1, 0, 0, 0, 'off', 1);
+]])
 command_manager.init("rec_seq", "proj")
 
 local ok_set = mc:set_channel_name("mtrack_a4", "Stereo Mix")
@@ -315,6 +327,19 @@ local renamed = {}
 for ch in mc:iter_channels() do table.insert(renamed, ch) end
 check("after rename, channel[4].name == 'Stereo Mix' (was nameless)",
     renamed[4].name, "Stereo Mix")
+
+-- Undo: prior state was nameless → derived "" (file unprobeable on mtrack_a4).
+command_manager.undo()
+local undone = {}
+for ch in mc:iter_channels() do table.insert(undone, ch) end
+check("undo rename: channel[4].name reverts to '' (prior nameless state)",
+    undone[4].name, "")
+-- Redo: returns to the renamed state.
+command_manager.redo()
+local redone = {}
+for ch in mc:iter_channels() do table.insert(redone, ch) end
+check("redo rename: channel[4].name back to 'Stereo Mix'",
+    redone[4].name, "Stereo Mix")
 
 -- Clearing the override reverts to the derived label (empty string here —
 -- file unprobeable). SetTrackName normalises "" → NULL.
@@ -326,11 +351,11 @@ check("after clear, channel[4].name reverts to '' (nameless fallback)",
 
 -- Wrong-master refusal: track on a different sequence must not be
 -- rename-able through this inspectable. Fail-fast per 1.14.
-local ok_wrong, wrong_err = pcall(mc.set_channel_name, mc, "vmaster_v1", "X")
+local ok_wrong, wrong_err = pcall(mc.set_channel_name, mc, "rec_seq_a1", "X")
 check("set_channel_name refuses track belonging to a different sequence",
     ok_wrong, false)
 check("refusal message names the offending sequence",
-    type(wrong_err) == "string" and wrong_err:find("vmaster", 1, true) ~= nil, true)
+    type(wrong_err) == "string" and wrong_err:find("rec_seq", 1, true) ~= nil, true)
 
 -- ── Zero-AUDIO master: VIDEO-only iteration ───────────────────────────
 db:exec(string.format([[

@@ -304,10 +304,29 @@ local function set_header(ui_state, text)
     end
 end
 
-local function populate_non_flat_sections(schema_view, inspectable)
+-- Non-flat sections (channel_list etc.) participate in the dirty protocol
+-- via section._dirty_hooks (stamped by the renderer on first populate;
+-- shape: { iter_rows()->iterator, row_identity(row), clear_row_dirty(row) }).
+-- selection_binding stays agnostic of row shape — it only walks the hooks.
+local function iter_non_flat_dirty_sections(schema_view)
+    local i = 0
+    return function()
+        while true do
+            i = i + 1
+            local s = schema_view.sections[i]
+            if not s then return nil end
+            if s.kind ~= "flat_fields" and s._dirty_hooks then return s end
+        end
+    end
+end
+
+-- opts.preserve_dirty=true → renderer skips SET_TEXT on rows with an
+-- in-flight user edit. Default (load_single) clobbers — the inspectable
+-- changed, the row's prior identity is gone.
+local function populate_non_flat_sections(schema_view, inspectable, opts)
     for _, section in ipairs(schema_view.sections) do
         if section.kind == "channel_list" then
-            channel_list_renderer.populate(section, inspectable)
+            channel_list_renderer.populate(section, inspectable, opts)
         end
     end
 end
@@ -341,12 +360,14 @@ local function refresh_only_clean_fields(schema_view, inspectables, size)
             end
         end
     end
-    -- Non-flat sections (channel_list etc.) have no per-field dirty
-    -- concept — always re-populate. Only meaningful for size==1; the
+    -- Non-flat sections participate in the dirty protocol via
+    -- preserve_dirty: rows with an in-flight edit retain user text;
+    -- all others re-pull from the model. Only meaningful for size==1; the
     -- only adapter with non-flat sections (MasterClipInspectable) is
     -- supports_multi_edit=false so multi never lands here.
     if size == 1 then
-        populate_non_flat_sections(schema_view, inspectables[1])
+        populate_non_flat_sections(schema_view, inspectables[1],
+            { preserve_dirty = true })
     end
 end
 M._refresh_only_clean_fields = refresh_only_clean_fields
@@ -356,6 +377,15 @@ local function discard_pending(schema_view)
         entry:clear_dirty()
         if entry.error then entry:blur_revert() end
     end
+    -- Non-flat row dirty must also clear, otherwise a channel row whose
+    -- text was being edited at schema-swap time carries that dirty bit
+    -- into the next master's identical-track_id row and corrupts its
+    -- refresh-time populate.
+    for section in iter_non_flat_dirty_sections(schema_view) do
+        for row in section._dirty_hooks.iter_rows() do
+            section._dirty_hooks.clear_row_dirty(row)
+        end
+    end
 end
 M._discard_pending = discard_pending
 
@@ -363,6 +393,9 @@ local function any_dirty_invalid(schema_view)
     for _, entry in pairs(schema_view.field_widgets) do
         if entry.dirty and entry.error then return true end
     end
+    -- Non-flat rows have no per-row .error today (no client-side
+    -- validation — SetTrackName accepts any string). Add an
+    -- iter_row_error hook when per-row validation lands.
     return false
 end
 
@@ -370,8 +403,14 @@ local function any_dirty(schema_view)
     for _, entry in pairs(schema_view.field_widgets) do
         if entry.dirty then return true end
     end
+    for section in iter_non_flat_dirty_sections(schema_view) do
+        for row in section._dirty_hooks.iter_rows() do
+            if row.dirty then return true end
+        end
+    end
     return false
 end
+M._any_dirty = any_dirty
 
 local function update_apply_button(ui_state)
     -- Bottom bar (Apply + Reset) is visible in multi-edit mode only.
