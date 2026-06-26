@@ -974,6 +974,16 @@ void PlaybackController::waitForVideoCache(int64_t pos, int timeout_ms) {
     auto video_tracks = m_tmb->GetVideoTrackIds();
     if (video_tracks.empty()) return;
 
+    // Only poll tracks the compositor will actually use. Ineligible tracks
+    // aren't being decoded by REFILL — polling them would block the timeout
+    // window waiting on something that will never arrive.
+    {
+        std::lock_guard<std::mutex> lock(m_effective_video_mutex);
+        video_tracks = filterVisibleVideoTracks(
+            video_tracks, m_effective_video_tracks, m_effective_video_tracks_valid);
+    }
+    if (video_tracks.empty()) return;
+
     using clock = std::chrono::steady_clock;
     auto start = clock::now();
     auto deadline = start + std::chrono::milliseconds(timeout_ms);
@@ -986,14 +996,13 @@ void PlaybackController::waitForVideoCache(int64_t pos, int timeout_ms) {
         while (clock::now() < deadline) {
             auto r = m_tmb->GetVideoFrame(track, pos, /*cache_only=*/true);
             // Only state worth polling: clip exists (!clip_id.empty) but
-            // decode pending (!frame && !offline && !obscured). All others
-            // are terminal:
+            // decode pending (!frame && !offline). Terminal states:
             //   frame != null  → cached, ready
             //   offline        → media unavailable, nothing to wait for
             //   clip_id empty  → gap (no clip at this position)
-            //   obscured       → covered by higher track; REFILL won't
-            //                    decode and the frame isn't displayed
-            bool pending = !r.clip_id.empty() && !r.frame && !r.offline && !r.obscured;
+            // We pre-filtered to eligible tracks above, so "no decode running"
+            // can't happen here.
+            bool pending = !r.clip_id.empty() && !r.frame && !r.offline;
             if (!pending) {
                 ++ready;
                 got_it = true;
@@ -1791,14 +1800,20 @@ void PlaybackController::dispatchClipGradeToMainThread(const std::string& clip_i
 }
 
 void PlaybackController::setEffectiveVideoTracks(const std::vector<int>& indices) {
-    // Store only — no cache flush, so every track stays decoded in TMB and
-    // unmuting is instant. During playback the next tick's deliverFrame
-    // composites from the new set; in park mode Lua re-renders the frame via
-    // the renderer (which uses its own effective-index list). deliverFrame
-    // (tick thread) reads this under the same mutex.
-    std::lock_guard<std::mutex> lock(m_effective_video_mutex);
-    m_effective_video_tracks = indices;
-    m_effective_video_tracks_valid = true;
+    // Compositor side: deliverFrame iterates this filtered set.
+    {
+        std::lock_guard<std::mutex> lock(m_effective_video_mutex);
+        m_effective_video_tracks = indices;
+        m_effective_video_tracks_valid = true;
+    }
+    // TMB side: REFILL workers decode exactly the tracks the compositor will
+    // use. Without this push the prior topology-based eligibility skip would
+    // freeze the visible bottom track whenever any muted upper track had a
+    // clip at the same range (regression introduced by 0f21d4db).
+    JVE_ASSERT(m_tmb,
+        "PlaybackController::setEffectiveVideoTracks: TMB not set "
+        "(SetTMB must precede the first effective-tracks push from Lua)");
+    m_tmb->SetEffectiveVideoTracks(indices);
 }
 
 // ============================================================================
@@ -2268,12 +2283,36 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     // Query tracks top-to-bottom. Topmost clip always occludes — if V2 has a
     // clip at this frame, V1 is never visible regardless of cache state.
     // Cache miss during playback → hold last frame (no new setFrame call).
+    //
+    // Long-standing instrumentation at Ticks:detail level — when "video is
+    // stuck on one frame while audio plays fine" recurs, this dump tells you
+    // (a) what tracks compositor iterates, in order, and (b) for each track
+    // whether it returned a clip, a frame, or both. Without it, "V1 has_frame=0"
+    // looks like a TMB bug; with it, you can see whether higher tracks were
+    // gap-skipped (clip_id empty) before the loop fell through to V1.
+    if (jve_log_enabled(JveArea::Ticks, JveLevel::Detail)) {
+        std::string tracks_str;
+        for (size_t i = 0; i < video_tracks.size(); ++i) {
+            if (i) tracks_str += ",";
+            tracks_str += "V" + std::to_string(video_tracks[i]);
+        }
+        JVE_LOG_DETAIL(Ticks, "deliverFrame frame=%lld tracks=[%s]",
+            (long long)frame, tracks_str.c_str());
+    }
     emp::VideoResult result;
     bool found_frame = false;
     for (int track_idx : video_tracks) {
         emp::TrackId track{emp::TrackType::Video, track_idx};
         auto r = m_tmb->GetVideoFrame(track, frame, /*cache_only=*/!synchronous);
-        // DEBUG: log cache hit/miss per track for V2 diagnosis
+        // Per-track iteration trace — fires for EVERY track regardless of
+        // clip presence so we see gap-skips, not just clip hits.
+        JVE_LOG_DETAIL(Ticks, "deliverFrame V%d: clip=%.8s has_frame=%d offline=%d break=%d",
+            track_idx,
+            r.clip_id.empty() ? "(gap)" : r.clip_id.c_str(),
+            (int)(r.frame != nullptr), (int)r.offline,
+            (int)(r.frame || r.offline || !r.clip_id.empty()));
+        // Existing higher-signal Event log for V>0 with a clip — kept so
+        // Ticks:event surfaces the stuck-frame pattern without enabling Detail.
         if (track_idx > 0 && !r.clip_id.empty()) {
             JVE_LOG_EVENT(Ticks, "deliverFrame: V%d frame=%lld clip=%.8s has_frame=%d",
                 track_idx, (long long)frame, r.clip_id.c_str(), (int)(r.frame != nullptr));

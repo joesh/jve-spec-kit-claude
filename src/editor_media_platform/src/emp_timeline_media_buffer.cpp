@@ -138,6 +138,17 @@ std::vector<int> TimelineMediaBuffer::GetVideoTrackIds() {
     return ids;
 }
 
+void TimelineMediaBuffer::SetEffectiveVideoTracks(const std::vector<int>& track_indices) {
+    std::lock_guard<std::mutex> lock(m_tracks_mutex);
+    m_effective_video_tracks = track_indices;
+    m_effective_video_tracks_valid = true;
+    // No cache flush — previously-decoded frames on now-ineligible tracks
+    // stay until evicted naturally. Re-enabling a track resumes decode from
+    // the playhead. wake_prefetch_workers happens at the SetTrackClips
+    // and playhead-advance call sites; here a mute/solo change doesn't need
+    // to spin REFILL until the next tick.
+}
+
 void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips) {
     bool clips_changed = false;
     // Clips not in old list — need reader pre-warming during active playback
@@ -500,19 +511,23 @@ Segment TimelineMediaBuffer::find_segment_at(const TrackState& ts, int64_t timel
 }
 
 // ============================================================================
-// Compositing-aware obscured check (opaque only — no blend modes)
+// Track eligibility — compositor-pushed effective set
 // ============================================================================
 
-bool TimelineMediaBuffer::is_video_obscured(const TrackId& track, int64_t timeline_frame) const {
-    assert(track.type == TrackType::Video && "is_video_obscured: called on non-video track");
-    for (const auto& [tid, ts] : m_tracks) {
-        if (tid.type != TrackType::Video) continue;
-        if (tid.index <= track.index) continue;  // same or lower — not obscuring
-        for (const auto& clip : ts.clips) {
-            if (timeline_frame >= clip.sequence_start && timeline_frame < clip.sequence_end()) {
-                return true;
-            }
-        }
+bool TimelineMediaBuffer::track_is_eligible(int track_index) const {
+    // Caller holds m_tracks_mutex. Eligibility = "the playback layer asked us
+    // to decode this." Until the first SetEffectiveVideoTracks push every
+    // track is eligible (boot semantics). After first push, exact membership.
+    //
+    // This intentionally does NOT inspect what's above the track. Pre-empting
+    // the compositor with topology-based occlusion ("a higher track has a clip,
+    // so skip this one") is wrong the moment we have opacity, transforms,
+    // blends, or mattes — all of which require the lower layer decoded even
+    // when an upper layer has a clip. The compositor is the only authority
+    // on what it needs; TMB decodes what's asked, no inference.
+    if (!m_effective_video_tracks_valid) return true;
+    for (int idx : m_effective_video_tracks) {
+        if (idx == track_index) return true;
     }
     return false;
 }
@@ -584,9 +599,6 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     result.clip_fps_den = clip->rate_den;
     result.clip_start_frame = clip->sequence_start;
     result.clip_end_frame = clip->sequence_end();
-    // Same helper REFILL uses (fill_prefetch), so the wait path and the
-    // decode path agree on what's needed for display.
-    result.obscured = is_video_obscured(track, timeline_frame);
 
     // Compute source frame: source_in + (timeline_offset * speed_ratio)
     // speed_ratio < 1.0 = slow motion (fewer source frames than timeline frames)
@@ -685,8 +697,51 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     // Copy clip locals and release tracks_lock first (lock ordering).
     std::string media_path = clip->media_path;
     std::string clip_id = clip->clip_id;
-    size_t diag_cache_size = ts.video_cache.size();
-    int64_t diag_buf_end = ts.video_buffer_end;
+
+    // Nearest-cache lookup post-mortem for CACHE MISS log. Captured before
+    // unlocking so the iterators remain valid. Long-standing diagnostic at
+    // EMP_LOG_LEVEL=2 — when the playhead "freezes" with cache > 0 it's
+    // almost always one of these three: clip_id mismatch (key collision /
+    // wrong clip indexed), offline marker without frame, or distance past
+    // MAX_STRIDE*2 (REFILL too far behind playhead). Without these fields
+    // the CACHE MISS log can't distinguish them.
+    //
+    // Gated by EMP_LOG_LEVEL=2: lower_bound + snprintf on the tick thread is
+    // not free; only do the work when the log will actually emit.
+    size_t diag_cache_size = 0;
+    int64_t diag_buf_end = 0;
+    int diag_dir = 0;
+    bool diag_shuttle = false;
+    char diag_query_cid[9] = {0};
+    bool diag_fwd_present = false;
+    int64_t diag_fwd_tf = -1;
+    char diag_fwd_cid[9] = {0};
+    bool diag_fwd_offline = false;
+    bool diag_bwd_present = false;
+    int64_t diag_bwd_tf = -1;
+    char diag_bwd_cid[9] = {0};
+    bool diag_bwd_offline = false;
+    if (cache_only && tmb_log_level() >= 2) {
+        diag_cache_size = ts.video_cache.size();
+        diag_buf_end = ts.video_buffer_end;
+        diag_dir = m_playhead_direction.load(std::memory_order_relaxed);
+        diag_shuttle = shuttle_mode;
+        std::snprintf(diag_query_cid, sizeof(diag_query_cid), "%.8s", clip_id.c_str());
+        auto lo = ts.video_cache.lower_bound(timeline_frame);
+        if (lo != ts.video_cache.end()) {
+            diag_fwd_present = true;
+            diag_fwd_tf = lo->first;
+            std::snprintf(diag_fwd_cid, sizeof(diag_fwd_cid), "%.8s", lo->second.clip_id.c_str());
+            diag_fwd_offline = lo->second.offline;
+        }
+        if (lo != ts.video_cache.begin()) {
+            auto prev = std::prev(lo);
+            diag_bwd_present = true;
+            diag_bwd_tf = prev->first;
+            std::snprintf(diag_bwd_cid, sizeof(diag_bwd_cid), "%.8s", prev->second.clip_id.c_str());
+            diag_bwd_offline = prev->second.offline;
+        }
+    }
     tracks_lock.unlock();
 
     // Wake prefetch unconditionally on cache miss during playback
@@ -713,9 +768,19 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     // Metadata + offline already populated. Skip sync decode.
     if (cache_only) {
         char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
-        EMP_LOG_DEBUG("CACHE MISS: %s tf=%lld sf=%lld cache=%zu buf_end=%lld",
+        EMP_LOG_DEBUG("CACHE MISS: %s tf=%lld sf=%lld cache=%zu buf_end=%lld "
+            "dir=%d shuttle=%d want_cid=%s "
+            "fwd[present=%d tf=%lld cid=%s offline=%d dist=%lld] "
+            "bwd[present=%d tf=%lld cid=%s offline=%d dist=%lld]",
             tbuf, (long long)timeline_frame, (long long)source_frame,
-            diag_cache_size, diag_buf_end);
+            diag_cache_size, diag_buf_end,
+            diag_dir, (int)diag_shuttle, diag_query_cid,
+            (int)diag_fwd_present, (long long)diag_fwd_tf, diag_fwd_cid,
+            (int)diag_fwd_offline,
+            diag_fwd_present ? (long long)(diag_fwd_tf - timeline_frame) : -1LL,
+            (int)diag_bwd_present, (long long)diag_bwd_tf, diag_bwd_cid,
+            (int)diag_bwd_offline,
+            diag_bwd_present ? (long long)(timeline_frame - diag_bwd_tf) : -1LL);
         return result;
     }
 
@@ -1451,11 +1516,6 @@ void TimelineMediaBuffer::discard_already_played_prefetch(const TrackId& track) 
             }
         }
     }
-}
-
-bool TimelineMediaBuffer::frame_needed_for_composite(const TrackId& track, int64_t timeline_frame) const {
-    // Caller must hold m_tracks_mutex
-    return !is_video_obscured(track, timeline_frame);
 }
 
 std::unique_ptr<TimelineMediaBuffer::PrefetchClaimGuard>
@@ -3071,7 +3131,7 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
 
         // Read buf_end ONCE — create cursor before the loop.
         // buf_end reflects cached content distance (not scan position).
-        // Gaps and obscured frames advance the cursor without advancing
+        // Gaps and ineligible frames advance the cursor without advancing
         // buf_end, so pick_video_track sees accurate urgency.
         int64_t buffer_end;
         {
@@ -3107,7 +3167,8 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
             if (cursor.ahead_of(playhead) >= VIDEO_PREFETCH_MAX) {
                 if (!decoded_this_call) {
                     // Scanned entire prefetch window without finding decodable
-                    // content (all gaps or obscured by higher tracks). Mark
+                    // content (all gaps or ineligible — track not in
+                    // compositor's effective set). Mark
                     // the track as "processed" up to the window edge so
                     // pick_video_track doesn't re-select it. Use the window
                     // edge (not cursor.pos): skip_gap can jump the cursor far
@@ -3126,7 +3187,7 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
             // which can be reallocated by concurrent SetTrackClips after lock release.
             Segment seg;
             ClipInfo clip_copy;
-            bool obscured = false;
+            bool ineligible = false;
             {
                 std::lock_guard<std::mutex> lock(m_tracks_mutex);
                 auto it = m_tracks.find(track);
@@ -3136,7 +3197,7 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
                     assert(seg.clip && "fill_prefetch: CLIP segment has null clip pointer");
                     clip_copy = *seg.clip;
                     seg.clip = &clip_copy;
-                    obscured = !frame_needed_for_composite(track, cursor.pos);
+                    ineligible = !track_is_eligible(track.index);
                 }
             }
 
@@ -3162,7 +3223,7 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
                 continue;  // window check bounds the cursor naturally
             }
 
-            if (obscured) {
+            if (ineligible) {
                 cursor.advance(1);
                 continue;
             }

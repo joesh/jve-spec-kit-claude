@@ -821,6 +821,22 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
     local indices = self[dispatch.indices_field]
     local EMP = qt_constants.EMP
 
+    -- Long-standing diagnostic at ticks:detail. When "video shows gap but
+    -- F-key finds a clip there" recurs (or its audio twin), this reveals
+    -- whether the Lua model returned the clip and TMB rejected it, or
+    -- whether the model itself never surfaced the clip for this range.
+    -- Entry shape (set by filter_and_finalize in sequence.lua:891): every
+    -- field below is contract-stable — track_index, sequence_start,
+    -- duration, clip_id, media_path. log.detail short-circuits internally
+    -- when ticks:detail is off (one FFI predicate).
+    log.detail("_provide_clips %s [%d..%d) returned %d entries",
+        track_type, from, to, #entries)
+    for _, entry in ipairs(entries) do
+        log.detail("  entry: track=%d start=%d dur=%d clip=%s path=%s",
+            entry.track_index, entry.sequence_start, entry.duration,
+            tostring(entry.clip_id), tostring(entry.media_path))
+    end
+
     for _, entry in ipairs(entries) do
         local speed = dispatch.compute_speed(self, entry)
         local clip = self:_build_tmb_clip(entry, speed)

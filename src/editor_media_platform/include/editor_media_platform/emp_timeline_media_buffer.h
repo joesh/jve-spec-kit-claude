@@ -144,10 +144,6 @@ struct VideoResult {
     bool offline;
     std::string error_msg;   // populated when offline=true (from m_offline Error)
     std::string error_code;  // structured code: "FileNotFound", "Unsupported", etc.
-    // Terminal state: a higher video track covers this clip at
-    // timeline_frame, so REFILL will not decode it and display does not
-    // need it. Wait paths must treat this like offline — not as pending.
-    bool obscured = false;
 };
 
 // Timeline media buffer — owns readers and clip layout per track,
@@ -193,6 +189,13 @@ public:
     // Video track IDs with clips loaded, sorted descending (topmost first).
     // Thread-safe: acquires m_tracks_mutex internally.
     std::vector<int> GetVideoTrackIds();
+
+    // Effective (eligible) video-track set — pushed by the playback layer
+    // when mute/solo state changes. REFILL workers decode only tracks in
+    // this set; the compositor's effective filter is the source of truth.
+    // Until first push, every track with clips is eligible (boot semantics).
+    // Thread-safe.
+    void SetEffectiveVideoTracks(const std::vector<int>& track_indices);
 
     // Per-track audio access
     // Returns nullptr for gaps (Lua fills with silence)
@@ -391,14 +394,20 @@ private:
     mutable std::mutex m_tracks_mutex;
     std::unordered_map<TrackId, TrackState, TrackIdHash> m_tracks;
 
+    // Effective video-track set pushed by playback layer. Guarded by
+    // m_tracks_mutex (read on REFILL hot path under same lock as m_tracks;
+    // write on mute/solo change is rare). When _valid is false, every
+    // track is treated as eligible (boot before first push).
+    std::vector<int> m_effective_video_tracks;
+    bool m_effective_video_tracks_valid{false};
+
     // Find segment (CLIP or GAP) at timeline frame. Never returns null-equivalent —
     // gaps are explicit with bounds. Caller must hold m_tracks_mutex.
     Segment find_segment_at(const TrackState& ts, int64_t timeline_frame) const;
 
-    // Compositing-aware obscured check: returns true if any video track with
-    // index > track.index has a clip at timeline_frame. Opaque compositing only —
-    // higher tracks completely obscure lower ones. Caller must hold m_tracks_mutex.
-    bool is_video_obscured(const TrackId& track, int64_t timeline_frame) const;
+    // Track is in the effective/eligible set pushed by the playback layer.
+    // Until first push, every track is eligible. Caller must hold m_tracks_mutex.
+    bool track_is_eligible(int track_index) const;
 
     // Evict one entry from video cache: LRU via insert_seq.
     // Lowest insert_seq = oldest insertion = least recently used.
@@ -501,7 +510,6 @@ private:
                            std::shared_ptr<Frame>& last_good_frame);
     void decode_audio_into_cache(const TrackId& track, const SegmentUS& seg,
                                  TimeUS position, TimeUS chunk_end);
-    bool frame_needed_for_composite(const TrackId& track, int64_t timeline_frame) const;
 
     // Direction-aware watermark setters (never regress in direction of travel)
     void set_already_fetched_video(const TrackId& track, int64_t pos, int direction);
