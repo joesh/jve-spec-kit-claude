@@ -225,26 +225,26 @@ check("wrong-kind assert names the adapter",
 -- ── iter_channels: read-only channel list (Phase 2) ──────────────────
 -- Master AUDIO tracks present as Channels rows in the Inspector. Iterates
 -- in tracks.track_index ASC order, AUDIO only (VIDEO master tracks are
--- not channels), each row yields {channel_index = 1-based, name}.
+-- not channels), each row yields {display_index = 1-based, name}.
 local channels = {}
 for ch in mc:iter_channels() do
     table.insert(channels, ch)
 end
 check("iter_channels yields 5 AUDIO rows (VIDEO excluded)", #channels, 5)
-check("channel[1].channel_index == 1",  channels[1].channel_index, 1)
+check("channel[1].display_index == 1",  channels[1].display_index, 1)
 check("channel[1].name == 'L' (channel-backed, user-named)", channels[1].name, "L")
 check("channel[1].track_id == 'mtrack_a1' (identity for Phase 3 edits)",
     channels[1].track_id, "mtrack_a1")
-check("channel[2].channel_index == 2",  channels[2].channel_index, 2)
+check("channel[2].display_index == 2",  channels[2].display_index, 2)
 check("channel[2].name == 'Boom'", channels[2].name, "Boom")
-check("channel[3].channel_index == 3",  channels[3].channel_index, 3)
+check("channel[3].display_index == 3",  channels[3].display_index, 3)
 check("channel[3].name == 'Lav'",  channels[3].name, "Lav")
 -- channel-backed track with name=NULL + no iXML probe-able file → "".
-check("channel[4].channel_index == 4",  channels[4].channel_index, 4)
+check("channel[4].display_index == 4",  channels[4].display_index, 4)
 check("channel[4].name == '' (channel-backed, no name, no iXML)",
     channels[4].name, "")
 -- non-channel-backed track (no media_ref) + name=NULL → abbreviated "A5".
-check("channel[5].channel_index == 5",  channels[5].channel_index, 5)
+check("channel[5].display_index == 5",  channels[5].display_index, 5)
 check("channel[5].name == 'A5' (non-channel-backed, no name → abbreviated)",
     channels[5].name, "A5")
 

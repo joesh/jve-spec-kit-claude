@@ -162,7 +162,8 @@ end
 --- Phase 2 read-only Channels section. Master AUDIO tracks present as
 --- one row per channel, ordered by tracks.track_index ASC (the channel
 --- slot is the track slot — same as how the resolver lays the master out;
---- per Joe 2026-06-24). channel_index is 1-based for display.
+--- per Joe 2026-06-24). display_index is 1-based for the ordinal label
+--- shown next to each row.
 ---
 --- Master-channels label resolution (model-owned, inlined here so the
 --- inspectable doesn't pick a tab kind via ui.timeline.track_header_label
@@ -174,8 +175,9 @@ end
 ---                              → "A<track_index>"  (abbreviated form;
 ---                                                   plain master AUDIO
 ---                                                   slot with no media)
---- The renderer never sees nil. iter_channels yields {channel_index,
---- name, track_id}: track_id carries identity for Phase 3 RenameTrack.
+--- The renderer never sees nil. iter_channels yields {display_index,
+--- name, track_id}: track_id carries identity for edit commands (Phase 3
+--- RenameTrack; Phase 4b ReorderMasterChannel).
 local function resolve_channel_name(track)
     local channel_src = database.get_track_channel_source(track.id)
     if channel_src then
@@ -201,7 +203,7 @@ function MasterClipInspectable:iter_channels()
         local t = audio_tracks[i]
         if not t then return nil end
         return {
-            channel_index = t.track_index,
+            display_index = t.track_index,
             name          = resolve_channel_name(t),
             track_id      = t.id,
         }
@@ -241,6 +243,43 @@ function MasterClipInspectable:set_channel_name(track_id, name)
     })
     local ok, err = base.unwrap_command_result(
         "MasterClipInspectable:set_channel_name", result)
+    if not ok then return false, err end
+    return true
+end
+
+--- Phase 4b: move a master channel to a new ordinal slot. Dispatches
+--- ReorderMasterChannel — undoable. The UI calls this directly from a
+--- drag-drop (absolute new_display_index = the row dropped onto) and
+--- via MoveChannel (offset-based; resolves focused channel + computes
+--- the target).
+---
+--- Identity check (1.14): refuse a track that doesn't belong to this
+--- master sequence — would be a routing bug at the call site.
+function MasterClipInspectable:move_channel(track_id, new_display_index)
+    assert(type(track_id) == "string" and track_id ~= "",
+        "MasterClipInspectable:move_channel: track_id required")
+    assert(type(new_display_index) == "number"
+            and new_display_index == math.floor(new_display_index)
+            and new_display_index >= 1,
+        "MasterClipInspectable:move_channel: new_display_index must be "
+        .. "a positive integer")
+
+    local track = Track.load(track_id)
+    assert(track, string.format(
+        "MasterClipInspectable:move_channel: track %s not found", track_id))
+    assert(track.sequence_id == self.sequence_id, string.format(
+        "MasterClipInspectable:move_channel: track %s lives on sequence "
+        .. "%s, not on this master %s",
+        track_id, tostring(track.sequence_id), self.sequence_id))
+
+    local result = command_manager.execute_interactive("ReorderMasterChannel", {
+        track_id        = track_id,
+        new_track_index = new_display_index,
+        sequence_id     = self.sequence_id,
+        project_id      = self.project_id,
+    })
+    local ok, err = base.unwrap_command_result(
+        "MasterClipInspectable:move_channel", result)
     if not ok then return false, err end
     return true
 end

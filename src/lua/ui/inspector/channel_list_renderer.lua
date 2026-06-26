@@ -3,11 +3,11 @@
 -- Populates a `kind='channel_list'` section (built empty by schema.lua)
 -- with one row per master AUDIO channel, ordered by tracks.track_index ASC.
 -- The data source is `inspectable:iter_channels()` — yielding rows of
--- `{channel_index, name, track_id}` (see MasterClipInspectable:iter_channels).
+-- `{display_index, name, track_id}` (see MasterClipInspectable:iter_channels).
 --
 -- Lifecycle (widget-pool reuse, per spec 012 Q2 — no rent/return):
 --   * pool[i] is the i-th visible row at populate time — NOT the
---     channel_index. The displayed channel_index/name come from the
+--     display_index. The displayed display_index/name come from the
 --     model on every call; slot identity is purely ordinal.
 --   * First populate that surfaces N channels creates rows 1..N. On
 --     subsequent populates, relabel the visible rows; hide unused
@@ -27,9 +27,22 @@
 local qt_constants  = require("core.qt_constants")
 local qt_signals    = require("core.qt_signals")
 local ui_constants  = require("core.ui_constants")
+local runtime_mode  = require("core.runtime_mode")
 local log           = require("core.logger").for_area("ui")
 
 local M = {}
+
+-- Focused-channel state, module-scope. Sticky: a focus_in on a channel
+-- row stamps the (inspectable, track_id) pair here; subsequent commands
+-- like MoveChannel read it. Cleared on fresh selection populate (when
+-- the user picks a different master), NOT on focus_out — so the user
+-- can click a channel name, focus drift to a non-channel widget, and
+-- the keyboard shortcut still operates on the last channel they
+-- focused. The Inspector itself has no shared focus registry; this is
+-- the only owner.
+M._focused_channel = nil
+
+local focus_handler_seq = 0
 
 -- Dirty-protocol hooks for non-flat sections (consumed by
 -- selection_binding.discard_pending / any_dirty / populate_non_flat_sections
@@ -100,6 +113,33 @@ local function build_row(section_obj)
     end)
     assert(text_conn, "channel_list_renderer: textChanged connect failed")
 
+    -- Focus tracking: stamp module-scope _focused_channel on focus_in so
+    -- MoveChannel can resolve which row to move. _G[handler_name] is a
+    -- distinct slot per row because qt_set_focus_handler takes a global
+    -- function name; the field_widget pattern (field_widget.lua:411-426)
+    -- is the model. Sticky — no focus_out clearance, so the user can
+    -- click-then-shortcut from a non-channel widget.
+    focus_handler_seq = focus_handler_seq + 1
+    local focus_handler_name = string.format(
+        "channel_list_renderer_focus_%d", focus_handler_seq)
+    _G[focus_handler_name] = function(event)
+        assert(event, string.format(
+            "channel_list_renderer focus handler %q: event is nil",
+            focus_handler_name))
+        if event.focus_in and entry.track_id and entry.inspectable then
+            M._focused_channel = {
+                inspectable = entry.inspectable,
+                track_id    = entry.track_id,
+            }
+        end
+    end
+    -- luacheck: globals qt_set_focus_handler
+    runtime_mode.assert_production(qt_set_focus_handler,
+        "channel_list_renderer: qt_set_focus_handler binding missing")
+    if qt_set_focus_handler then
+        qt_set_focus_handler(name_edit, focus_handler_name)
+    end
+
     local commit_conn = qt_signals.connect(name_edit, "editingFinished", function()
         if entry._programmatic then return end
         if not entry.dirty then return end
@@ -155,10 +195,20 @@ function M.populate(section_view, inspectable, opts)
 
     local preserve_dirty = opts and opts.preserve_dirty == true
 
+    -- Fresh selection (preserve_dirty=false) means the user picked a
+    -- different master OR a non-master entirely; the prior focused
+    -- channel no longer applies. Refresh-only flows (preserve_dirty=true)
+    -- keep it — the same master is just re-pulling its data.
+    if not preserve_dirty
+        and M._focused_channel
+        and M._focused_channel.inspectable ~= inspectable then
+        M._focused_channel = nil
+    end
+
     local n = 0
     for ch in inspectable:iter_channels() do
         n = n + 1
-        assert(type(ch) == "table" and ch.channel_index and ch.name and ch.track_id,
+        assert(type(ch) == "table" and ch.display_index and ch.name and ch.track_id,
             string.format("channel_list_renderer: iter_channels row %d malformed", n))
         local row = pool[n]
         if not row then
@@ -176,7 +226,7 @@ function M.populate(section_view, inspectable, opts)
             row.track_id      = ch.track_id
             row.inspectable   = inspectable
             row._programmatic = true
-            qt_constants.PROPERTIES.SET_TEXT(row.index_label, tostring(ch.channel_index))
+            qt_constants.PROPERTIES.SET_TEXT(row.index_label, tostring(ch.display_index))
             qt_constants.PROPERTIES.SET_TEXT(row.name_edit, ch.name)
             row._programmatic = false
             row.dirty         = false
@@ -195,6 +245,13 @@ function M.populate(section_view, inspectable, opts)
 
     log.event("channel_list_renderer: populated section=%s rows=%d pool=%d preserve_dirty=%s",
         section_view.name, n, #pool, tostring(preserve_dirty))
+end
+
+--- The most recently focused (inspectable, track_id) pair, or nil if no
+--- channel has been focused (or focus was cleared by a fresh selection).
+--- Consumed by MoveChannel to resolve "which channel do I move?".
+function M.get_focused_channel()
+    return M._focused_channel
 end
 
 return M

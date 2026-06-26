@@ -351,6 +351,112 @@ function Track:save()
     return true
 end
 
+--- Move an AUDIO track to a new ordinal slot within its sequence's AUDIO
+--- track list, shifting the affected range by ±1 to fill / vacate.
+---
+--- SQL isolation lives in models/; commands cannot acquire connections.
+--- This is the model's "positional move under a UNIQUE constraint"
+--- primitive; it owns the sentinel + per-row settle dance that no
+--- single Track:save can do (every per-row save would conflict
+--- pair-wise on `UNIQUE(sequence_id, track_type, track_index)` —
+--- schema.sql:242).
+---
+--- Returns the previous track_index so callers can capture for undo.
+---
+--- Algorithm. SQLite enforces UNIQUE per-row WITHIN a single UPDATE,
+--- so a bulk `track_index = track_index + 1` collides as soon as the
+--- first row's new index equals the next row's current index. We
+--- instead settle the displaced rows one at a time in the order that
+--- never produces a transient collision: ascending when sliding rows
+--- DOWN (-1), descending when sliding them UP (+1). The moved row
+--- parks at a sentinel index until the affected range has been
+--- compacted, then settles into its destination.
+---
+---   1. snapshot the AUDIO tracks (id, track_index) ordered ASC
+---   2. UPDATE moved → -1   (sentinel vacates the slot)
+---   3. settle displaced rows one at a time in safe order:
+---        new > prev:  for k = prev+1..new (ASC), the row at k goes to k-1
+---        new < prev:  for k = prev-1..new (DESC), the row at k goes to k+1
+---   4. UPDATE moved → new
+function Track.reorder_audio_within_sequence(sequence_id, track_id, new_index)
+    assert(type(sequence_id) == "string" and sequence_id ~= "",
+        "Track.reorder_audio_within_sequence: sequence_id required")
+    assert(type(track_id) == "string" and track_id ~= "",
+        "Track.reorder_audio_within_sequence: track_id required")
+    assert(type(new_index) == "number" and new_index == math.floor(new_index)
+            and new_index >= 1,
+        "Track.reorder_audio_within_sequence: new_index must be a positive integer")
+
+    local track = Track.load(track_id)
+    assert(track, string.format(
+        "Track.reorder_audio_within_sequence: track %s not found", track_id))
+    assert(track.track_type == "AUDIO", string.format(
+        "Track.reorder_audio_within_sequence: track %s is %s, not AUDIO",
+        track_id, tostring(track.track_type)))
+    assert(track.sequence_id == sequence_id, string.format(
+        "Track.reorder_audio_within_sequence: track %s lives on sequence %s, not %s",
+        track_id, tostring(track.sequence_id), sequence_id))
+
+    local audio_tracks = Track.find_by_sequence(sequence_id, "AUDIO")
+    assert(new_index <= #audio_tracks, string.format(
+        "Track.reorder_audio_within_sequence: new_index %d out of range "
+        .. "(sequence %s has %d AUDIO tracks)",
+        new_index, sequence_id, #audio_tracks))
+
+    local prev_index = track.track_index
+    if new_index == prev_index then return prev_index end
+
+    -- Map current track_index → row id so the per-row settle phase can
+    -- name the displaced row by id rather than re-querying SQLite by
+    -- index (which would race with the parked sentinel).
+    local id_at_index = {}
+    for _, t in ipairs(audio_tracks) do
+        id_at_index[t.track_index] = t.id
+    end
+
+    local conn = resolve_db()
+    local function exec(sql, binds)
+        local stmt = assert(conn:prepare(sql),
+            "Track.reorder_audio_within_sequence: prepare failed: " .. sql)
+        for i, v in ipairs(binds) do stmt:bind_value(i, v) end
+        if not stmt:exec() then
+            local err = stmt:last_error()
+            stmt:finalize()
+            error(string.format(
+                "Track.reorder_audio_within_sequence: exec failed: %s — %s",
+                sql, tostring(err)))
+        end
+        stmt:finalize()
+    end
+
+    exec("UPDATE tracks SET track_index = -1 WHERE id = ?", { track_id })
+
+    if new_index > prev_index then
+        for k = prev_index + 1, new_index do
+            local displaced_id = id_at_index[k]
+            assert(displaced_id, string.format(
+                "Track.reorder_audio_within_sequence: no AUDIO track at "
+                .. "index %d in sequence %s (snapshot stale)", k, sequence_id))
+            exec("UPDATE tracks SET track_index = ? WHERE id = ?",
+                { k - 1, displaced_id })
+        end
+    else
+        for k = prev_index - 1, new_index, -1 do
+            local displaced_id = id_at_index[k]
+            assert(displaced_id, string.format(
+                "Track.reorder_audio_within_sequence: no AUDIO track at "
+                .. "index %d in sequence %s (snapshot stale)", k, sequence_id))
+            exec("UPDATE tracks SET track_index = ? WHERE id = ?",
+                { k + 1, displaced_id })
+        end
+    end
+
+    exec("UPDATE tracks SET track_index = ? WHERE id = ?",
+        { new_index, track_id })
+
+    return prev_index
+end
+
 -- Count tracks for a sequence
 function Track.count_for_sequence(sequence_id)
     assert(sequence_id, "Track.count_for_sequence: sequence_id is required")
