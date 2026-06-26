@@ -10,6 +10,7 @@ extern "C" void register_bug_reporter_hardware_cpu_bindings(lua_State*);      //
 #if defined(__APPLE__)
 extern "C" void register_bug_reporter_hardware_gpu_bindings(lua_State*);      // T031 (Metal GPU)
 #endif
+extern "C" void register_bug_reporter_http_bindings(lua_State*);              // T032 (async HTTP)
 
 // Include all the newly split binding files. These files contain the implementations
 // of the Lua C functions and are compiled as part of this module.
@@ -374,6 +375,9 @@ void registerQtBindings(lua_State* L)
 #if defined(__APPLE__)
     register_bug_reporter_hardware_gpu_bindings(L);
 #endif
+
+    // Feature 027 T032 — async HTTP via QNetworkAccessManager.
+    register_bug_reporter_http_bindings(L);
 
     // Feature 027 T011 — filesystem helpers used by the bug-reporter
     // exporter (rm screenshots/ after slideshow build; list files).

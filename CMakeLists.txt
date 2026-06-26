@@ -153,6 +153,7 @@ set(CORE_SOURCES
     src/bug_reporter/qt_bindings_bug_reporter.cpp
     src/bug_reporter/crypto_bindings.cpp        # feature 027 T007 — qt_sha256 (+ T030 qt_hmac_sha256)
     src/bug_reporter/hardware_bindings.cpp      # feature 027 T031 — CPU + memory + uname
+    src/bug_reporter/http_bindings.cpp          # feature 027 T032 — async HTTP via QNAM
 
     # Audio Output Platform
     src/audio_output_platform/aop.cpp
