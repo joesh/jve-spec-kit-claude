@@ -119,8 +119,18 @@ class JVERunner:
 
     # ─── start / shutdown ──────────────────────────────────────────────
 
-    def start(self) -> None:
-        """Launch JVE, wait for the socket file, connect, drain initial prompt."""
+    def start(self, *, wait_for_layout: bool = True) -> None:
+        """Launch JVE, wait for the socket file, connect, drain initial prompt.
+
+        ``wait_for_layout=False`` skips the post-connect layout-settle
+        poll. Use it when the caller intends to drive Lua over the
+        socket BEFORE a project (and therefore the timeline panel)
+        exists — notably ``build_template.py``, which launches into the
+        welcome dialog and converts DRP→JVP via an eval. With
+        ``wait_for_layout=True`` (the smoke default), settle assumes a
+        ``startup_project`` was passed and times out when ``video_widget``
+        never materialises.
+        """
         if self._proc is not None:
             raise JVERunnerError("JVERunner.start: already started")
         if not self.binary.exists():
@@ -162,7 +172,8 @@ class JVERunner:
         self._wait_for_socket()
         self._connect()
         self._drain_initial_prompt()
-        self._wait_for_layout_settle()
+        if wait_for_layout:
+            self._wait_for_layout_settle()
 
     def shutdown(self) -> None:
         """Close the socket, terminate JVE, unlink the socket file."""

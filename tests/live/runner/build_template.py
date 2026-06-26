@@ -75,7 +75,14 @@ def build(force: bool = False) -> Path:
         stdout_log=fixtures.scratch_root / "build_template.log",
     )
     try:
-        runner.start()
+        # No startup_project — JVE lands on the welcome dialog. The
+        # control socket pumps events alongside welcome (see layout.lua
+        # comment "the debug-terminal socket lets a runner send
+        # OpenProject while the welcome dialog is still pumping"), so
+        # the conversion eval reaches Lua fine. We skip layout settle
+        # because timeline_panel.video_widget is never created while
+        # welcome owns the main thread.
+        runner.start(wait_for_layout=False)
         runner.eval(
             "require('core.commands.open_project')._convert_drp_to_jvp("
             f"'{drp_lit}', '{path_lit}')")

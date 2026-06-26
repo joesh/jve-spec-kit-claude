@@ -209,8 +209,8 @@ class JVESmokeCase(unittest.TestCase):
     def eval_bool(self, lua: str) -> bool:
         return self.runner.eval_bool(lua)
 
-    def key(self, combo: str) -> None:
-        self.runner.key(combo)
+    def key(self, combo: str, expect_command: bool = True) -> None:
+        self.runner.key(combo, expect_command=expect_command)
 
     def click(self, x: int, y: int, double: bool = False) -> None:
         self.runner.click(x, y, double=double)
@@ -438,6 +438,32 @@ class JVESmokeCase(unittest.TestCase):
             f"first_armed_video_clip: expected 6 pipe-delimited fields, "
             f"got {len(parts)} ({raw!r}) — debug_helpers payload format "
             f"changed; update ArmedClip in tests/live/runner/case.py")
+        return ArmedClip(
+            id=parts[0],
+            track_id=parts[1],
+            seq_start=int(parts[2]),
+            duration=int(parts[3]),
+            rec_seq=parts[4],
+            master_seq_id=parts[5],
+        )
+
+    def densest_armed_video_clip(self, min_frames: int = 48) -> ArmedClip:
+        """Variant of ``first_armed_video_clip`` biased toward concurrent
+        video load. Picks the armed-track clip whose midpoint sits in
+        the densest overlap region (most other armed video clips active
+        at the same frame). Used by playback smokes that want to stress
+        the GPU compositor instead of measuring an idle stretch.
+        """
+        raw = self.eval_str(
+            f"return require('core.debug_helpers')"
+            f".densest_armed_video_clip({min_frames})")
+        assert raw, (
+            f"densest_armed_video_clip({min_frames}): fixture has no armed "
+            f"video clip with body > {min_frames} frames")
+        parts = raw.split("|", 5)
+        assert len(parts) == 6, (
+            f"densest_armed_video_clip: expected 6 pipe-delimited fields, "
+            f"got {len(parts)} ({raw!r})")
         return ArmedClip(
             id=parts[0],
             track_id=parts[1],

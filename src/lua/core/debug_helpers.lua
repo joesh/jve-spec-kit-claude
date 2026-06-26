@@ -274,6 +274,51 @@ function M.open_tabs_count()
     return #require("ui.timeline.timeline_panel").get_open_tab_ids()
 end
 
+-- ─── Audio output state (smoke-side A/V sync probes) ───────────────
+
+--- True iff an audio session is currently bound (a sequence with audio
+--- has been loaded and `audio_playback.init_session` has run). Smokes
+--- gate A/V sync assertions on this — a video-only sequence has no
+--- AOP handle and any AUDIBLE_US read would assert.
+--- @return boolean
+function M.has_audio_session()
+    return require("core.media.audio_playback").aop ~= nil
+end
+
+--- Current audible audio playhead in µs (PLAYHEAD_US minus QAudioSink
+--- buffer). The number a smoke compares against video_frame × (1e6/fps)
+--- to measure A/V drift during a play window. Asserts when no audio
+--- session is bound — callers must gate on `has_audio_session()`.
+--- @return integer µs
+function M.audio_audible_us()
+    local ap = require("core.media.audio_playback")
+    assert(ap.aop, "debug_helpers.audio_audible_us: no audio session "
+        .. "(audio_playback.aop is nil) — gate on has_audio_session()")
+    local us = tonumber(qt_constants.AOP.AUDIBLE_US(ap.aop))
+    assert(us, "debug_helpers.audio_audible_us: AUDIBLE_US returned "
+        .. "non-numeric — binding contract broken")
+    return us
+end
+
+--- Sticky underrun flag from the AOP. Set by the pump when starvation
+--- is observed; cleared by `audio_clear_underrun()`. Smokes snap before
+--- a play window and assert false after.
+--- @return boolean
+function M.audio_had_underrun()
+    local ap = require("core.media.audio_playback")
+    assert(ap.aop, "debug_helpers.audio_had_underrun: no audio session")
+    return qt_constants.AOP.HAD_UNDERRUN(ap.aop)
+end
+
+--- Reset the sticky underrun flag. Smokes call this after the audio
+--- pipeline has warmed up so the cold-start underrun (expected) doesn't
+--- false-fire the no-underrun assertion.
+function M.audio_clear_underrun()
+    local ap = require("core.media.audio_playback")
+    assert(ap.aop, "debug_helpers.audio_clear_underrun: no audio session")
+    qt_constants.AOP.CLEAR_UNDERRUN(ap.aop)
+end
+
 -- ─── Bridge command completion (spec 023 FR-023) ────────────────────
 
 --- Per-op monotonic completion counter for the bridge commands.
@@ -372,6 +417,63 @@ function M.first_armed_video_clip(min_frames)
         end
     end
     return ""
+end
+
+--- Same envelope as `first_armed_video_clip` but biased to the play
+--- region with the heaviest concurrent video load. For each armed-track
+--- video clip with duration > min_frames, count clips overlapping its
+--- midpoint frame; return the one with the highest count (ties broken
+--- by earliest seq_start). Used by playback smokes that want to stress
+--- the GPU compositor instead of measuring an idle stretch.
+--- @param min_frames integer (default 48)
+--- @return string "<clip_id>|<track_id>|<sequence_start>|<duration>|<rec_seq>|<sequence_id>" or ""
+function M.densest_armed_video_clip(min_frames)
+    if min_frames == nil then min_frames = 48 end
+    assert(type(min_frames) == "number" and min_frames >= 0,
+        "debug_helpers.densest_armed_video_clip: min_frames must be a "
+        .. "non-negative integer")
+    local transport = require("core.playback.transport")
+    assert(transport.record_engine,
+        "debug_helpers.densest_armed_video_clip: no record engine bound")
+    local rec_seq = transport.record_engine.loaded_sequence_id
+    assert(rec_seq and rec_seq ~= "",
+        "debug_helpers.densest_armed_video_clip: record engine has no loaded sequence")
+    local strip = require("ui.timeline.timeline_state").get_tab_strip()
+    assert(strip, "debug_helpers.densest_armed_video_clip: no tab strip")
+    local Track = require("models.track")
+    local armed = {}
+    for _, t in ipairs(Track.find_by_sequence(rec_seq)) do
+        if t.track_type == "VIDEO" and t.autoselect and not t.locked then
+            armed[t.id] = true
+        end
+    end
+    local all_video = {}
+    for _, c in ipairs(strip:displayed_clips()) do
+        if armed[c.track_id] and not c.is_gap and type(c.duration) == "number" then
+            all_video[#all_video + 1] = c
+        end
+    end
+    local best, best_score = nil, -1
+    for _, c in ipairs(all_video) do
+        if c.duration > min_frames then
+            local mid = c.sequence_start + math.floor(c.duration / 2)
+            local score = 0
+            for _, other in ipairs(all_video) do
+                if other.sequence_start <= mid
+                    and other.sequence_start + other.duration > mid then
+                    score = score + 1
+                end
+            end
+            if score > best_score
+                or (score == best_score and c.sequence_start < best.sequence_start) then
+                best, best_score = c, score
+            end
+        end
+    end
+    if not best then return "" end
+    return string.format("%s|%s|%d|%d|%s|%s",
+        best.id, best.track_id, best.sequence_start, best.duration, rec_seq,
+        best.sequence_id)
 end
 
 -- ─── Array stashers (paired with array_chunk) ───────────────────────
