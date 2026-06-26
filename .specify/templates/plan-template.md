@@ -113,6 +113,17 @@ ios/ or android/
 directories captured above]
 
 ## Phase 0: Outline & Research
+
+0. **BROWNFIELD CODE-GROUNDING GATE (mandatory if this feature MODIFIES existing modules).**
+   Before any decision below: read every module this plan will change *in full* (whole
+   files — not grep, not signatures, not a subagent's summary). Produce a **"Current State —
+   how it works today"** subsection in `research.md` with `file:line` citations for each
+   module. **Every architectural decision in this plan MUST derive from that subsection, or
+   be tagged `[doc-sourced, unverified — spike resolves]`.** Treat the spec and any prior
+   dissection/findings docs as *hypotheses to confirm against the code*, never as ground
+   truth — "where the bytes/state live" goes stale. Subagents/greps may gather facts (does X
+   exist? what line?); they may NOT be the basis for an architectural verdict.
+
 1. **Extract unknowns from Technical Context** above:
    - For each NEEDS CLARIFICATION → research task
    - For each dependency → best practices task
@@ -214,6 +225,7 @@ directories captured above]
 - [ ] Phase 5: Validation passed
 
 **Gate Status**:
+- [ ] Brownfield Code-Grounding Gate: PASS (Current-State subsection present + cited, or feature is greenfield)
 - [ ] Initial Constitution Check: PASS
 - [ ] Post-Design Constitution Check: PASS
 - [ ] All NEEDS CLARIFICATION resolved

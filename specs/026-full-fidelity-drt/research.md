@@ -1,0 +1,240 @@
+# Phase 0 Research — Full-Fidelity DRT Export
+
+Resolves the unknowns in the plan's Technical Context. Ground truth: Resolve-authored
+fixtures in `tests/fixtures/resolve/` + `specs/023-resolve-color-bridge/phase0-findings.md`.
+Each decision cites the fixture/section it derives from; no invented bytes (FR-020).
+
+---
+
+## Current State — how the export writer works today (read in full, cited)
+
+Grounding for every decision below (brownfield gate). Read `drt_writer.lua` (1219 lines)
+and `drt_binary.lua` (584 lines) end to end + decoded the gold fixture.
+
+- **Entry point is a hard quarantine.** `drt_writer.author_a005_compatible`
+  (`drt_writer.lua:1074`) asserts *every* media is ≈23.976fps **and** mp4/mov
+  (`:1080-1084`). It cannot ingest the gold timeline at all. Generalizing = removing this
+  gate (and likely renaming), not adding a parallel path — this is what F1 deletes.
+- **Three authoring mechanisms exist:** (a) **structured encoders** `drt_binary.encode_*`
+  (BtVideoInfo `<Time>` :786, `<Clip>` path/codec :815-835, markers :890, retime curves);
+  (b) **encode-then-substitute a known reference hex** — seq Resolution/FrameRate/
+  MediaExtents at `:966-999` (resolution via `%016x%016x` BE int64); (c) **verbatim borrow**
+  of zstd blobs (`Sm2MpVideoClip.FieldsBlob`, per-clip `TI_*_FIELDS_BLOB`) + still-borrowed
+  plaintext `<Geometry>`/`<TracksBA>`/`VirtualAudioTrackBA`.
+- **Per-media video descriptors are plaintext-XML hex, not zstd.** Real gold
+  `000_master clips/MpFolder.xml`: 495 `<Geometry>`, 495 `<Time>`, 932 `<TracksBA>` plaintext
+  siblings vs 945 separate zstd `<FieldsBlob>`. `<Geometry>`/`Resolution` decoded = BE int64
+  w×h (verified, 9 distinct real resolutions). `<Time>`/`<Clip>` already payload-driven;
+  `<Geometry>`/`<TracksBA>` borrowed; `<Clip>` codec hard-coded at the call site though the
+  encoder takes a `codec` param (`drt_binary.lua:455`).
+- **`encode_fields_blob` (`drt_binary.lua:361`)** authors zstd blobs by payload-bytes-in →
+  recompress-out (used for `<Clip>` and markers), NOT byte-offset patching — the precedent
+  for any gap #5 work.
+- **`payload_builder.lua:150`** asserts a video-frame TC origin → crashes on audio media
+  (the reported gap #1 bug). `build(db, project_id, sequence_id)` at `:172`.
+
+Every D-decision below derives from this section or is tagged `[unverified — spike resolves]`.
+
+---
+
+## D1 — Gap #4 (plaintext descriptors) and gap #5 (zstd linkage) are SEPARATE; only #5 is undecoded
+
+**Decision.** Author arbitrary-video descriptors (gap #4) by **encode-and-substitute
+into the plaintext-XML hex blobs** the writer already authors that way — NOT by touching
+the zstd `Sm2MpVideoClip.FieldsBlob`. The synced-linkage decode (gap #5) is a separate,
+genuinely-undecoded effort confined to the zstd FieldsBlob. The two do not share a decode.
+
+**Ground truth (decoded from the fixtures this session, via `drp_binary.decode_tlv_fields`).**
+In a real Resolve `.drp` (`anamnesis-gold-timeline.drp`, `000_master clips/MpFolder.xml`)
+each `Sm2MpVideoClip` carries its per-media descriptors as **plaintext-XML hex sibling
+elements** — 495 `<Geometry>`, 495 `<Time>`, 932 `<TracksBA>` — distinct from the 945 zstd
+`<FieldsBlob>` elements. The descriptors are NOT in the zstd blob:
+- **`<Time>`** (duration/rate/timecode) — already payload-driven via
+  `drt_binary.encode_bt_video_time` (`drt_writer.lua:786`).
+- **`<Clip>`** (path/codec) — already payload-driven for path via `encode_bt_clip_blob`
+  (`drt_writer.lua:815-835`); `codec` is already a parameter (`drt_binary.lua:455`; schema
+  `f5=codec` documented at `:421` as the inverse of `decode_bt_clip_path`), merely hard-coded
+  `"avc1"/"AAC"` at the call site (`drt_writer.lua:819/827`). **Codec fold-in (FR-010):** the
+  model's `media.codec` column exists but is empty for imported media — the DRP importer's
+  `decode_bt_clip_path` reads only path `f1/f2`, not `f5`. Closing the codec gap extends that
+  decode to read `f5` → `media.codec` (the `importer_core.lua:859/880` passthrough already
+  threads it), then the writer drives `codec` from the payload. No new wire form (FR-020): the
+  four-CC is an existing decoded `<Clip>` field, round-tripped DRP→model→DRT.
+- **`<Geometry>`** — a TLV blob (`[BE32 ver=1][BE32 count=4]` + UTF-16BE fields `UniqueId`,
+  `Resolution`, `FrameSize`, `DbType="BtGeometry"`). The `Resolution` field's 16-byte
+  payload is **width × height as two big-endian int64s** — *decoded and verified* against
+  the 9 distinct real resolutions in the gold (480×360 … 8192×4320), all clean. This is the
+  exact `string.format("%016x%016x", w, h)` form the writer ALREADY uses for the sequence
+  resolution (`drt_writer.lua:975`). (`drt_binary.encode_resolution` — two LE doubles — is
+  the WRONG encoder for this field; the seq-resolution path is the precedent.)
+- **`<TracksBA>`** (embedded-audio descriptors) — same plaintext-TLV class (visible fields
+  `StartTime/SampleRate/NumChannels/CodecName/ChannelLayout/BitDepth`); per-field authoring
+  is mechanical via `encode_tlv_fields`.
+
+So gap #4 = locate-and-substitute the per-media payload bytes inside the borrowed plaintext
+Geometry/TracksBA blobs (resolution proven; codec via the existing param), carrying the TLV
+frame as template residue and minting per-clip `UniqueId`. No zstd decode, no FR-020
+violation (every byte traces to a decoded fixture field).
+
+**Gap #5 — the lone undecoded item.** The synced V↔A linkage ("WAV X is virtual track N of
+this video") lives in the zstd `Sm2MpVideoClip.FieldsBlob` (§J line 285, §K4 line 480 — TBD).
+This is the one **must-succeed, no-fallback** decode (FR-014): until the linkage region is
+mapped, a synced clip causes a loud failure (never faked). For it, prefer structural
+re-encode via the existing `encode_fields_blob` (which already authors the `<Clip>` and
+marker zstd blobs by payload-bytes-in, recompress-out); fall to in-place patch of the
+decompressed template only for fixed-width fields amid still-opaque regions.
+
+**Alternatives rejected.**
+- *Route gap #4 through a zstd-FieldsBlob decode (earlier framing).* Refuted by the fixture:
+  resolution/embedded-audio are plaintext-XML TLV siblings, not in the zstd blob. A
+  FieldsBlob decode for gap #4 is unnecessary work and a second authoring mechanism (2.15).
+- *Use `encode_resolution` (LE doubles) for the Geometry resolution.* Decode proves the field
+  is BE int64, not LE double — wrong encoder.
+- *Synthesize the gap #5 blob from a spec.* No public format spec; would invent bytes (FR-020).
+
+**Status entering Phase 1:** gap #4's descriptor format is **decoded now** (no spike needed
+for resolution; TracksBA per-field is mechanical). Gap #5's FieldsBlob linkage region is the
+single Phase-0 spike and its own gate (see plan Phase 2).
+
+---
+
+## D2 — Audio-only timecode origin from the audio stream (gap #1)
+
+**Decision.** For audio-only media, read the TC origin from
+`media:get_audio_start_tc()` → `(start_tc_audio_samples, start_tc_audio_rate)` in
+**samples**, not `media:get_start_tc()` (video frames, returns `nil` for audio-only).
+`payload_builder.media_to_payload` MUST branch on media kind and MUST NOT assert a
+video-frame TC for audio media.
+
+**Rationale.** `media.lua:101-127` — `get_start_tc` is V-only post-2026-05-16
+normalization; `get_audio_start_tc` is the sole audio TC source. The current assert
+(`payload_builder.lua:150`) is the reported crash.
+
+**Alternatives rejected.** Synthesize a video-frame TC for audio (invents a frame grid
+audio doesn't have; shifts content). Default to 0 (fallback — 2.13 violation; wrong for
+BWF / cinema TC).
+
+---
+
+## D3 — Source range: video whole-frame, audio sample-accurate fractional (gap #1, §C)
+
+**Decision.** Per the spec clarification + §C `<In>` encoding (`<int_frames>|<hex_LE_double>`):
+**video** clip in/out export as whole frames (JVE's honest precision); **audio** clip
+in/out export at sample-accurate fractional precision (audio is sample-positioned).
+Neither shifts content.
+
+**Rationale.** §C (line 163) decoded. JVE `source_in_frame` is integer; Resolve stores a
+sub-frame double. For audio, the fractional part is the sub-sample offset and is
+authoritative; for video, JVE has no sub-frame data, so whole-frame is honest (Resolve's
+rate quantization applies on import).
+
+**Alternatives rejected.** Force whole-frame for audio (loses sample accuracy, shifts
+audio). Fabricate sub-frame video precision (invents data JVE doesn't have).
+
+---
+
+## D4 — Standalone audio media-pool item from §K2 + fixture (gap #2)
+
+**Decision.** Add `build_media_pool_audio_item` authoring an `Sm2MpAudioClip` whose
+child order + fixed bytes derive from `resolve_authored_full.drp` (the real
+Sm2MpAudioClip) per §K2's observed schema; file-specific fields (path, sample rate,
+channel layout, duration-in-samples, audio TC) come from the audio media. At minimum
+`.wav` is accepted (FR-006); a non-handled audio type fails loud (FR-019), not silently.
+
+**Rationale.** §K2 (line 371) documents the child order; `resolve_authored_full.drp` is
+the only real Sm2MpAudioClip fixture. Today only `build_media_pool_video_item` exists and
+it asserts `.mp4/.mov` (`drt_writer.lua:739`, fn at `:733`).
+
+**Alternatives rejected.** Route audio through the video-item builder (wrong root
+element; Resolve drops it). Skip standalone audio (FR-019 violation — the original crash).
+
+---
+
+## D5 — Payload-driven routing via MediaTrackIdx discriminator (gap #3, §F)
+
+**Decision.** Replace the hard-coded `VIRTUAL_AUDIO_TRACK_BA_MONO_A1` +
+`MediaTrackIdx = 0` (`drt_writer.lua:606-607`) with values **derived** from persisted
+state — there is no stored `clip.routing` field. The three §F relationships are
+discriminated from the media relationship: **embedded** channel of a video file (audio is a
+video master's stream, `MediaRef=video master`, idx 0), **linked** channel of a synced WAV
+(audio-role of a `ln` link group, idx per §F), **standalone** WAV (own audio master).
+Channel selection is `clip.source_channel` / `media_refs.source_channel`; mono-vs-stereo is
+`media.audio_channels`; synced-vs-not is `clip_link.is_linked`. Each form is matched against
+the §F fixtures.
+
+**Rationale.** §F (line 189) decoded `MediaTrackIdx` as the discriminator. 1.5 (no
+hardcoded lists) requires routing be data-driven — and the inputs are all persisted and
+reachable at export (`clips`, `media_refs`, `media`, `clip_links`).
+
+**Alternatives rejected.** Keep mono→A1 (the gap #3 bug; mis-routes stereo/synced).
+
+---
+
+## D6 — Synced linkage read from existing JVE model, emit via D1 region (gap #5)
+
+**Decision.** The synced-audio linkage is **persisted as a link group**:
+`models/clip_link.lua` `get_link_group(clip_id)` over the `clip_links` table returns
+the group's clips with `role` (video/audio), `time_offset` (V↔A alignment) and `enabled`;
+per-channel file selection is `media_refs.source_channel`; sub-sample is
+`clips.source_in_subframe`. `payload_builder` reads this **persisted** state into the
+synced-linkage descriptor (it does not read link groups today — a new read); `drt_writer`
+emits it into the gap-#5-decoded FieldsBlob region. The writer **synthesizes** the linkage
+from the decoded structure (not verbatim-borrow a fixture's group — FR-014).
+
+**Rationale.** Gap #5 is an *export* gap only; the data is persisted and reachable.
+**Correction (review pass):** the earlier draft cited
+`importer_core.resolve_synced_audio_streams` / `master_builder.add_synced_audio_streams` —
+those are **import-time intermediates, unreachable at export** (verified: the only
+occurrences are a local `n()` builder in `importer_core.lua`; `payload_builder`/exporter do
+not read them). The export-time source is the persisted link-group model. Verbatim-borrow
+would reproduce one fixture's group, not arbitrary ones.
+
+**Alternatives rejected.** Re-derive sync from scratch at export (duplicates the importer's
+work; risks divergence). Emit a fixture's sync verbatim (only reproduces that one group).
+
+---
+
+## D7 — Clip markers via Sm2TiItemLockableBlob (markers, §E)
+
+**Decision.** Export user clip markers from `clip_marker.find_by_clip(clip_id)` as
+`Sm2TiItemLockableBlob` entries in project.xml, byte form derived from
+`markers_16color_edge.drp` per §E. (Identity markers already emit this way —
+`drt_writer.build_identity_marker_element:889` — so the carrier exists; this adds the
+user-marker payload: name/note/keyword/color.) Sequence markers are **out of scope**
+(no JVE model — spec Out of Scope).
+
+**Rationale.** §E (line 179): clip markers live in project.xml `Sm2TiItemLockableBlob/
+FieldsBlob` (110-byte ASCII), not on `Sm2TiVideoClip.MarkersBA`. `clip_markers` table +
+`clip_marker.lua` already store them. §E header layout is partially TBD → a small Phase-0
+decode (offsets for NAME/NOTE/KEYWORD/color) against the fixture.
+
+**Alternatives rejected.** Emit markers on the timeline clip's `MarkersBA` (§E proved
+Resolve ignores that). Invent the blob header (FR-020 violation).
+
+---
+
+## D8 — Byte-equality via member-extraction idiom, not whole-file `==`
+
+**Decision.** FR-005/FR-021 "byte-for-byte where the format is fixed" is realized with the
+existing test idiom: unzip named `.drp`/`.drt` members and assert needle presence /
+occurrence counts / blob-hex lengths (`fixture.unzip_member` + `fixture.plain_count`, e.g.
+`test_drt_writer_media_pool_population.lua`, `test_drt_writer_media_extents.lua` asserts
+`#extents_hex == 32`). Decoded-form blobs assert on the patched byte ranges; file-specific
+fields assert *derivation from media*, fixed-form fields assert *match to fixture*.
+
+**Rationale.** No existing test does whole-file golden `==`; container ordering/timestamps
+make that brittle. Member-extraction is the established, stable oracle and correctly
+distinguishes file-specific (derived) from fixed (matched) fields (FR-012).
+
+**Alternatives rejected.** Whole-file `==` (brittle to zip metadata; conflates derived and
+fixed fields). Live-Resolve import as the gate (forbidden by the contract rule; FR-021
+makes it an optional spot-check only).
+
+---
+
+## Open gate carried into implementation
+
+- **Gap #5 / D1 FieldsBlob linkage-region decode** is the one must-succeed unknown. It is
+  the first implementation task (Phase-0 spike) and its own gate. Gaps #1, #2, #3 and the
+  markers work proceed against decoded fixtures in parallel and satisfy the **interim
+  acceptance gate** (non-synced gold subset, FR-021) independent of D1.

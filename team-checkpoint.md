@@ -488,3 +488,58 @@ feature designed + deferred to a fresh session per Joe —
 todo_drp_import_compound_clips). default-sample-rate warn → benign (logs loud,
 only with zero pool audio). stale-WAL → dev hygiene, not import. Nothing else
 actionable in #6.
+
+---
+
+# Spec-026 Full-Fidelity DRT Export — Planning-Artifact Skeptical Review (2026-06-24)
+
+Branch: `per-channel-audio` (review work; 026 authored on master, no branch cut yet).
+Scope: review the 026 planning docs for architectural correctness before /tasks —
+NOT code changes. Outcome: the plan's central premise was FALSE; corrected across all docs.
+
+## What was wrong, and the proof
+- **Premise killed:** the plan claimed gaps #4 (arbitrary-video descriptors) and #5
+  (synced V↔A linkage) "collapse into one zstd `FieldsBlob` decode." FALSE.
+- **Proof (first-hand byte decode, not docs):** decoded gold
+  `MediaPool/Master/000_master clips/MpFolder.xml` (member name has a SPACE — earlier
+  `awk '{print $4}'` truncation hid it) with the real decoder `drp_binary.decode_tlv_fields`.
+  BtVideoInfo `<Geometry>` is **plaintext-XML hex TLV**; its `Resolution` field =
+  **two big-endian int64s = width × height** (verified across 9 distinct gold resolutions:
+  gold 2048×1152, A005 640×360, etc.). Authorable via `string.format("%016x%016x", w, h)`
+  — the SAME seq-resolution form already at `drt_writer.lua:975`. NOT the LE-double form
+  `drt_binary.encode_resolution` emits, NOT inside the zstd FieldsBlob.
+- **Therefore:** gap #4 = plaintext **encode-and-substitute** (`<Geometry>`/`<TracksBA>`/
+  `<Clip>`/`<Time>`), the existing writer pattern — no spike. Gap #5 (synced linkage in the
+  lone zstd `Sm2MpVideoClip.FieldsBlob`) is the ONE genuinely-undecoded must-succeed spike.
+
+## Compound-descope justification corrected
+- Old justification used an invalid `Sm2MpCompoundClip` string-grep (wrong element name;
+  Resolve's is `Sm2MpTimelineClip`). Re-settled on MODEL evidence: inspected the already-
+  imported `/tmp/jve/anamnesis-gold-timeline.jvp` — GOLD timeline = 2882 clips referencing
+  **555 leaf master clips, ZERO compound placements**; 6 video + 14 audio tracks; 99 clip
+  markers; 35 synced link groups. Descoping compound is correct. Fixed in spec.md (×3),
+  FR-017, Out of Scope, and `todo_026_deferred_compound_and_sequence_markers.md`.
+
+## Docs corrected (all under specs/026-full-fidelity-drt/)
+research.md (new "Current State" code-grounded section + rewrote D1), plan.md (Summary,
+Phase 0/2, Complexity table, Gate Status box, Constitution VII/F1 line, module-tree comment),
+spec.md, data-model.md, contracts/drt-members.md (#4 row), contracts/export-payload.md (C2),
+quickstart.md (Step 2). Final sweep CLEAN — no residual "collapse/patch-at-offsets/#4+#5".
+
+## Durable safeguards written (root cause = planning off DOCS not CODE)
+- Memory `feedback_plan_from_code_not_docs.md` (+ MEMORY.md index): brownfield plans/verdicts
+  must be grounded in first-hand code reads, not spec/phase0 docs or subagent summaries.
+- `.specify/templates/plan-template.md`: added Phase-0 step 0 **BROWNFIELD CODE-GROUNDING
+  GATE** (read touched modules in full, write a "Current State" subsection with file:line
+  citations, tag undecided items `[doc-sourced, unverified — spike resolves]`, subagents
+  may not be the basis for an architectural verdict) + Gate Status checkbox.
+
+## Quarantine that still blocks gold export (for /tasks)
+`drt_writer.author_a005_compatible` (`drt_writer.lua:1080-1084`) hard-asserts every media
+≈23.976fps AND mp4/mov — cannot ingest gold. F1 row in the Complexity table names it.
+
+## State / next
+- 026 docs are review-clean and architecturally grounded. NOT yet committed (review only).
+- Open for Joe: proceed to `/tasks` for 026? Codec-gap scope (fold into FR-010 or defer)?
+- No code touched this session. Working tree per `per-channel-audio` branch unchanged by me
+  except the 026 doc edits + the two memory/template safeguards.

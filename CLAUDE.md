@@ -34,6 +34,7 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite `.jvp` project files. Schema **V11 → V12**: new `clip_grade` + `resolve_bridge_link` (grade + edit fingerprints) tables (no migration — Joe regenerates). Identity is bidirectional: DRP importer adopts the Resolve timeline-item `DbId` as `clip.id` (mirrors `media.id`); outbound DRT carries `clip.id`. Beyond grades, pull Resolve-side edit tweaks back (conflict-aware, undoable). Helper holds a process-local idempotency ledger only (not in `.jvp`). (023-resolve-color-bridge)
 - LuaJIT 2.1 (UI/commands/model), C++17/Qt 6.x (one new binding) + `core.command_manager`, `core.signals`, `models.clip`, `models.track`, `ui.timeline.timeline_panel`, `ui.timeline.view.timeline_view_renderer`, `ui.timeline.view.timeline_view_input`, `core.playback.playback_engine_transport`, `qt_bindings.cpp` (025-five-timeline-ux)
 - SQLite `.jvp` — no schema change (025-five-timeline-ux)
+- LuaJIT 2.1 export layer (`core/resolve_bridge/payload_builder`, `exporters/drt_writer`, `models/media`+`clip_marker`); existing `qt_zstd_*` FFI for the Sm2MpVideoClip FieldsBlob; SQLite `.jvp` read-only, output `.drt` zip; no schema change (026-full-fidelity-drt)
 
 READ ENGINEERING.md
 
