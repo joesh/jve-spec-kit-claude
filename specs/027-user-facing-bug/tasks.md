@@ -131,8 +131,8 @@
   - Acceptance: T006 passes.
 
 - [ ] **T014a** Add a generic zip primitive — recon R confirms no general-purpose zip binding exists today (`qt_zstd_compress` is DRT-specific).
-  - Choose: shell out to `/usr/bin/zip` via the existing `qt_process_*` bindings (spec 023 added these). macOS ships `/usr/bin/zip` by default. Per CLAUDE.md memory `feedback_finder_launched_app_path.md`, use the absolute path.
-  - Create helper module `src/lua/bug_reporter/zip_writer.lua` exporting `M.zip_files(output_path, file_paths) -> ok, errmsg`. Implementation: `qt_process_start_sync("/usr/bin/zip", {"-j", output_path, table.unpack(file_paths)})` (the `-j` flag strips directory components so the zip contains just the basenames). Assert on non-zero exit.
+  - Implementation: `os.execute("/usr/bin/zip -j ...")` (revised from prior plan that called for `qt_process_start_sync` — `qt_process_*` are async + callback-driven, and adding a sync-wait binding just for this one caller would be scope creep). macOS ships `/usr/bin/zip` at a stable absolute path; using the absolute path inside the command line sidesteps the Finder-launched stripped-PATH trap (per CLAUDE.md memory `feedback_finder_launched_app_path.md`). %q-quote every argument so user paths can't escape into shell metacharacters.
+  - Create helper module `src/lua/bug_reporter/zip_writer.lua` exporting `M.zip_files(output_path, file_paths) -> ok, errmsg`. The `-j` flag strips directory components so the zip contains just the basenames. Assert on non-zero exit.
   - Acceptance: a small Lua snippet zips two files; `unzip -l` shows them as flat entries.
 
 - [ ] **T014b** Add `qt_reveal_in_finder` binding.
