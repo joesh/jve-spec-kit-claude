@@ -31,12 +31,22 @@ async function applyMigration() {
     await env.DB.exec(migrationSql.replace(/\s*--[^\n]*\n/g, "").replace(/\n/g, " "));
 }
 
+async function clearR2() {
+    // Per-test R2 reset — vitest-pool-workers's isolated-storage check
+    // asserts every R2 object created in a test is gone by the end.
+    const listed = await env.BUCKET.list();
+    for (const obj of listed.objects) {
+        await env.BUCKET.delete(obj.key);
+    }
+}
+
 export function resetD1BeforeEach() {
     beforeEach(async () => {
         for (const t of DROP_ORDER) {
             await env.DB.exec(`DROP TABLE IF EXISTS ${t}`);
         }
         await applyMigration();
+        await clearR2();
     });
 }
 

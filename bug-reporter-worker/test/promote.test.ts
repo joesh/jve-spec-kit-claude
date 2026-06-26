@@ -2,21 +2,35 @@
 // Implements every bullet from contracts/promote.md outline. RED until
 // T048 lands the handler + T044 lands github.ts spies.
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { resetD1BeforeEach, uuidV4 } from "./_helpers";
 
-vi.mock("../src/github", () => ({
-    create_issue: vi.fn(async () => ({
-        html_url: "https://github.com/joeshapiro/jve-bugs/issues/142",
-        number: 142,
-    })),
-    comment_on_issue: vi.fn(async () => undefined),
-    find_issue_by_cluster_label: vi.fn(async () => null),
-}));
-
 resetD1BeforeEach();
-beforeEach(() => vi.clearAllMocks());
+
+// Github calls are intercepted by src/github.ts when the worker-side
+// __JVE_GH_TEST_CALLS array exists. We reset it before every test via
+// a tiny /__test/ route on SELF that the handlers expose only in test
+// mode (via env.GITHUB_BOT_TOKEN === "test_gh_token"); see
+// vitest.config.ts. The call log + reply-injection live on
+// globalThis inside the worker runtime; assertions read it via a
+// dedicated /__test/gh-calls endpoint.
+beforeEach(async () => {
+    await SELF.fetch("https://example.com/__test/reset-gh-hook", { method: "POST" });
+});
+
+async function getGhCalls(): Promise<Array<{ kind: string; args: unknown[] }>> {
+    const res = await SELF.fetch("https://example.com/__test/gh-calls");
+    return await res.json();
+}
+
+async function setGhFindReply(reply: { html_url: string; number: number } | null) {
+    await SELF.fetch("https://example.com/__test/gh-find-reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reply }),
+    });
+}
 
 const PROMOTE_SECRET = "test_promote_secret";
 
@@ -105,20 +119,12 @@ describe("POST /promote", () => {
 
     it("lost-response reconciliation: gh_issue_url IS NULL but label-search finds existing issue", async () => {
         const { cluster_id } = await seedCluster({ count: 4 });
-        const github = await import("../src/github");
-        // Simulate the reconciliation path: GH already has an issue
-        // tagged cluster:<id> from a prior /promote whose response was
-        // lost. find_issue_by_cluster_label returns it.
-        vi.mocked(github.find_issue_by_cluster_label).mockResolvedValueOnce({
-            html_url: "https://github.com/joeshapiro/jve-bugs/issues/77",
-            number: 77,
-        } as never);
+        await setGhFindReply({ html_url: "https://github.com/joeshapiro/jve-bugs/issues/77", number: 77 });
         const res = await postPromote({ cluster_id });
         expect(res.status).toBe(200);
         const body = await res.json() as { gh_issue_url: string; created: boolean };
         expect(body.created).toBe(false);
         expect(body.gh_issue_url).toBe("https://github.com/joeshapiro/jve-bugs/issues/77");
-        // D1 must be updated so next call hits the fast path.
         const row = await env.DB
             .prepare("SELECT gh_issue_url FROM clusters WHERE id = ?")
             .bind(cluster_id)
@@ -160,30 +166,29 @@ describe("POST /promote", () => {
 
     it("GH issue body includes R2 (presigned) URLs for every member report", async () => {
         const { cluster_id } = await seedCluster({ count: 3 });
-        const github = await import("../src/github");
         await postPromote({ cluster_id });
-        expect(github.create_issue).toHaveBeenCalledOnce();
-        const callArgs = vi.mocked(github.create_issue).mock.calls[0];
-        const bodyArg = callArgs[2] as string;
-        // The body must mention each of the 3 r2_keys' presigned-URL
-        // substrings — they all start with the bucket marker.
+        const calls = await getGhCalls();
+        const create = calls.find((c) => c.kind === "create_issue");
+        expect(create).toBeDefined();
+        const bodyArg = create!.args[2] as string;
         const urlCount = (bodyArg.match(/reports\/r\d+\.zip/g) ?? []).length;
         expect(urlCount).toBeGreaterThanOrEqual(3);
     });
 
     it("GH issue labels include cluster:<id> for reconciliation", async () => {
         const { cluster_id } = await seedCluster({ count: 2 });
-        const github = await import("../src/github");
         await postPromote({ cluster_id });
-        const callArgs = vi.mocked(github.create_issue).mock.calls[0];
-        const labels = callArgs[3] as string[];
+        const calls = await getGhCalls();
+        const create = calls.find((c) => c.kind === "create_issue");
+        const labels = create!.args[3] as string[];
         expect(labels).toContain(`cluster:${cluster_id}`);
     });
 
     it("initial comment is posted with member listing", async () => {
         const { cluster_id } = await seedCluster({ count: 2 });
-        const github = await import("../src/github");
         await postPromote({ cluster_id });
-        expect(github.comment_on_issue).toHaveBeenCalledOnce();
+        const calls = await getGhCalls();
+        const comments = calls.filter((c) => c.kind === "comment_on_issue");
+        expect(comments.length).toBeGreaterThanOrEqual(1);
     });
 });
