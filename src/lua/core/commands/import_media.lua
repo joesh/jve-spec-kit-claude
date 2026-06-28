@@ -17,6 +17,7 @@
 -- @file import_media.lua
 local M = {}
 local Sequence = require("models.sequence")
+local Media = require("models.media")
 local MediaReader = require("media.media_reader")
 local log = require("core.logger").for_area("media")
 local file_browser = require("core.file_browser")
@@ -291,6 +292,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local success_count = 0
         local error_messages = {}
 
+        -- Coalesce per-file media writes into one media_changed signal so
+        -- peak_cache (and every other media_changed listener) sees the new
+        -- masters as a single batch — drives waveform generation on import.
+        Media.begin_batch()
         for i, file_path in ipairs(file_paths) do
             log.event("ImportMedia[%d]: %s", i, tostring(file_path))
 
@@ -314,12 +319,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 audio_media_ref_ids[i]   = result.audio_media_ref_ids
                 media_metadata[i]        = result.metadata
 
+                Media.mark_dirty(result.media_id)
                 success_count = success_count + 1
                 log.event("Imported: %s", file_path)
             else
                 table.insert(error_messages, string.format("Failed to import: %s", file_path))
             end
         end
+        Media.end_batch()
 
         command:set_parameters({
             media_ids             = media_ids,
