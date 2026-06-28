@@ -508,11 +508,17 @@ function M.update_shortcut_display()
     end
 
     local keybindings = keyboard_shortcut_registry.keybindings
-    -- Build reverse map: command_name → first shortcut string
+    -- Build reverse map: command_name → first shortcut string.
+    -- keybindings is {combo_key → array of bindings} (multi-context dispatch:
+    -- same combo can bind different commands per panel scope). Walk the inner
+    -- list, not the outer table.
     local command_shortcuts = {}
-    for _, binding in pairs(keybindings) do
-        if not command_shortcuts[binding.command_name] and binding.shortcut then
-            command_shortcuts[binding.command_name] = binding.shortcut.string
+    for _, bindings in pairs(keybindings) do
+        for _, binding in ipairs(bindings) do
+            if binding.command_name and not command_shortcuts[binding.command_name]
+                and binding.shortcut then
+                command_shortcuts[binding.command_name] = binding.shortcut.string
+            end
         end
     end
 
