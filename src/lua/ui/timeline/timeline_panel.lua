@@ -1350,6 +1350,32 @@ local HDR = {
 -- Sync-mode: cycling order and icon glyphs (unicode stand-ins; proper SVG via QIcon pending)
 local SYNC_CYCLE = { off = "ripple", ripple = "cut", cut = "off" }
 local SYNC_ICONS = { off = "🚫", ripple = "∿", cut = "/" }
+-- One-line per-mode behavior copy used inside the sync-mode tooltip. Keep
+-- in sync with SYNC_CYCLE: every key here must be a cycle state.
+local SYNC_MODE_DESCRIPTIONS = {
+    ripple = "ripple downstream clips",
+    cut    = "cut clip, ripple downstream clips",
+    off    = "leave this track alone",
+}
+
+-- Build the sync-mode button tooltip by walking SYNC_CYCLE in cycle order
+-- starting from "off". Keeps tooltip copy consistent with the actual cycle
+-- order and per-mode behavior table (no drift if a mode is added/renamed).
+local function build_sync_mode_tooltip()
+    local lines = { "Ripple-sync mode (click cycles, ⌥-click isolates):" }
+    local mode = "off"
+    repeat
+        local icon = assert(SYNC_ICONS[mode],
+            "build_sync_mode_tooltip: missing SYNC_ICONS[" .. mode .. "]")
+        local desc = assert(SYNC_MODE_DESCRIPTIONS[mode],
+            "build_sync_mode_tooltip: missing SYNC_MODE_DESCRIPTIONS[" .. mode .. "]")
+        lines[#lines + 1] = string.format("  %s  %s — %s", icon, mode, desc)
+        mode = assert(SYNC_CYCLE[mode],
+            "build_sync_mode_tooltip: SYNC_CYCLE[" .. mode .. "] missing")
+    until mode == "off"
+    return table.concat(lines, "\n")
+end
+local SYNC_MODE_TOOLTIP = build_sync_mode_tooltip()
 
 local function build_sm_btn_stylesheet(active, active_color)
     if active and active_color then
@@ -1541,6 +1567,8 @@ local function add_sm_stack_to_layout(header_layout, track, track_id)
     qt_constants.PROPERTIES.SET_MIN_WIDTH(mute_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(mute_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_STYLE(mute_btn, build_sm_btn_stylesheet(track.muted, color("STATE_MUTE")))
+    qt_constants.PROPERTIES.SET_TOOLTIP(mute_btn,
+        "Mute. ⌥-click: isolate (mute all other tracks of this kind).")
     qt_constants.LAYOUT.ADD_WIDGET(sm_layout, mute_btn)
     wire_toggle_preference(mute_btn, track_id, "muted", color("STATE_MUTE"))
 
@@ -1548,6 +1576,8 @@ local function add_sm_stack_to_layout(header_layout, track, track_id)
     qt_constants.PROPERTIES.SET_MIN_WIDTH(solo_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(solo_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_STYLE(solo_btn, build_sm_btn_stylesheet(track.soloed, color("STATE_SOLO")))
+    qt_constants.PROPERTIES.SET_TOOLTIP(solo_btn,
+        "Solo. ⌥-click: clear solo on all other tracks of this kind.")
     qt_constants.LAYOUT.ADD_WIDGET(sm_layout, solo_btn)
     wire_toggle_preference(solo_btn, track_id, "soloed", color("STATE_SOLO"))
 
@@ -2170,6 +2200,8 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(src_btn, HDR.SRC)
         qt_constants.PROPERTIES.SET_STYLE(src_btn,
             build_id_btn_stylesheet(false, source_tab_color))
+        qt_constants.PROPERTIES.SET_TOOLTIP(src_btn,
+            "Source patch. Click toggles route on/off; drag to another rec row to re-route.")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
         -- rec-id button shows this record track's stable routing identity
@@ -2182,6 +2214,8 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(rec_btn, HDR.REC)
         qt_constants.PROPERTIES.SET_STYLE(rec_btn,
             build_id_btn_stylesheet(true, selection_color))
+        qt_constants.PROPERTIES.SET_TOOLTIP(rec_btn,
+            "Record track (V1/A1…). Click toggles auto-select. Drop target for source-patch drags.")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
 
         wire_patch_buttons(src_btn, rec_btn, seq_id, track.id,
@@ -2241,6 +2275,8 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(lock_btn, HDR.LOCK)
         qt_constants.PROPERTIES.SET_STYLE(lock_btn,
             build_track_header_btn_stylesheet(track.locked, color("STATE_LOCK")))
+        qt_constants.PROPERTIES.SET_TOOLTIP(lock_btn,
+            "Lock. ⌥-click: isolate (lock all other tracks of this kind).")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
         wire_toggle_preference(lock_btn, captured_track_id, "locked", color("STATE_LOCK"))
 
@@ -2250,6 +2286,7 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(sync_btn, HDR.SYNC)
         qt_constants.PROPERTIES.SET_STYLE(sync_btn,
             build_sync_mode_btn_stylesheet(track.sync_mode))
+        qt_constants.PROPERTIES.SET_TOOLTIP(sync_btn, SYNC_MODE_TOOLTIP)
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, sync_btn)
         wire_sync_mode_cycle(sync_btn, captured_track_id)
     end
@@ -2274,6 +2311,8 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.PROPERTIES.SET_STYLE(wave_btn,
             build_track_header_btn_stylesheet(
                 track_state.get_waveform_enabled(captured_track_id), color("STATE_WAVEFORM")))
+        qt_constants.PROPERTIES.SET_TOOLTIP(wave_btn,
+            "Show audio waveforms. ⌥-click: apply to all audio tracks.")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, wave_btn)
         wire_waveform_display_toggle(wave_btn, captured_track_id)
         cells[#cells + 1] = "wave"
@@ -4199,6 +4238,25 @@ function M.get_track_header_layout_for_test(track_id)
         lock_kind       = refs.lock_kind,
         label_text      = refs.label_text,
         sm_width        = refs.sm_width,
+    }
+end
+
+--- TEST-ONLY: return raw header-button widget handles for a track so test
+--- code can read intrinsic widget properties (tooltips, styles). wave_btn
+--- is nil on video rows.
+function M.get_track_header_buttons_for_test(track_id)
+    assert(track_id and track_id ~= "",
+        "get_track_header_buttons_for_test: track_id required")
+    local refs = track_button_refs[track_id]
+    if not refs then return nil end
+    return {
+        mute_btn      = refs.mute_btn,
+        solo_btn      = refs.solo_btn,
+        lock_btn      = refs.lock_btn,
+        sync_mode_btn = refs.sync_mode_btn,
+        src_btn       = refs.src_btn,
+        rec_btn       = refs.rec_btn,
+        wave_btn      = refs.wave_btn,
     }
 end
 
