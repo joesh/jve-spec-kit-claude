@@ -72,4 +72,19 @@ local whole_only = author_in_element(312)
 assert(whole_only == "<In>312</In>", string.format(
     "whole-frame <In> regressed: got %s, want <In>312</In>", whole_only))
 
+-- Large-offset sample exactness. Intuition says splitting a large combined
+-- double (whole + frac) loses the fraction — it does NOT: for whole ≤ X <
+-- whole+1 the subtraction X-whole is exact (Sterbenz), and whole+frac
+-- reconstructs X. A ~1-hour-in audio source-in (frame-domain float, off the
+-- frame grid) must therefore still reconstruct to the EXACT sample.
+local FPS, RATE = 24, 48000
+local samples_in = 172800001                 -- ~1 h at 48 kHz, off the frame grid
+local big = author_in_element(samples_in * FPS / RATE)
+local w, h = big:match("^<In>(%d+)|(%x+)</In>$")
+assert(w and h, "large offset must emit the pipe form, got " .. big)
+local recon_samples = math.floor(
+    (tonumber(w) + dec.decode_hex_double(h)) * RATE / FPS + 0.5)
+assert(recon_samples == samples_in, string.format(
+    "large-offset sample drift: in=%d reconstructed=%d", samples_in, recon_samples))
+
 print("✅ test_drt_subframe_audio_in.lua passed")

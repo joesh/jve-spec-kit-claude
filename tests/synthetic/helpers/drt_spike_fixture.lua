@@ -145,6 +145,13 @@ end
 -- The only real Sm2MpAudioClip fixture is resolve_authored_full.drp's
 -- test_click_48k_stereo.wav. These canonical values reproduce its media-pool
 -- item byte-for-byte (Clip blob path/date/mtime, TracksBA rate/channels/dur).
+--
+-- TEST_CLICK_PATH is LOAD-BEARING and intentionally absolute (NOT
+-- resolve_repo_root()-relative like A005_PATH): the committed reference fixture
+-- drt_canonical/full_reference_mp_audio_clip.xml encodes this exact path inside
+-- its Clip blob, and the byte-equality tests compare against those Resolve-
+-- authored bytes. Changing this path requires regenerating that fixture from
+-- Resolve on the new path — it is not a free-floating string.
 M.TEST_CLICK_PATH =
     "/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/media/test_click_48k_stereo.wav"
 M.TEST_CLICK_UUID            = "50b4735c-1053-4964-99cb-142c85df11c9"

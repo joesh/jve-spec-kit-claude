@@ -122,16 +122,32 @@ local AUDIO_TEMPLATE_BT_AUDIO_INFO_DBID = "b019fbcd-0619-4ce1-badf-f99eaba53431"
 
 -- MP-item <VirtualAudioTracksBA> is a per-channel-count CONSTANT, not media-
 -- derived (research D4a + reference_026_mp_item_vatba_per_channel_constant).
--- The reference template carries the STEREO form inline; the MONO form below
--- is Resolve's standalone-mono output map, byte-identical across all 12 mono
--- WAVs in anamnesis-gold-timeline.drp. Any other channel count has no fixture
--- and loud-fails (FR-019) — never synthesized.
+-- Both forms are verbatim Resolve-authored bytes; the builder ALWAYS replaces
+-- the template's value with the channel-count-selected constant (so a template
+-- regen can't silently change the emitted bytes), and loud-fails any count
+-- without a fixture (FR-019 — never synthesized).
+--   mono   = Resolve's standalone-mono output map, byte-identical across all 12
+--            mono WAVs in anamnesis-gold-timeline.drp.
+--   stereo = test_click_48k_stereo.wav in resolve_authored_full.drp (also the
+--            value inline in full_reference_mp_audio_clip.xml).
 local MP_VIRTUAL_AUDIO_TRACKS_BA_MONO =
     "00000001000000010000000200300000000c0000000074000000010000000200" ..
     "000014004300680061006e006e0065006c0073004200410000000c000000002c" ..
     "0000000200000009000040010000800140000000400000004000000040000000" ..
     "400000004000000040000000000000120041007500640069006f005400790070" ..
     "0065000000020000000109"
+local MP_VIRTUAL_AUDIO_TRACKS_BA_STEREO =
+    "00000001000000020000000200310000000c0000000054000000010000000200" ..
+    "000014004300680061006e006e0065006c0073004200410000000c000000000c" ..
+    "000000020000000100004002000000120041007500640069006f005400790070" ..
+    "00650000000200000000010000000200300000000c000000005400000001000000" ..
+    "0200000014004300680061006e006e0065006c0073004200410000000c00000000" ..
+    "0c000000020000000100004001000000120041007500640069006f005400790070" ..
+    "0065000000020000000001"
+local MP_VIRTUAL_AUDIO_TRACKS_BA_BY_CHANNELS = {
+    [1] = MP_VIRTUAL_AUDIO_TRACKS_BA_MONO,
+    [2] = MP_VIRTUAL_AUDIO_TRACKS_BA_STEREO,
+}
 
 -- ─── UUID minting ───────────────────────────────────────────────────────────
 --
@@ -926,25 +942,21 @@ local function build_media_pool_audio_item(media, dbids, state)
         tpl = plain_gsub_required(tpl, AUDIO_TEMPLATE_NAME, name)
     end
 
-    -- VirtualAudioTracksBA = the channel-count-selected constant. Stereo is the
-    -- template's own value (leave it); mono is replaced with the anamnesis-gold
-    -- constant; any other count has no fixture → loud-fail (no invented bytes).
-    if media.num_channels == 1 then
-        local n
-        tpl, n = tpl:gsub(
-            "<VirtualAudioTracksBA>[0-9a-f]+</VirtualAudioTracksBA>",
-            "<VirtualAudioTracksBA>" .. MP_VIRTUAL_AUDIO_TRACKS_BA_MONO
-                .. "</VirtualAudioTracksBA>", 1)
-        assert(n == 1, "drt_writer.build_media_pool_audio_item: failed to "
-            .. "substitute mono VirtualAudioTracksBA — template changed?")
-    else
-        assert(media.num_channels == 2, string.format(
-            "drt_writer.build_media_pool_audio_item: only mono/stereo standalone "
-            .. "audio is attested by a Resolve fixture; got %d channels for %s "
-            .. "(FR-019 — VirtualAudioTracksBA is not synthesized)",
-            media.num_channels, media.file_path))
-        -- num_channels == 2: the template VirtualAudioTracksBA is the stereo form.
-    end
+    -- VirtualAudioTracksBA = the channel-count-selected fixture constant, always
+    -- substituted (never trust the template's inline value). No fixture for a
+    -- count → loud-fail (FR-019, no invented bytes).
+    local vatba = MP_VIRTUAL_AUDIO_TRACKS_BA_BY_CHANNELS[media.num_channels]
+    assert(vatba, string.format(
+        "drt_writer.build_media_pool_audio_item: only mono/stereo standalone "
+        .. "audio is attested by a Resolve fixture; got %d channels for %s "
+        .. "(FR-019 — VirtualAudioTracksBA is not synthesized)",
+        media.num_channels, media.file_path))
+    local vatba_replaced
+    tpl, vatba_replaced = tpl:gsub(
+        "<VirtualAudioTracksBA>[0-9a-f]+</VirtualAudioTracksBA>",
+        "<VirtualAudioTracksBA>" .. vatba .. "</VirtualAudioTracksBA>", 1)
+    assert(vatba_replaced == 1, "drt_writer.build_media_pool_audio_item: failed "
+        .. "to substitute VirtualAudioTracksBA — template structure changed?")
 
     -- TracksBA — substitute the media's sample-domain shape into the reference.
     local ref_tracks = assert(tpl:match("<TracksBA>([0-9a-f]+)</TracksBA>"),
