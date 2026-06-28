@@ -147,26 +147,43 @@ function M.create_project_from_template(template, project_name, dest_path)
     assert(dest_path and dest_path ~= "",
         "project_templates.create_project_from_template: dest_path required")
 
-    -- Pre-flight: refuse if the .jvp OR any SQLite sidecar (-wal, -shm,
-    -- -journal) exists at the destination. Orphan sidecars from a previously-
-    -- deleted .jvp will cause SQLite to throw a confusing "disk image is
-    -- malformed" or "file is not a database" when set_path opens the freshly
-    -- copied template — list every blocker by name so the user can decide
-    -- what to clean up.
+    -- Prep the destination — the ONLY guarantee callers need is "after this
+    -- block, dest_path is a clean slot to copy a template into". Three cases:
+    --   1. .jvp exists                 → refuse (real project there).
+    --   2. .jvp missing, pidlock alive → refuse (another JVE has the project
+    --      open even though its .jvp was unlinked under it — extremely rare
+    --      .app-unlink case but real on macOS).
+    --   3. .jvp missing, no live owner → sidecars (-wal, -shm, -journal,
+    --      -jve-pidlock) are orphans by definition and cannot point at any
+    --      meaningful database. Delete them; otherwise sqlite3.open would
+    --      replay an unrelated WAL against the freshly-copied template and
+    --      we'd land at "no sequence found after identity update" below.
+    -- This prep used to live in new_project.lua. Hoisted here so EVERY caller
+    -- — current dialog, future scripted creates, tests — gets the same
+    -- guarantee, and the dialog can't accidentally bypass it.
     local function path_exists(p)
         local f = io.open(p, "rb")
         if f then f:close(); return true end
         return false
     end
-    local blockers = {}
-    for _, suffix in ipairs({"", "-wal", "-shm", "-journal"}) do
-        if path_exists(dest_path .. suffix) then
-            table.insert(blockers, dest_path .. suffix)
+    assert(not path_exists(dest_path),
+        "project_templates.create_project_from_template: project already exists at "
+        .. dest_path)
+    local project_open = require("core.project_open")
+    assert(not project_open.another_jve_owns_project(dest_path),
+        "project_templates.create_project_from_template: another JVE process has "
+        .. "this project open (per pidlock at " .. dest_path .. "-jve-pidlock). "
+        .. "Quit that instance first.")
+    for _, suffix in ipairs({"-wal", "-shm", "-journal", "-jve-pidlock"}) do
+        local p = dest_path .. suffix
+        if path_exists(p) then
+            local ok_rm, rm_err = os.remove(p)
+            assert(ok_rm,
+                "project_templates.create_project_from_template: failed to clean "
+                .. "orphan sidecar " .. p .. ": " .. tostring(rm_err))
+            log.event("project_templates: removed orphan sidecar %s", p)
         end
     end
-    assert(#blockers == 0,
-        "project_templates.create_project_from_template: cannot create — "
-        .. "destination paths already exist:\n  " .. table.concat(blockers, "\n  "))
 
     -- Get (or generate) template .jvp
     local src_path = M.get_template_path(template)

@@ -130,23 +130,31 @@ print("  test: create_project_from_template rejects existing dest")
 database.init(setup_db_path)
 local ok2, err2 = pcall(project_templates.create_project_from_template, template, "Dup", dest)
 assert(not ok2, "should reject existing dest")
-assert(tostring(err2):find("destination paths already exist"), "wrong error: " .. tostring(err2))
+assert(tostring(err2):find("project already exists"), "wrong error: " .. tostring(err2))
 
 -- ===========================================================================
--- Test 6b: orphan SQLite sidecars (-wal/-shm/-journal) at the destination
---          must block creation with the same listing — they would otherwise
---          corrupt the freshly-copied template on first open.
+-- Test 6b: orphan SQLite sidecars (-wal/-shm/-journal/-jve-pidlock) at the
+--          destination must be silently cleaned by create_project_from_template
+--          so they can't corrupt the freshly-copied template on first open.
+--          (Joe 2026-06-27: "if .jvp is gone and no live owner, why keep
+--           the files at all?" — orphans get deleted, not preserved.)
 -- ===========================================================================
-print("  test: create_project_from_template rejects orphan sidecars")
+print("  test: create_project_from_template cleans orphan sidecars")
 database.init(setup_db_path)
 local orphan_dest = TMP_DIR .. "/Orphan.jvp"
-local wal = io.open(orphan_dest .. "-wal", "wb")
-assert(wal, "test setup: failed to create orphan -wal")
-wal:write("stale"); wal:close()
-local ok3, err3 = pcall(project_templates.create_project_from_template, template, "Orphan", orphan_dest)
-os.remove(orphan_dest .. "-wal")  -- cleanup before asserting
-assert(not ok3, "should reject orphan -wal sidecar")
-assert(tostring(err3):find("Orphan.jvp%-wal"), "expected -wal listed: " .. tostring(err3))
+for _, suffix in ipairs({"-wal", "-shm", "-journal", "-jve-pidlock"}) do
+    local fh = io.open(orphan_dest .. suffix, "wb")
+    assert(fh, "test setup: failed to create orphan " .. suffix)
+    fh:write("stale"); fh:close()
+end
+local result3 = project_templates.create_project_from_template(template, "Orphan", orphan_dest)
+assert(result3 and result3.project_id, "should create successfully after cleaning orphans")
+-- The orphan sidecars must be gone; SQLite may have created fresh -wal/-shm
+-- during the open, but they belong to the NEW project, not the stale data.
+for _, suffix in ipairs({"-journal", "-jve-pidlock"}) do
+    assert(not io.open(orphan_dest .. suffix, "rb"),
+        "orphan " .. suffix .. " sidecar should have been removed")
+end
 
 -- ===========================================================================
 -- Test 7: self-healing — delete template .jvp, get_template_path regenerates

@@ -161,42 +161,9 @@ function M.show_dialog(parent_window)
         -- Build dest path
         local dest_path = location .. "/" .. name .. ".jvp"
 
-        -- Pre-flight the destination.
-        --   1. .jvp exists                 → refuse (real project there).
-        --   2. .jvp missing, pidlock alive → refuse (a JVE has the project
-        --      open even though its .jvp was unlinked under it — extremely
-        --      rare but real on macOS where open fds survive unlink).
-        --   3. .jvp missing, no live owner → sidecars (-wal, -shm, -journal)
-        --      are orphans and cannot point at any meaningful database.
-        --      Delete them silently and proceed; otherwise SQLite would
-        --      try to replay an unrelated WAL against the freshly-copied
-        --      template and surface "disk image is malformed".
-        local function path_exists(p)
-            local fh = io.open(p, "rb")
-            if fh then fh:close(); return true end
-            return false
-        end
-        if path_exists(dest_path) then
-            qt.PROPERTIES.SET_TEXT(error_label, "Project already exists: " .. name .. ".jvp")
-            return
-        end
-        local project_open = require("core.project_open")
-        if project_open.another_jve_owns_project(dest_path) then
-            qt.PROPERTIES.SET_TEXT(error_label,
-                "Another JVE process has this project open (per pidlock). "
-                .. "Quit that instance, then try again.")
-            return
-        end
-        for _, suffix in ipairs({"-wal", "-shm", "-journal", "-jve-pidlock"}) do
-            local p = dest_path .. suffix
-            if path_exists(p) then
-                local ok_rm, rm_err = os.remove(p)
-                assert(ok_rm,
-                    "new_project: failed to clean orphan sidecar " .. p
-                    .. ": " .. tostring(rm_err))
-                log.event("new_project: removed orphan sidecar %s", p)
-            end
-        end
+        -- Destination prep (refuse-if-real / refuse-if-locked / clean-orphan-
+        -- sidecars) lives inside create_project_from_template so every caller
+        -- gets the same guarantees. Dialog just surfaces the result.
 
         local ok_mkdir, mkdir_err = qt_fs_mkdir_p(location)
         assert(ok_mkdir, "new_project: mkdir " .. location .. " failed: " .. tostring(mkdir_err))
