@@ -106,6 +106,10 @@ function M.show_dialog(parent_window)
     -- -----------------------------------------------------------------------
     local error_label = qt.WIDGET.CREATE_LABEL("")
     qt.PROPERTIES.SET_STYLE(error_label, "color: " .. ui_constants.COLORS.TEXT_ERROR .. ";")
+    -- Wrap long messages within the existing dialog width instead of
+    -- letting the label grow the dialog horizontally (e.g. the "Failed:"
+    -- path-prefixed assert messages that would otherwise extend off-screen).
+    qt.CONTROL.SET_WORD_WRAP(error_label, true)
     qt.LAYOUT.ADD_WIDGET(main_layout, error_label)
 
     -- -----------------------------------------------------------------------
@@ -203,7 +207,14 @@ function M.show_dialog(parent_window)
             template, name, dest_path)
 
         if not ok then
-            qt.PROPERTIES.SET_TEXT(error_label, "Failed: " .. tostring(result_or_err))
+            -- Surface a clean message: strip the leading "file:line: " that
+            -- Lua's error() / assert() prepend so the user sees the actual
+            -- explanation rather than the path inside the .app bundle. Full
+            -- raw message still goes to the log for debugging.
+            local raw = tostring(result_or_err)
+            log.error("NewProject create failed: %s", raw)
+            local clean = raw:gsub("^.-:%d+:%s*", "")
+            qt.PROPERTIES.SET_TEXT(error_label, "Could not create project: " .. clean)
             return
         end
 
