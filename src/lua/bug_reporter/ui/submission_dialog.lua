@@ -17,6 +17,28 @@ local log = require("core.logger").for_area("ui")
 
 local M = {}
 
+local function build_privacy_preview_text()
+    local install = require("bug_reporter.install")
+    local rec = install.read()
+    -- FR-005: surface what's about to ship. install_id.json is the
+    -- single source of truth for the per-install fields; we render
+    -- them so the user can audit before clicking Submit.
+    local lines = {
+        "What will be sent with this report:",
+        "  • Title + description (this dialog)",
+        "  • capture.json: gestures, commands, log lines from the last 5 minutes",
+        "    (file/user paths are redacted to ~/<user>/ before sending)",
+        "  • slideshow.mp4: ~5 minutes of 1 Hz screenshots (unless Text-only is checked)",
+        "  • Install identity, JVE build SHA, hardware snapshot",
+        "      (all set once at first launch; visible in ~/.jve/install_id.json)",
+    }
+    if rec then
+        lines[#lines + 1] = string.format("  • install_id: %s", rec.install_id)
+        lines[#lines + 1] = string.format("  • jve_sha:    %s", rec.jve_sha_at_register or "(unknown)")
+    end
+    return table.concat(lines, "\n")
+end
+
 local function build_widgets(state, vbox)
     local title_label = qt.CREATE_LABEL("Title (required):")
     qt.LAYOUT_ADD_WIDGET(vbox, title_label)
@@ -31,6 +53,13 @@ local function build_widgets(state, vbox)
     -- FR-006: Text-only opt-out.
     local text_only_cb = qt.CREATE_CHECKBOX("Text only (exclude slideshow video)")
     qt.LAYOUT_ADD_WIDGET(vbox, text_only_cb)
+
+    -- FR-005: privacy preview pane. Read-only summary of what the
+    -- report will carry. Keeps the user informed without forcing
+    -- them to introspect ~/.jve/ or read the consent text again.
+    local preview = qt.CREATE_TEXT_EDIT(build_privacy_preview_text())
+    qt.SET_WIDGET_PROPERTY(preview, "readOnly", true)
+    qt.LAYOUT_ADD_WIDGET(vbox, preview)
 
     local status_label = qt.CREATE_LABEL("")
     qt.LAYOUT_ADD_WIDGET(vbox, status_label)
