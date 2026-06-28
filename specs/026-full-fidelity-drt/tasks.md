@@ -75,11 +75,14 @@ All are NEW separate files → `[P]` among themselves (T009 excepted — needs T
   `tests/synthetic/binding/test_drt_video_codec.lua`. Assert the writer emits the `<Clip>`
   `f5` four-CC from `media.codec` (drive a non-`avc1` value through and see it in the blob),
   NOT the hard-coded `avc1`/`AAC`. `encode_bt_clip_blob` `codec` param (`drt_binary.lua:455`).
-- [ ] **T007** [P] RED test codec import decode in
-  `tests/synthetic/lua/test_drp_clip_codec_decode.lua`. Assert
-  `drp_binary.decode_bt_clip_path` (extended) returns the `<Clip>` `f5` codec alongside the
-  path, on a real gold clip blob (`f5=codec` documented at `drt_binary.lua:421`). Without
-  this, `media.codec` stays empty (verified empty for all 945 gold media).
+- [X] **T007** DONE 2026-06-28. Codec import-decode test
+  `tests/synthetic/binding/test_drp_clip_codec_decode.lua` (NOT lua/ — it's a **binding**
+  test: the video Clip blob is zstd-COMPRESSED, so decode needs `decode_fields_blob`'s C++
+  zstd binding). Asserts the new `drp_binary.decode_bt_clip_codec` reads f5: video="avc1"
+  (compressed blob), embedded audio="AAC", standalone audio="Linear PCM" — three distinct
+  real codecs, so a constant can't pass. (Design change vs original plan: a SEPARATE
+  decompress-based decoder, not extending raw-byte `decode_bt_clip_path` — Joe's call
+  2026-06-28; see [[reference_026_video_clip_blob_compressed]].)
 - [ ] **T008** [P] RED test markers (FR-015/016) in
   `tests/synthetic/binding/test_drt_clip_markers.lua`. Assert one `Sm2TiItemLockableBlob`
   per clip marker carrying NAME/NOTE/KEYWORD/color at §E offsets; 16-color enum honored;
@@ -119,6 +122,15 @@ All are NEW separate files → `[P]` among themselves (T009 excepted — needs T
   native_rate` (`:530`) + `MediaFrameRate = native_rate` (`:573`) already produce the fixture
   bytes once T011/T012 feed frame-domain audio values. Verify against the RED test; only touch the
   writer if a genuine audio-specific divergence shows up (D10 expects none). → confirms GREEN T002.
+- [X] **T013a** `drt_writer.build_in_element` (FR-003): emit the sub-frame `<In>` form
+  `<frames>|<hex LE-double fraction>` when a clip's `in_offset` is non-integer (an audio
+  source-in off the frame boundary). Was a loud integer-only assert (deliberate D10
+  trip-wire); now emits the fractional form — whole frame as decimal, fractional part as a
+  16-hex LE IEEE-754 double, joined by `|`. Byte-grounded against `retime-test.drt`
+  (`<In>447|00f05d74d145e73f</In>`, phase0-findings §C); the importer's `parse_resolve_tracks`
+  already decodes this same form, so the round-trip is symmetric. Test:
+  `tests/synthetic/binding/test_drt_subframe_audio_in.lua`. RESOLVED
+  [[todo_026_subframe_audio_in_encoding]].
 
 ### Gap #3 — payload-driven routing (FR-007/008/009)
 > **Import-side prerequisite discovered during impl (not in original task list).** Routing
@@ -178,26 +190,37 @@ byte-equal to fixture w/ `test_drt_audio_tracks_ba.lua`). Builder/dispatch/produ
   present); `kind="audio"` currently **loud-fails** naming gap #2/T017 (honest "not yet
   implemented" at the right layer — no longer routes a .wav through the video builder's
   .mp4/.mov reject). Dedup by source-clip identity is the existing media_refs identity (D4).
-- [ ] **T017** `drt_writer.lua` (after T016): add `build_media_pool_audio_item` →
-  `Sm2MpAudioClip` from the reference XML (identity gsub + `substitute_audio_tracks_ba` for
-  rate/channels/duration + `encode_bt_clip_blob` for the path); replace the dispatch's
-  audio loud-fail with it; accept `.wav`; **loud-fail** unhandled audio type naming the file
-  (FR-019).
-  → GREEN T003. **Clip-blob tail RESOLVED 2026-06-27** (was flagged as opaque residue): it
+- [X] **T017** DONE 2026-06-27. `drt_writer.build_media_pool_audio_item` authors the
+  `Sm2MpAudioClip` from `full_reference_mp_audio_clip.xml` (identity-DbId/Name gsub +
+  `substitute_audio_tracks_ba` for rate/channels/duration + `encode_bt_clip_blob` audio-shape
+  for the path/date/mtime); dispatch loud-fail replaced; the `author_a005_compatible`
+  quarantine gate is now **kind-aware** (video still 23.976 mp4/mov; audio routed to the new
+  builder). `.wav` only; **mono + stereo** `VirtualAudioTracksBA` are emitted as the two
+  fixture-attested per-channel-count CONSTANTS (mono = anamnesis-gold ×12 identical, stereo =
+  template); any other ext / channel count **loud-fails** (FR-019 — no invented bytes). Test
+  `test_drt_audio_media_pool_item.lua` (RED→GREEN): byte-equal Clip + TracksBA vs the
+  test_click fixture, child order, mono/stereo VATBA, `.wav`/6-ch loud-fail. **Deferred:**
+  TracksBA `StartTime` stays the borrowed 0 — producer doesn't emit sample-domain
+  `audio_start_tc` yet ([[todo_026_audio_tracksba_starttime]]); fine for zero-origin fixtures.
+  See [[reference_026_mp_item_vatba_per_channel_constant]].
+  **Clip-blob tail RESOLVED 2026-06-27** (was flagged as opaque residue): it
   is the file mtime (f13 µs) + media-type markers (f15/f18). Implemented option (b) — schema
   V19 `media.file_mtime_us`, importer reads it from the Clip blob, `encode_bt_clip_blob`
   re-emits it; byte-equal to the fixture audio Clip payload. Also fixed the video item's
   stale date/mtime. See research D4b. T017 reuses `encode_bt_clip_blob` for the audio path.
 
 ### Gap #4 — arbitrary video descriptors + codec fold-in (FR-010/011/012)
-- [ ] **T018** [P] `src/lua/importers/drp_binary.lua`: extend `decode_bt_clip_path`
-  (`:242`) to also read `<Clip>` `f5` (codec) after path `f1/f2` — return `(path, dir,
-  codec)`. Independent of payload/writer files → **[P]**. (`f5=codec` per `drt_binary.lua:421`.)
-  → GREEN T007.
-- [ ] **T019** `src/lua/importers/importer_core.lua` (after T018): set `media_item.codec`
-  from T018's decode at the DRP media-build site (the `:859/:880` passthrough into
-  `media.codec` already exists). Populates the currently-empty column. Watch ripple:
-  `Media.classify_is_still` consumes `media.codec` (sharpens, doesn't break).
+- [X] **T018** DONE 2026-06-28. Added `drp_binary.decode_bt_clip_codec(hex)` — decompresses
+  the Clip FieldsBlob (`decode_fields_blob`) then walks protobuf f5. **Decompress-based, not a
+  raw-byte extension of `decode_bt_clip_path`** (Joe's call): the VIDEO Clip blob is
+  zstd-compressed, so a raw walk only ever saw the uncompressed audio blob and would have
+  tagged video media with the embedded "AAC". The unified decoder reads avc1 (video), AAC
+  (embedded), Linear PCM (standalone) uniformly. [[reference_026_video_clip_blob_compressed]].
+- [X] **T019** DONE 2026-06-28. `drp_importer.extract_codec(clip_elem)` walks
+  `{BtVideoInfo, BtAudioInfo}` (video codec wins for video clips) → `master_clip.codec` →
+  `entry.codec` passthrough → `importer_core` `media.codec` (the `:880` passthrough already
+  existed). Verified end-to-end: `test_drp_import_media_codec.lua` — video media persists
+  "avc1", standalone audio "Linear PCM". `Media.classify_is_still` now sees a real codec.
 - [ ] **T020** `payload_builder.lua` (after T016): video media item carries its own
   `width/height/frame_rate/codec/embedded_audio` from `media` (FR-010); a required
   descriptor field absent → assert (1.14/2.13), never borrow.

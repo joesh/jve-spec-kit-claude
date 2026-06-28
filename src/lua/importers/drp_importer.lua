@@ -331,6 +331,26 @@ local function extract_file_mtime_us(clip_elem)
     return nil
 end
 
+--- Extract the media codec (e.g. "avc1", "AAC", "Linear PCM") from a media-pool
+--- clip's Clip blob — protobuf field 5 (spec 026 gap #4, FR-010). Walks
+--- CLIP_BLOB_INFO_TAGS in {BtVideoInfo, BtAudioInfo} order, so a video clip
+--- yields its VIDEO codec (BtVideoInfo wins) and an audio-only clip yields its
+--- audio codec. Round-tripped into media.codec so the DRT exporter authors the
+--- real codec instead of a hard-coded "avc1"/"AAC". Returns nil when no Clip
+--- blob carries a decodable codec (caller leaves media.codec empty — 2.13).
+-- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
+-- @return string|nil: codec, or nil if absent
+local function extract_codec(clip_elem)
+    for _, info_tag in ipairs(CLIP_BLOB_INFO_TAGS) do
+        local blob = get_clip_blob_text(clip_elem, info_tag)
+        if blob then
+            local codec = drp_binary.decode_bt_clip_codec(blob)
+            if codec then return codec end
+        end
+    end
+    return nil
+end
+
 --- Extract <OriginalClip> substitution history attached to a timeline clip.
 -- Resolve records the pre-substitution state (e.g., pre-relink path, pre-
 -- replace clip) as a nested <OriginalClip> containing an Sm2Ti*Clip element.
@@ -863,6 +883,10 @@ local function parse_master_clip_element(clip_elem, folder_id)
     -- so a round-tripped media-pool item carries the real file timestamp.
     local file_mtime_us = extract_file_mtime_us(clip_elem)
 
+    -- Media codec from the Clip blob (f5) — populates the previously-empty
+    -- media.codec column; the DRT exporter authors it back (gap #4).
+    local codec = extract_codec(clip_elem)
+
     local master_clip = {
         id = db_id,
         name = name_elem and get_text(name_elem) or "Untitled",
@@ -874,6 +898,7 @@ local function parse_master_clip_element(clip_elem, folder_id)
         file_path = original_path,
         file_tc_seconds = file_tc_seconds,  -- file's container TC origin (seconds since midnight)
         file_mtime_us = file_mtime_us,      -- source-file mtime, µs since epoch (nil if absent)
+        codec = codec,                      -- media codec from Clip blob f5 (nil if absent)
     }
 
     -- Store duration + rate info from blob
@@ -2081,6 +2106,11 @@ local function apply_pmc_metadata(entry, pmc)
     -- so a round-tripped media-pool item carries the real file timestamp (026).
     if pmc.file_mtime_us then
         entry.file_mtime_us = pmc.file_mtime_us
+    end
+
+    -- Media codec from the Clip blob (f5) — populates media.codec (gap #4).
+    if pmc.codec then
+        entry.codec = pmc.codec
     end
 
     -- TC origin. TracksBA.StartTime is the file container TC, shared by the

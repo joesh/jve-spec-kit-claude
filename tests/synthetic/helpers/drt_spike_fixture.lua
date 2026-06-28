@@ -141,4 +141,66 @@ function M.build_a005_payload()
     }
 end
 
+-- ─── Standalone-audio payload (gap #2 / T017) ───────────────────────────────
+-- The only real Sm2MpAudioClip fixture is resolve_authored_full.drp's
+-- test_click_48k_stereo.wav. These canonical values reproduce its media-pool
+-- item byte-for-byte (Clip blob path/date/mtime, TracksBA rate/channels/dur).
+--
+-- TEST_CLICK_PATH is LOAD-BEARING and intentionally absolute (NOT
+-- resolve_repo_root()-relative like A005_PATH): the committed reference fixture
+-- drt_canonical/full_reference_mp_audio_clip.xml encodes this exact path inside
+-- its Clip blob, and the byte-equality tests compare against those Resolve-
+-- authored bytes. Changing this path requires regenerating that fixture from
+-- Resolve on the new path — it is not a free-floating string.
+M.TEST_CLICK_PATH =
+    "/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/media/test_click_48k_stereo.wav"
+M.TEST_CLICK_UUID            = "50b4735c-1053-4964-99cb-142c85df11c9"
+M.TEST_CLICK_SAMPLE_RATE     = 48000
+M.TEST_CLICK_NUM_CHANNELS    = 2
+M.TEST_CLICK_DURATION_SAMPLES = 144000
+M.TEST_CLICK_MTIME_US        = 1775764733195782   -- "Thu Apr  9 12:58:53 2026"
+
+-- A payload with the A005 video clip (keeps SeqContainer/MediaExtents valid)
+-- PLUS one standalone-audio media + an audio clip referencing it, so the
+-- writer authors a real Sm2MpAudioClip media-pool item. `audio_overrides`
+-- patches the audio media (e.g. num_channels = 1 for the mono form).
+function M.build_standalone_audio_payload(audio_overrides)
+    local p = M.build_a005_payload()
+    local audio = {
+        file_uuid        = M.TEST_CLICK_UUID,
+        file_path        = M.TEST_CLICK_PATH,
+        kind             = "audio",
+        native_rate      = M.FR_24,        -- audio timeline clip plays at seq fps
+        duration_frames  = 72,             -- clip MediaTimemapBA span (frames)
+        start_tc_frame   = 0,              -- zero-origin → integer <In>
+        file_mtime_us    = M.TEST_CLICK_MTIME_US,
+        sample_rate      = M.TEST_CLICK_SAMPLE_RATE,
+        num_channels     = M.TEST_CLICK_NUM_CHANNELS,
+        duration_samples = M.TEST_CLICK_DURATION_SAMPLES,
+    }
+    for k, v in pairs(audio_overrides or {}) do audio[k] = v end
+    p.media_refs[#p.media_refs + 1] = audio
+
+    local stereo = audio.num_channels == 2
+    p.sequence.tracks[#p.sequence.tracks + 1] = {
+        type = "audio",
+        clips = {
+            {
+                id             = "33345678-1234-4123-8123-1234567890ab",
+                media_uuid     = audio.file_uuid,
+                sequence_start = M.TC_1H,
+                duration       = 72,
+                source_in      = 0,
+                source_out     = 72,
+                name           = "standalone audio clip",
+                enabled        = true,
+                routing = stereo
+                    and { kind = "stereo", media_track_idx = 0, source_channel = nil }
+                    or  { kind = "mono",   media_track_idx = 0, source_channel = 0 },
+            },
+        },
+    }
+    return p
+end
+
 return M
