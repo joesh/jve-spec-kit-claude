@@ -130,7 +130,23 @@ print("  test: create_project_from_template rejects existing dest")
 database.init(setup_db_path)
 local ok2, err2 = pcall(project_templates.create_project_from_template, template, "Dup", dest)
 assert(not ok2, "should reject existing dest")
-assert(tostring(err2):find("dest already exists"), "wrong error: " .. tostring(err2))
+assert(tostring(err2):find("destination paths already exist"), "wrong error: " .. tostring(err2))
+
+-- ===========================================================================
+-- Test 6b: orphan SQLite sidecars (-wal/-shm/-journal) at the destination
+--          must block creation with the same listing — they would otherwise
+--          corrupt the freshly-copied template on first open.
+-- ===========================================================================
+print("  test: create_project_from_template rejects orphan sidecars")
+database.init(setup_db_path)
+local orphan_dest = TMP_DIR .. "/Orphan.jvp"
+local wal = io.open(orphan_dest .. "-wal", "wb")
+assert(wal, "test setup: failed to create orphan -wal")
+wal:write("stale"); wal:close()
+local ok3, err3 = pcall(project_templates.create_project_from_template, template, "Orphan", orphan_dest)
+os.remove(orphan_dest .. "-wal")  -- cleanup before asserting
+assert(not ok3, "should reject orphan -wal sidecar")
+assert(tostring(err3):find("Orphan.jvp%-wal"), "expected -wal listed: " .. tostring(err3))
 
 -- ===========================================================================
 -- Test 7: self-healing — delete template .jvp, get_template_path regenerates

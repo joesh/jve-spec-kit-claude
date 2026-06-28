@@ -157,11 +157,23 @@ function M.show_dialog(parent_window)
         -- Build dest path
         local dest_path = location .. "/" .. name .. ".jvp"
 
-        -- Check if already exists
-        local check = io.open(dest_path, "rb")
-        if check then
-            check:close()
-            qt.PROPERTIES.SET_TEXT(error_label, "Project already exists: " .. name .. ".jvp")
+        -- Refuse if the .jvp or any SQLite sidecar (-wal, -shm, -journal)
+        -- already exists at the destination. Without the sidecar check,
+        -- create_project_from_template proceeds, copies the template over
+        -- the missing .jvp, and SQLite then attempts to replay an unrelated
+        -- WAL — surfacing as a confusing "disk image is malformed" / "file
+        -- is not a database" error in the dialog. List every blocker by
+        -- name so the user knows what to clean up.
+        local blockers = {}
+        for _, suffix in ipairs({"", "-wal", "-shm", "-journal"}) do
+            local p = dest_path .. suffix
+            local fh = io.open(p, "rb")
+            if fh then fh:close(); table.insert(blockers, name .. ".jvp" .. suffix) end
+        end
+        if #blockers > 0 then
+            qt.PROPERTIES.SET_TEXT(error_label,
+                "Cannot create — these files already exist at the destination:\n  "
+                .. table.concat(blockers, "\n  "))
             return
         end
 

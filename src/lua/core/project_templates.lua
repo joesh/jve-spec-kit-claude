@@ -147,10 +147,26 @@ function M.create_project_from_template(template, project_name, dest_path)
     assert(dest_path and dest_path ~= "",
         "project_templates.create_project_from_template: dest_path required")
 
-    -- Assert dest doesn't already exist
-    local check = io.open(dest_path, "rb")
-    assert(not check,
-        "project_templates.create_project_from_template: dest already exists: " .. dest_path)
+    -- Pre-flight: refuse if the .jvp OR any SQLite sidecar (-wal, -shm,
+    -- -journal) exists at the destination. Orphan sidecars from a previously-
+    -- deleted .jvp will cause SQLite to throw a confusing "disk image is
+    -- malformed" or "file is not a database" when set_path opens the freshly
+    -- copied template — list every blocker by name so the user can decide
+    -- what to clean up.
+    local function path_exists(p)
+        local f = io.open(p, "rb")
+        if f then f:close(); return true end
+        return false
+    end
+    local blockers = {}
+    for _, suffix in ipairs({"", "-wal", "-shm", "-journal"}) do
+        if path_exists(dest_path .. suffix) then
+            table.insert(blockers, dest_path .. suffix)
+        end
+    end
+    assert(#blockers == 0,
+        "project_templates.create_project_from_template: cannot create — "
+        .. "destination paths already exist:\n  " .. table.concat(blockers, "\n  "))
 
     -- Get (or generate) template .jvp
     local src_path = M.get_template_path(template)
