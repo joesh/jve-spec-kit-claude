@@ -6,7 +6,6 @@
 #include <QWidget>
 #include <QPixmap>
 #include <QPainter>
-#include <QPointer>
 #include <QColor>
 #include <QPoint>
 #include <QRect>
@@ -17,20 +16,18 @@
 #include <QWheelEvent>
 #include <QThread>
 #include <QElapsedTimer>
-#include <QList>
 
 namespace bug_reporter {
 
 // Global gesture logger instance
 static GestureLogger* g_gestureLogger = nullptr;
 
-// Feature 027 FR-019: widgets that must be visually redacted in every
-// screenshot before the pixmap reaches the in-memory ring. UI code
-// (e.g. project_browser.lua) marks its tree as sensitive at setup
-// time; lua_grab_window walks this list post-grab and fills each
-// visible widget's rect with solid grey. QPointer auto-nils when the
-// underlying QWidget is destroyed, so stale entries don't crash.
-static QList<QPointer<QWidget>> s_redact_widgets;
+// Feature 027 FR-019/FR-020a: pixel-side redaction policy was moved
+// to Lua (src/lua/bug_reporter/pixmap_redact.lua) per ENGINEERING.md
+// Rule 2.18 (FFI separation). The C++ side now exposes only two thin
+// primitives the policy calls into: qt_widget_geometry_in and
+// qt_pixmap_fill_rect. No widget list, mask color, or painter loop
+// lives in C++ anymore.
 
 //============================================================================
 // Gesture Logger Bindings
@@ -161,27 +158,13 @@ static int lua_grab_window(lua_State* L) {
     QPixmap pixmap = mainWidget->grab();
     qint64 grab_ms = grab_timer.elapsed();
 
-    // FR-019: scrub registered sensitive widget regions out of the
-    // pixmap before it can be stored in the ring. Path strings shown
-    // by project_browser are the canonical leak; UI code marks the
-    // widget via qt_bug_reporter_redact_widget at setup. QPointer
-    // guards against widgets destroyed between mark and grab.
-    if (!s_redact_widgets.isEmpty()) {
-        QPainter painter(&pixmap);
-        const QColor mask(96, 96, 96);
-        for (const QPointer<QWidget>& wp : s_redact_widgets) {
-            QWidget* w = wp.data();
-            if (!w || !w->isVisible()) continue;
-            QPoint topLeft = w->mapTo(mainWidget, QPoint(0, 0));
-            QRect r(topLeft, w->size());
-            painter.fillRect(r, mask);
-        }
-        painter.end();
-    }
+    // Redaction is no longer applied here — see Rule 2.18 note at top
+    // of file. The Lua call site (bug_reporter.init:capture_screenshot)
+    // invokes pixmap_redact.apply(pixmap, mainWidget) between this
+    // return and the ring-buffer insertion.
 
     // 1-minute aggregate logging (master pre-027) — measures the grab
-    // stall ONLY (set before redaction painter pass). Static so the
-    // aggregate spans calls.
+    // stall ONLY. Static so the aggregate spans calls.
     static int capture_count = 0;
     static qint64 total_grab_ms = 0;
     static QElapsedTimer log_timer;
@@ -208,27 +191,57 @@ static int lua_grab_window(lua_State* L) {
     luaL_getmetatable(L, "QPixmap");
     lua_setmetatable(L, -2);
 
+    // Second return: the main window widget the pixmap was grabbed
+    // from. The Lua-side pixmap_redact.apply needs this as the ancestor
+    // for widget-rect coordinate conversion (Rule 2.18 — policy in Lua,
+    // C++ just hands back the geometry root).
+    lua_push_widget(L, mainWidget);
+    return 2;
+}
+
+/**
+ * qt_widget_geometry_in(widget, ancestor) -> {x, y, w, h, visible} | nil
+ * Returns `widget`'s rect mapped into `ancestor`'s coordinate system,
+ * plus its current visibility. nil if either arg is not a widget (lets
+ * the caller decide whether that's an error). Used by the Lua-side
+ * pixmap_redact policy (Rule 2.18) — no list, no painter, no color here.
+ */
+static int lua_widget_geometry_in(lua_State* L) {
+    void* wptr = lua_to_widget(L, 1);
+    void* aptr = lua_to_widget(L, 2);
+    if (!wptr || !aptr) {
+        lua_pushnil(L);
+        return 1;
+    }
+    QWidget* w = static_cast<QWidget*>(wptr);
+    QWidget* ancestor = static_cast<QWidget*>(aptr);
+    QPoint topLeft = w->mapTo(ancestor, QPoint(0, 0));
+    lua_newtable(L);
+    lua_pushinteger(L, topLeft.x()); lua_setfield(L, -2, "x");
+    lua_pushinteger(L, topLeft.y()); lua_setfield(L, -2, "y");
+    lua_pushinteger(L, w->width());  lua_setfield(L, -2, "w");
+    lua_pushinteger(L, w->height()); lua_setfield(L, -2, "h");
+    lua_pushboolean(L, w->isVisible() ? 1 : 0); lua_setfield(L, -2, "visible");
     return 1;
 }
 
 /**
- * qt_bug_reporter_redact_widget(widget)
- * Marks `widget` as visually sensitive — its rect will be filled with
- * solid grey on every subsequent grab_window pixmap. Idempotent for
- * the same QWidget*; the entry self-clears when the widget is destroyed
- * (QPointer). FR-019.
+ * qt_pixmap_fill_rect(pixmap, x, y, w, h, r, g, b)
+ * Opens a QPainter on `pixmap` and fills the given rect with QColor(r,g,b).
+ * Thin FFI — color choice, rect choice, iteration all live in Lua.
  */
-static int lua_bug_reporter_redact_widget(lua_State* L) {
-    void* ptr = lua_to_widget(L, 1);
-    if (!ptr) {
-        return luaL_error(L,
-            "qt_bug_reporter_redact_widget: widget arg required");
-    }
-    QWidget* w = static_cast<QWidget*>(ptr);
-    for (const QPointer<QWidget>& existing : s_redact_widgets) {
-        if (existing.data() == w) return 0;
-    }
-    s_redact_widgets.append(QPointer<QWidget>(w));
+static int lua_pixmap_fill_rect(lua_State* L) {
+    QPixmap** userData = (QPixmap**)luaL_checkudata(L, 1, "QPixmap");
+    int x = luaL_checkinteger(L, 2);
+    int y = luaL_checkinteger(L, 3);
+    int w = luaL_checkinteger(L, 4);
+    int h = luaL_checkinteger(L, 5);
+    int r = luaL_checkinteger(L, 6);
+    int g = luaL_checkinteger(L, 7);
+    int b = luaL_checkinteger(L, 8);
+    QPainter painter(*userData);
+    painter.fillRect(QRect(x, y, w, h), QColor(r, g, b));
+    painter.end();
     return 0;
 }
 
@@ -589,7 +602,9 @@ void registerBugReporterBindings(lua_State* L) {
 
     // Register screenshot functions
     lua_register(L, "grab_window", lua_grab_window);
-    lua_register(L, "qt_bug_reporter_redact_widget", lua_bug_reporter_redact_widget);
+    // FR-020a redaction primitives — policy lives in Lua (Rule 2.18).
+    lua_register(L, "qt_widget_geometry_in", lua_widget_geometry_in);
+    lua_register(L, "qt_pixmap_fill_rect", lua_pixmap_fill_rect);
     // QPixmap dimension + byte-count accessors — feature 027 T010b
     // (byte_count added for capture_manager byte-bound ring, post-rewrite)
     lua_register(L, "qpixmap_width", lua_qpixmap_width);

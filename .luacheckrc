@@ -132,6 +132,8 @@ globals = {
     "install_gesture_logger",
     "set_gesture_logger_enabled",
     "grab_window",
+    "qt_widget_geometry_in",
+    "qt_pixmap_fill_rect",
     "create_timer",
     "post_mouse_event",
     "post_key_event",

@@ -84,8 +84,13 @@ function BugReporter.capture_screenshot()
         return  -- 1 Hz log line dropped per T010b; play-skip is the only quiet behavior worth its own line.
     end
 
-    local pixmap = grab_window()
+    local pixmap, main_widget = grab_window()
     if pixmap then
+        -- FR-020a: pixel-side redaction lives in Lua (Rule 2.18).
+        -- main_widget is the ancestor coord system; grab_window pushed
+        -- it as the 2nd return so the policy doesn't need a separate
+        -- main-window lookup binding.
+        require("bug_reporter.pixmap_redact").apply(pixmap, main_widget)
         capture_manager:capture_screenshot(pixmap)
     end
 end
@@ -127,7 +132,12 @@ function BugReporter.export_capture(metadata)
     return capture_manager:export_capture(metadata)
 end
 
--- Capture bug on error (automatic)
+-- Capture bug on error (automatic). The editor is already unwinding
+-- when this fires — a hard-assert inside the export pipeline would
+-- bury the original error under a secondary bug-reporter crash, so
+-- we pcall the export and route any failure to log.error. Interactive
+-- callers (capture_manual) keep fail-fast semantics; only the crash
+-- path is soft.
 function BugReporter.capture_on_error(error_message, stack_trace)
     local metadata = {
         capture_type = "automatic",
@@ -138,9 +148,10 @@ function BugReporter.capture_on_error(error_message, stack_trace)
         lua_stack_trace = stack_trace
     }
 
-    local json_path, err = BugReporter.export_capture(metadata)
+    local ok, json_path_or_err = pcall(BugReporter.export_capture, metadata)
 
-    if json_path then
+    if ok and json_path_or_err then
+        local json_path = json_path_or_err
         log.event("\n%s", string.rep("=", 60))
         log.event("BUG CAPTURED")
         log.event("%s", string.rep("=", 60))
@@ -151,11 +162,12 @@ function BugReporter.capture_on_error(error_message, stack_trace)
         log.event("  - Screenshots from the session")
         log.event("  - Full error stack trace")
         log.event("%s\n", string.rep("=", 60))
-    else
-        log.error("Auto capture failed: %s", err or "unknown error")
+        return json_path
     end
 
-    return json_path
+    log.error("Auto capture failed during crash unwind: %s",
+        tostring(json_path_or_err))
+    return nil
 end
 
 local function manual_metadata(description, expected_behavior)

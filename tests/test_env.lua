@@ -437,13 +437,19 @@ if not _G.qt_pixmap_byte_count then
     end
 end
 
--- bug_reporter pixmap redaction (feature 027 FR-019). Production
--- registers sensitive widgets so grab_window can fill their rects with
--- grey before the pixmap reaches the ring. Synthetic tests have no
--- live QWidgets and no QPainter; the stub records the registration so
--- a test could assert it happened but otherwise no-ops.
-if not _G.qt_bug_reporter_redact_widget then
-    _G.qt_bug_reporter_redact_widget = function(_widget)
+-- bug_reporter pixmap redaction (feature 027 FR-020a). Policy lives
+-- in Lua (pixmap_redact); C++ exposes two thin FFI primitives. Tests
+-- that don't drive redaction directly still need the bindings present
+-- so a stray pixmap_redact.apply doesn't fail-fast. The geometry stub
+-- returns visible=false so no fills are attempted; tests that DO
+-- exercise the policy override these in their own scope.
+if not _G.qt_widget_geometry_in then
+    _G.qt_widget_geometry_in = function(_widget, _ancestor)
+        return { x = 0, y = 0, w = 0, h = 0, visible = false }
+    end
+end
+if not _G.qt_pixmap_fill_rect then
+    _G.qt_pixmap_fill_rect = function(_pixmap, _x, _y, _w, _h, _r, _g, _b)
         return nil
     end
 end
