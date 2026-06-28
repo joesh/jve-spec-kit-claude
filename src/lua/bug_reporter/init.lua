@@ -106,21 +106,10 @@ function BugReporter.capture_screenshot()
     end
 end
 
--- Update capture_manager to store QPixmap
-local _original_capture_screenshot = capture_manager.capture_screenshot  -- luacheck: ignore (kept for potential future use)
-function capture_manager:capture_screenshot(pixmap)
-    if not self.capture_enabled then
-        return
-    end
-
-    local entry = {
-        timestamp_ms = self:get_elapsed_ms(),
-        image = pixmap  -- QPixmap userdata from Qt
-    }
-
-    table.insert(self.screenshot_ring_buffer, entry)
-    self:trim_buffers()
-end
+-- (capture_manager:capture_screenshot(pixmap) lives on the class —
+-- previously this module monkey-patched a replacement here, which made
+-- ownership of the screenshot pipeline ambiguous and bypassed the
+-- class's byte-bound ring trimming.)
 
 -- Enable/disable entire bug reporter system
 function BugReporter.set_enabled(enabled)

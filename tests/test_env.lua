@@ -427,6 +427,15 @@ if not _G.qt_fs_remove_dir_recursive then
         return true
     end
 end
+-- Stub for capture_manager byte-bound ring (commit C). Production
+-- binding (qt_bindings_bug_reporter.cpp) returns the QPixmap's raw
+-- backing-store size; the stub returns a fixed plausible value so
+-- ring-trim logic exercises in Lua-only tests.
+if not _G.qt_pixmap_byte_count then
+    _G.qt_pixmap_byte_count = function(_pixmap)
+        return 1024 * 1024  -- 1 MB per stubbed pixmap
+    end
+end
 
 -- Lightweight dependency guards for tests
 local function enforce(expected, fn)

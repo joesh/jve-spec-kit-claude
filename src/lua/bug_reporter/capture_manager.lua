@@ -4,16 +4,15 @@
 local log = require("core.logger").for_area("ui")
 local path_utils = require("core.path_utils")
 
--- Configuration constants. Feature 027 T009 adds per-stream count caps
--- so commands/logs/screenshots also stop accumulating once their cap
--- is hit (gesture cap was the only pre-existing one). Without these
--- caps the 5-minute wall window meant nothing for streams that fire
--- fast enough — a stuck render loop could emit thousands of log lines
--- in seconds and the report payload would exceed FR-024a's 10 MB cap.
+-- Per-stream caps prevent burst streams (stuck render loop spamming logs,
+-- rapid redraws spamming screenshots) from blowing the 10 MB payload
+-- cap (FR-024a). Screenshots are bounded by BYTES not COUNT — a single
+-- 4K-monitor pixmap is ~33 MB at 32 bpp, so the prior 300-entry cap
+-- meant up to 10 GB of RSS (pass 1+2 audit #6 HIGH).
 local MAX_GESTURES_IN_BUFFER     = 200
 local MAX_COMMANDS_IN_BUFFER     = 200
 local MAX_LOGS_IN_BUFFER         = 1000
-local MAX_SCREENSHOTS_IN_BUFFER  = 300
+local MAX_SCREENSHOT_BYTES       = 100 * 1024 * 1024  -- 100 MB hard ceiling
 local MAX_CAPTURE_TIME_MINUTES   = 5
 local MAX_CAPTURE_TIME_MS = MAX_CAPTURE_TIME_MINUTES * 60 * 1000  -- 5 minutes = 300000ms
 local SCREENSHOT_INTERVAL_SECONDS = 1
@@ -24,10 +23,11 @@ local CaptureManager = {
     max_gestures    = MAX_GESTURES_IN_BUFFER,
     max_commands    = MAX_COMMANDS_IN_BUFFER,
     max_logs        = MAX_LOGS_IN_BUFFER,
-    max_screenshots = MAX_SCREENSHOTS_IN_BUFFER,
+    max_screenshot_bytes = MAX_SCREENSHOT_BYTES,
     max_time_ms     = MAX_CAPTURE_TIME_MS,
     screenshot_interval_ms = SCREENSHOT_INTERVAL_MS,
     capture_enabled = true,  -- User preference
+    screenshot_bytes_total = 0,
 
     -- Ring buffers
     gesture_ring_buffer = {},
@@ -53,6 +53,7 @@ function CaptureManager:init()
     self.command_ring_buffer = {}
     self.log_ring_buffer = {}
     self.screenshot_ring_buffer = {}
+    self.screenshot_bytes_total = 0
     self.next_gesture_id = 1
     self.next_command_id = 1
 
@@ -124,20 +125,23 @@ function CaptureManager:log_message(level, message)
     self:trim_buffers()
 end
 
--- Capture a screenshot (stores QPixmap reference in memory)
-function CaptureManager:capture_screenshot()
-    if not self.capture_enabled then
-        return
-    end
-
-    -- This will call Qt binding to grab the window
-    -- For now, just log that we would capture
+-- Capture a screenshot. `pixmap` is a QPixmap userdata from the
+-- grab_window binding; init.lua's 1 Hz timer is the production caller.
+-- Stored entries carry the pixmap reference + its byte cost (queried
+-- via qt_pixmap_byte_count). The ring is bounded by total bytes, not
+-- count: a single 4K screenshot is ~33 MB at 32 bpp, so a count cap
+-- alone meant 300 entries × ~33 MB ≈ 10 GB RSS.
+function CaptureManager:capture_screenshot(pixmap)
+    if not self.capture_enabled then return end
+    if not pixmap then return end  -- grab_window returned nil; nothing to store
+    local bytes = qt_pixmap_byte_count(pixmap)
     local entry = {
         timestamp_ms = self:get_elapsed_ms(),
-        image = nil  -- Will be QPixmap from Qt binding
+        image        = pixmap,
+        bytes        = bytes,
     }
-
     table.insert(self.screenshot_ring_buffer, entry)
+    self.screenshot_bytes_total = self.screenshot_bytes_total + bytes
     self:trim_buffers()
 end
 
@@ -198,29 +202,28 @@ function CaptureManager:trim_buffers()
         end
     end
 
-    -- Trim every stream by both wall-age and per-stream count cap so
-    -- bursty streams (logs from a stuck loop, screenshots from rapid
-    -- redraw) can't blow past the 10 MB payload limit (FR-024a).
-    local gesture_remove = count_removals(self.gesture_ring_buffer, cutoff_time, self.max_gestures)
-    batch_remove(self.gesture_ring_buffer, gesture_remove)
+    -- Gestures/commands/logs: bounded by count + wall-age.
+    batch_remove(self.gesture_ring_buffer,
+        count_removals(self.gesture_ring_buffer, cutoff_time, self.max_gestures))
+    batch_remove(self.command_ring_buffer,
+        count_removals(self.command_ring_buffer, cutoff_time, self.max_commands))
+    batch_remove(self.log_ring_buffer,
+        count_removals(self.log_ring_buffer, cutoff_time, self.max_logs))
 
-    local command_remove = count_removals(self.command_ring_buffer, cutoff_time, self.max_commands)
-    batch_remove(self.command_ring_buffer, command_remove)
-
-    local log_remove = count_removals(self.log_ring_buffer, cutoff_time, self.max_logs)
-    batch_remove(self.log_ring_buffer, log_remove)
-
-    -- Screenshots contain QPixmap userdata that may need explicit cleanup.
-    local screenshot_remove = count_removals(self.screenshot_ring_buffer, cutoff_time, self.max_screenshots)
-    local function cleanup_screenshot(entry)
-        -- Attempt to explicitly clean up QPixmap if delete() method exists
-        -- Otherwise rely on Lua GC with __gc metamethod
-        if entry.image and type(entry.image.delete) == "function" then
-            entry.image:delete()
-        end
-        entry.image = nil
+    -- Screenshots: bounded by total BYTES + wall-age. Evict oldest
+    -- entries until both constraints are satisfied. Pixmap memory is
+    -- freed by Lua GC once we drop the last reference (QPixmap's __gc
+    -- metamethod runs delete on the underlying object).
+    while #self.screenshot_ring_buffer > 0 do
+        local head = self.screenshot_ring_buffer[1]
+        local too_old = head.timestamp_ms < cutoff_time
+        local too_big = self.screenshot_bytes_total > self.max_screenshot_bytes
+        if not too_old and not too_big then break end
+        self.screenshot_bytes_total = self.screenshot_bytes_total - (head.bytes or 0)
+        if self.screenshot_bytes_total < 0 then self.screenshot_bytes_total = 0 end
+        head.image = nil  -- drop last Lua-side reference; GC frees the QPixmap
+        table.remove(self.screenshot_ring_buffer, 1)
     end
-    batch_remove(self.screenshot_ring_buffer, screenshot_remove, cleanup_screenshot)
 end
 
 -- Get buffer statistics (for debugging/preferences display)
@@ -245,19 +248,14 @@ function CaptureManager:get_stats()
     }
 end
 
--- Estimate memory usage in MB
+-- Estimate memory usage in MB. Screenshots use the actual byte-count
+-- tracked by capture_screenshot (queried from QPixmap::byte_count);
+-- other streams are small enough that per-entry constants suffice.
 function CaptureManager:estimate_memory_usage()
-    -- Rough estimates:
-    -- - Gesture: ~200 bytes each
-    -- - Command: ~500 bytes each (includes parameters)
-    -- - Log: ~150 bytes each
-    -- - Screenshot: ~100KB each (QPixmap in memory, compressed)
-
-    local gesture_mb = (#self.gesture_ring_buffer * 200) / (1024 * 1024)
-    local command_mb = (#self.command_ring_buffer * 500) / (1024 * 1024)
-    local log_mb = (#self.log_ring_buffer * 150) / (1024 * 1024)
-    local screenshot_mb = (#self.screenshot_ring_buffer * 100000) / (1024 * 1024)
-
+    local gesture_mb    = (#self.gesture_ring_buffer * 200) / (1024 * 1024)
+    local command_mb    = (#self.command_ring_buffer * 500) / (1024 * 1024)
+    local log_mb        = (#self.log_ring_buffer    * 150) / (1024 * 1024)
+    local screenshot_mb = self.screenshot_bytes_total      / (1024 * 1024)
     return gesture_mb + command_mb + log_mb + screenshot_mb
 end
 
@@ -267,20 +265,17 @@ function CaptureManager:set_enabled(enabled)
     log.event("Capture %s", enabled and "enabled" or "disabled")
 end
 
--- Clear all buffers (for testing or user request)
 function CaptureManager:clear_buffers()
-    -- Explicitly clean up QPixmap objects in screenshot buffer
+    -- Drop pixmap refs explicitly so GC can free them ASAP rather
+    -- than waiting for the new table assignment to drop the old one.
     for _, entry in ipairs(self.screenshot_ring_buffer) do
-        if entry.image and type(entry.image.delete) == "function" then
-            entry.image:delete()
-        end
         entry.image = nil
     end
-
     self.gesture_ring_buffer = {}
     self.command_ring_buffer = {}
     self.log_ring_buffer = {}
     self.screenshot_ring_buffer = {}
+    self.screenshot_bytes_total = 0
     log.event("Buffers cleared")
 end
 

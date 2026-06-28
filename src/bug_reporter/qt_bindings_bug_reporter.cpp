@@ -167,6 +167,31 @@ static int lua_qpixmap_height(lua_State* L) {
 }
 
 /**
+ * QPixmap:byte_count() -> integer
+ * Conservative upper bound on the in-RAM cost of this pixmap, computed
+ * from the underlying QImage's sizeInBytes(). Used by capture_manager
+ * to bound the screenshot ring by total bytes rather than count; a
+ * 4K-monitor pixmap is ~33 MB at 32bpp, so the prior 300-entry cap
+ * meant up to 10 GB of RSS — pass 1+2 audit's #6 HIGH finding.
+ */
+static int lua_qpixmap_byte_count(lua_State* L) {
+    QPixmap** userData = (QPixmap**)luaL_checkudata(L, 1, "QPixmap");
+    QPixmap* pm = *userData;
+    if (!pm || pm->isNull()) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+    // toImage() copies; sizeInBytes is on the QImage. width*height*depth/8
+    // is the same number without the copy.
+    qint64 bytes = static_cast<qint64>(pm->width())
+                 * static_cast<qint64>(pm->height())
+                 * static_cast<qint64>(pm->depth() > 0 ? pm->depth() : 32)
+                 / 8;
+    lua_pushinteger(L, bytes);
+    return 1;
+}
+
+/**
  * QPixmap:save(path) -> boolean
  * Saves pixmap to file.
  */
@@ -472,9 +497,11 @@ void registerBugReporterBindings(lua_State* L) {
 
     // Register screenshot functions
     lua_register(L, "grab_window", lua_grab_window);
-    // QPixmap dimension accessors — feature 027 T010b
+    // QPixmap dimension + byte-count accessors — feature 027 T010b
+    // (byte_count added for capture_manager byte-bound ring, post-rewrite)
     lua_register(L, "qpixmap_width", lua_qpixmap_width);
     lua_register(L, "qpixmap_height", lua_qpixmap_height);
+    lua_register(L, "qpixmap_byte_count", lua_qpixmap_byte_count);
 
     // Register timer functions
     lua_register(L, "create_timer", lua_create_timer);
