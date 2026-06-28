@@ -38,10 +38,15 @@ print("=== Testing CaptureManager ===\n")
 -- Test 1: Initialization
 print("Test 1: Initialization")
 capture_manager:init()
+-- FR-002 (spec 027): capture is opt-in via the privacy panel, so init
+-- leaves capture_enabled=false. This test exercises the ring-buffer
+-- mechanics — flip the gate on explicitly to simulate a user who has
+-- opted in via the panel.
+capture_manager:set_enabled(true)
 assert_equal(#capture_manager.gesture_ring_buffer, 0, "Gesture buffer starts empty")
 assert_equal(#capture_manager.command_ring_buffer, 0, "Command buffer starts empty")
 assert_equal(#capture_manager.log_ring_buffer, 0, "Log buffer starts empty")
-assert_equal(capture_manager.capture_enabled, true, "Capture enabled by default")
+assert_equal(capture_manager.capture_enabled, true, "Capture enabled after opt-in")
 print()
 
 -- Test 2: Log gestures

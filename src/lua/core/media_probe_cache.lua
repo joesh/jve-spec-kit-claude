@@ -66,7 +66,22 @@ local log = require("core.logger").for_area("media")
 -- has_audio_tc_origin and then ASSERTS the corresponding array is
 -- non-empty (first entry == primary). Pre-v5 cache entries lack these
 -- arrays — the assert would fire on stale hits. Bump forces re-probe.
-local CACHE_VERSION = 5
+--
+-- v6 (2026-06-27): v5 EMP only populated all_video_tc_origins on the
+-- metadata-"timecode"-tag path. BRAW probes (build_braw_info) and
+-- broadcast MXF stream-start_time-derived TC left the array empty
+-- while has_video_tc_origin=true, tripping the relinker assert on
+-- BRAW-bearing projects. EMP now seeds vec[0] with first_frame_tc on
+-- every TC path. Pre-v6 BRAW entries in the cache still have the
+-- empty array and would re-trip the assert until reprobed.
+--
+-- v7 (2026-06-27): EMP now sums audio_channels across ALL audio streams
+-- in the container (broadcast MXF: 8 mono PCM streams → audio_channels=8,
+-- previously av_find_best_stream picked one and we reported 1). The Lua
+-- shape exposes only the summed value, but pre-v7 cached entries record
+-- the OLD undercount; serving them would build masters with too few
+-- audio tracks. Bump forces a re-probe for every multi-stream file.
+local CACHE_VERSION = 7
 
 -- Fields that MUST be present on every cached info to consider the
 -- entry fresh. The relinker's downstream logic gates behavior on

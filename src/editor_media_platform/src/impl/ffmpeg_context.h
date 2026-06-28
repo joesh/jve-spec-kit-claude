@@ -13,6 +13,7 @@ extern "C" {
 #include <editor_media_platform/emp_errors.h>
 #include <editor_media_platform/emp_time.h>
 #include <string>
+#include <vector>
 
 namespace emp {
 namespace impl {
@@ -44,8 +45,18 @@ public:
     // Find video stream
     Result<int> find_video_stream();
 
-    // Find audio stream (returns -1 if no audio, does not error)
+    // Find the "best" audio stream and cache its index (returns -1 if no
+    // audio, does not error). Picks the first audio stream in container
+    // order — same semantics as find_all_audio_streams()[0]. Used by
+    // probe-time TC / duration helpers that need a single primary stream.
     int find_audio_stream();
+
+    // Enumerate every AVMEDIA_TYPE_AUDIO stream in container order,
+    // skipping ATTACHED_PIC dispositions. Empty vector means no audio.
+    // Container order matters: it dictates the flat source_channel layout
+    // exposed to JVE (master_builder fans out 0..N-1 across the streams
+    // in the order returned here). Does not modify m_audio_stream_idx.
+    std::vector<int> find_all_audio_streams() const;
 
     AVFormatContext* get() const { return m_fmt_ctx; }
     int video_stream_index() const { return m_video_stream_idx; }

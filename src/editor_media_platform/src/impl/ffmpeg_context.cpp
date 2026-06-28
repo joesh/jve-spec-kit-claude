@@ -124,9 +124,32 @@ AVCodecParameters* FFmpegFormatContext::video_codec_params() const {
 int FFmpegFormatContext::find_audio_stream() {
     assert(m_fmt_ctx && "Format context not opened");
 
-    m_audio_stream_idx = av_find_best_stream(m_fmt_ctx, AVMEDIA_TYPE_AUDIO,
-                                              -1, -1, nullptr, 0);
+    // Pick the first audio stream in container order so this matches
+    // find_all_audio_streams()[0] exactly. Multi-stream callers walk the
+    // enumerated layout in container order (broadcast MXF: 8 mono PCM
+    // streams = flat channels 0..7). av_find_best_stream picks by codec
+    // heuristics, which can disagree with container order — and the
+    // "primary" stream used for TC / duration MUST be flat-channel 0.
+    auto all = find_all_audio_streams();
+    m_audio_stream_idx = all.empty() ? -1 : all[0];
     return m_audio_stream_idx;
+}
+
+std::vector<int> FFmpegFormatContext::find_all_audio_streams() const {
+    assert(m_fmt_ctx && "Format context not opened");
+
+    std::vector<int> indices;
+    for (unsigned int i = 0; i < m_fmt_ctx->nb_streams; ++i) {
+        AVStream* s = m_fmt_ctx->streams[i];
+        if (!s || !s->codecpar) continue;
+        if (s->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+        // ATTACHED_PIC (album art in MP3/AAC) tags as audio in some
+        // containers; mirror the video-side guard to keep them out of
+        // the per-channel layout.
+        if (s->disposition & AV_DISPOSITION_ATTACHED_PIC) continue;
+        indices.push_back(static_cast<int>(i));
+    }
+    return indices;
 }
 
 AVStream* FFmpegFormatContext::audio_stream() const {

@@ -118,16 +118,23 @@ local function find_video_stream(probe_data)
     return nil
 end
 
---- Find first audio stream in probe data
+--- Find every audio stream in probe data, in container order.
+-- The flat-channel abstraction JVE deals in is "channel of file", not
+-- "channel of stream" — containers like broadcast MXF split each channel
+-- into its own mono PCM stream and a "first audio stream wins" walk
+-- would silently drop 7 of 8 tracks. Sum across every entry to get the
+-- flat channel count; use entry [1] as the primary for sample_rate /
+-- codec / TC extraction (broadcast MXF shares those across streams).
 -- @param probe_data table FFprobe output data
--- @return table|nil Audio stream data, or nil if no audio found
-local function find_audio_stream(probe_data)
+-- @return table Array of audio stream tables (empty if no audio)
+local function find_all_audio_streams(probe_data)
+    local out = {}
     for _, stream in ipairs(probe_data.streams) do
         if stream.codec_type == "audio" then
-            return stream
+            out[#out + 1] = stream
         end
     end
-    return nil
+    return out
 end
 
 -- ============================================================================
@@ -195,7 +202,8 @@ function M.probe_file(file_path)
 
     -- Extract video stream info
     local video_stream = find_video_stream(probe_data)
-    local audio_stream = find_audio_stream(probe_data)
+    local audio_streams = find_all_audio_streams(probe_data)
+    local audio_stream = audio_streams[1]  -- primary: TC / rate / codec source
 
     -- Build metadata structure
     local metadata = {
@@ -224,16 +232,35 @@ function M.probe_file(file_path)
     end
 
     if audio_stream then
-        assert(audio_stream.channels and tonumber(audio_stream.channels) > 0,
-            string.format("probe_file: audio stream has no channels for %s", file_path))
-        assert(audio_stream.sample_rate and tonumber(audio_stream.sample_rate) > 0,
+        -- Flat channel count = SUM across every container audio stream,
+        -- mirroring the C++ EMP probe in emp_media_file.cpp. Broadcast MXF
+        -- splits each track into its own mono PCM stream; a "first stream
+        -- wins" walk imports an 8-track file as 1 channel and the other
+        -- 7 are silently dropped. master_builder fans out one track per
+        -- source_channel ∈ [0, channels), Reader resolves each flat index
+        -- back to (av_stream_idx, channel_within_stream). Primary stream
+        -- supplies sample_rate / codec; all streams must agree on
+        -- sample_rate (one resampler keyed on one rate downstream).
+        local primary_sr = tonumber(audio_stream.sample_rate)
+        assert(primary_sr and primary_sr > 0,
             string.format("probe_file: audio stream has no sample_rate for %s", file_path))
         assert(audio_stream.codec_name,
             string.format("probe_file: audio stream has no codec_name for %s", file_path))
+        local total_channels = 0
+        for i, s in ipairs(audio_streams) do
+            local ch = tonumber(s.channels)
+            assert(ch and ch > 0, string.format(
+                "probe_file: audio stream %d has no channels for %s", i, file_path))
+            local sr = tonumber(s.sample_rate)
+            assert(sr and sr == primary_sr, string.format(
+                "probe_file: audio stream %d sample_rate %s ≠ primary %d for %s",
+                i, tostring(sr), primary_sr, file_path))
+            total_channels = total_channels + ch
+        end
         metadata.audio = {
-            channels = tonumber(audio_stream.channels),
-            sample_rate = tonumber(audio_stream.sample_rate),
-            codec = audio_stream.codec_name
+            channels = total_channels,
+            sample_rate = primary_sr,
+            codec = audio_stream.codec_name,
         }
     end
 

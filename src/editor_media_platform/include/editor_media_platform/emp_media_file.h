@@ -110,7 +110,28 @@ struct MediaFileInfo {
     // Audio stream info
     bool has_audio;
     int32_t audio_sample_rate;  // Source sample rate (e.g., 48000)
-    int32_t audio_channels;     // Source channel count
+
+    // Flat channel count across ALL audio streams in the container.
+    // For a single multichannel stream this equals that stream's
+    // nb_channels. For containers like broadcast MXF that split each
+    // channel into its own mono PCM stream, this is the SUM across the
+    // audio streams — the abstraction JVE deals in is "channel of file",
+    // not "channel of stream". Downstream (master_builder, resolver,
+    // peak generator) iterates source_channel ∈ [0, audio_channels).
+    int32_t audio_channels;
+
+    // Per-stream layout backing the flat audio_channels count. Empty when
+    // has_audio is false; non-empty whenever has_audio is true. Reader
+    // maps a flat source_channel to (av_stream_idx, channel_within_stream)
+    // by walking these mappings — flat indices
+    // [flat_channel_offset, flat_channel_offset + channel_count) belong
+    // to av_stream_idx, with channel_within_stream = flat - flat_channel_offset.
+    struct AudioStreamMapping {
+        int32_t av_stream_idx;       // Index in AVFormatContext::streams[]
+        int32_t channel_count;       // nb_channels of this stream
+        int32_t flat_channel_offset; // First flat source_channel covered
+    };
+    std::vector<AudioStreamMapping> audio_streams;
 
     // BWF (Broadcast Wave Format) timecode origin in audio samples since midnight.
     // From format tag "time_reference". -1 = not present (plain WAV, non-BWF).

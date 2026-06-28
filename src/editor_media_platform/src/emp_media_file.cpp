@@ -218,19 +218,24 @@ static const char* find_timecode_tag(AVFormatContext* fmt, AVStream* video_strea
     return (e && e->value) ? e->value : nullptr;
 }
 
-// Collect every distinct video-rate TC (in frames at video_fps) found in any
-// stream's "timecode" tag or the format-level "timecode" tag. The primary TC
-// (find_timecode_tag's first hit) is the first entry; additional distinct
-// values follow. A QuickTime file with separate camera-TC and render-TC
-// tmcd tracks (or sidecar-derived TC carried in stream metadata) surfaces
-// each here. Dedupe is by frame value — same TC repeated across video stream
-// + paired tmcd track collapses to one entry.
+// Collect every distinct video-rate TC (in frames at video_fps) the container
+// exposes. The PRIMARY entry is `info.first_frame_tc` — whichever source
+// extract_video_tc_origin picked (metadata "timecode" tag OR stream
+// start_time PTS fallback for broadcast MXF). Additional distinct
+// metadata-tag TCs follow (QuickTime files with separate camera-TC and
+// render-TC tmcd tracks surface both). Dedupe is by frame value.
 //
-// Invariant: returned vector is empty iff has_video_tc_origin would be false.
-// When non-empty, vec[0] == first_frame_tc (the primary TC).
+// Caller invariant: only call when info.has_video_tc_origin is true. Returns
+// a vector whose [0] equals info.first_frame_tc by construction, which the
+// Lua relink matcher relies on (probe_result_from_emp_info contract).
 static std::vector<int64_t> collect_all_video_tc_origins(
         AVFormatContext* fmt, AVStream* video_stream, const MediaFileInfo& info) {
     std::vector<int64_t> out;
+    // Seed with the authoritative primary so [0] == first_frame_tc holds
+    // regardless of which extract_video_tc_origin branch fired. Walking
+    // metadata-only would lose the primary for start_time-derived MXF files.
+    out.push_back(info.first_frame_tc);
+
     if (info.video_fps_num <= 0 || info.video_fps_den <= 0) return out;
 
     auto try_add = [&](const char* tc_str) {
@@ -242,10 +247,9 @@ static std::vector<int64_t> collect_all_video_tc_origins(
         out.push_back(tc);
     };
 
-    // Order matches find_timecode_tag's preference: video_stream first, then
-    // format. After those, walk remaining streams (other tmcd data tracks,
-    // audio streams that carry timecode) so the secondary entries are
-    // discoverable for matchers.
+    // Walk every metadata "timecode" tag. The primary may already be one of
+    // these (camera MOV) — dedupe collapses it. Order: video_stream, format,
+    // then remaining streams (paired tmcd data tracks, audio carrying TC).
     if (video_stream) {
         AVDictionaryEntry* e = av_dict_get(video_stream->metadata, "timecode", nullptr, 0);
         if (e) try_add(e->value);
@@ -375,6 +379,15 @@ static Result<MediaFileInfo> build_braw_info(const std::string& path) {
     info.has_audio = bi.has_audio;
     info.audio_sample_rate = bi.audio_sample_rate;
     info.audio_channels = bi.audio_channels;
+    // BRAW exposes audio as a single virtual multichannel stream through
+    // the SDK — there is no AVFormat involvement, so av_stream_idx = 0 is
+    // a synthetic identifier consumed only by the BRAW reader (which
+    // bypasses the AVFormat packet loop entirely). The mapping entry
+    // exists to keep the contract uniform across backends:
+    // has_audio ⇔ !audio_streams.empty().
+    if (bi.has_audio) {
+        info.audio_streams.push_back({0, bi.audio_channels, 0});
+    }
     info.duration_us = bi.duration_us;
     // BRAW's SDK probe always returns a duration. The "no duration
     // known" case doesn't arise here — if braw_probe_clip succeeded,
@@ -411,6 +424,19 @@ static Result<MediaFileInfo> build_braw_info(const std::string& path) {
     if (info.first_sample_tc > MAX_TC_SAMPLES) {
         info.first_sample_tc = 0;
         info.has_audio_tc_origin = false;
+    }
+
+    // Establish the all_*_tc_origins contract: when a presence flag is set,
+    // the vector is non-empty and [0] equals the primary value. BRAW has
+    // exactly one TC source per stream (SDK metadata for video; video-derived
+    // for audio), so single-entry vectors are the final shape. Mirror the
+    // FFmpeg path's audio handling. Done AFTER the overflow clamps above so
+    // a clamp-to-unknown leaves the vector empty as the contract requires.
+    if (info.has_video_tc_origin) {
+        info.all_video_tc_origins.push_back(info.first_frame_tc);
+    }
+    if (info.has_audio_tc_origin) {
+        info.all_audio_tc_origins.push_back(info.first_sample_tc);
     }
 
     return info;
@@ -478,14 +504,53 @@ static Result<MediaFileInfo> build_ffmpeg_info(impl::FFmpegFormatContext& fmt_ct
         info.rotation = 0;
     }
 
+    // Enumerate ALL audio streams in container order, building the
+    // per-stream layout that lets a flat source_channel be resolved to
+    // (av_stream_idx, channel_within_stream). Broadcast MXF presents
+    // each mono track as its own AVStream — we previously picked one
+    // via av_find_best_stream and silently dropped the rest, importing
+    // an 8-track recorder file as 1 channel. The flat-channels
+    // abstraction lives here: every consumer downstream iterates
+    // source_channel ∈ [0, info.audio_channels), and the Reader's
+    // codec/swr setup walks info.audio_streams to find the right stream.
+    //
+    // find_audio_stream() also caches m_audio_stream_idx so the TC /
+    // duration extraction below (which still operates on a single
+    // primary AVStream) sees the same first-in-container stream we
+    // record as audio_streams[0].
     AVStream* audio_stream = nullptr;
-    int audio_idx = fmt_ctx.find_audio_stream();
-    if (audio_idx >= 0) {
-        audio_stream = fmt_ctx.audio_stream();
-        AVCodecParameters* audio_params = fmt_ctx.audio_codec_params();
+    auto audio_stream_indices = fmt_ctx.find_all_audio_streams();
+    if (!audio_stream_indices.empty()) {
+        fmt_ctx.find_audio_stream();  // caches m_audio_stream_idx = audio_stream_indices[0]
         info.has_audio = true;
-        info.audio_sample_rate = audio_params->sample_rate;
-        info.audio_channels = audio_params->ch_layout.nb_channels;
+
+        int32_t flat_offset = 0;
+        int primary_sample_rate = 0;
+        AVFormatContext* fmt = fmt_ctx.get();
+        for (size_t i = 0; i < audio_stream_indices.size(); ++i) {
+            int idx = audio_stream_indices[i];
+            AVStream* s = fmt->streams[idx];
+            AVCodecParameters* p = s->codecpar;
+            int32_t ch = p->ch_layout.nb_channels;
+            assert(ch > 0 && "Audio stream reports zero channels");
+            info.audio_streams.push_back({
+                static_cast<int32_t>(idx), ch, flat_offset
+            });
+            flat_offset += ch;
+            if (i == 0) {
+                primary_sample_rate = p->sample_rate;
+                audio_stream = s;
+            } else {
+                // Multi-stream containers (broadcast MXF) carry the same
+                // sample rate on every audio stream. Mismatched rates
+                // would break the flat-channel abstraction (one resampler,
+                // one rate). Fail loud rather than silently quantize.
+                assert(p->sample_rate == primary_sample_rate &&
+                    "Multi-stream audio: streams differ in sample rate");
+            }
+        }
+        info.audio_sample_rate = primary_sample_rate;
+        info.audio_channels = flat_offset;
 
         if (!info.has_video && info.audio_sample_rate > 0) {
             info.video_fps_num = info.audio_sample_rate;
@@ -496,6 +561,8 @@ static Result<MediaFileInfo> build_ffmpeg_info(impl::FFmpegFormatContext& fmt_ct
         info.audio_sample_rate = 0;
         info.audio_channels = 0;
     }
+    assert(info.has_audio == !info.audio_streams.empty() &&
+        "has_audio must match audio_streams emptiness");
 
     if (!info.has_video && !info.has_audio) {
         return Error::unsupported("No video or audio stream found");

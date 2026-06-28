@@ -130,6 +130,15 @@ public:
     int current_audio_out_rate = 0;  // Track resampler target rate
     int current_source_channel = -1; // Track resampler channel routing (-1 = composite)
 
+    // AVStream index the audio_codec_ctx is currently bound to. -1 = not
+    // yet bound (lazy init on first DecodeAudioRangeUS). For multi-stream
+    // audio (broadcast MXF — one mono PCM stream per channel) a Reader
+    // serving source_channel K binds to the AVStream that holds K; if
+    // source_channel changes to a value covered by a different AVStream,
+    // we rebind (re-init audio_codec_ctx + resample_ctx and reset the
+    // PTS / cache / FIFO bookkeeping).
+    int current_audio_av_stream_idx = -1;
+
     // Audio decoder state
     bool have_audio_pts = false;
     TimeUS audio_pts_us = 0;
@@ -432,19 +441,17 @@ static Result<std::shared_ptr<Reader>> CreateImpl(std::shared_ptr<MediaFile> ass
         }
     }
 
-    // Initialize audio codec if asset has audio.
-    // NSF-ACCEPT: Audio codec failure is non-fatal — Reader::Create succeeds
-    // but audio_initialized=false. DecodeAudioRangeUS returns Error::unsupported
-    // when called on such a Reader. Caller (TMB) treats this as silence/gap.
-    if (asset->info().has_audio) {
-        AVCodecParameters* audio_params = asset_impl->fmt_ctx.audio_codec_params();
-        auto audio_codec_result = impl->audio_codec_ctx.init(audio_params);
-        if (audio_codec_result.is_error()) {
-            impl->audio_initialized = false;
-        } else {
-            impl->audio_initialized = true;
-        }
-    }
+    // Audio codec init is DEFERRED to the first DecodeAudioRangeUS call
+    // once source_channel resolves to a specific AVStream. Multi-stream
+    // audio (broadcast MXF: one mono PCM stream per channel) means the
+    // codec context is per-AVStream, and we don't know which AVStream
+    // the Reader will serve until the caller asks for a flat
+    // source_channel. audio_initialized here means "the file has audio";
+    // the actual swr/codec contexts come up lazily in DecodeAudioRangeUS.
+    // Any codec/swr failure that previously was swallowed at Create time
+    // now surfaces from DecodeAudioRangeUS as an Error — louder, not
+    // quieter (NSF rule 1.14, 2.32).
+    impl->audio_initialized = asset->info().has_audio;
 
     asset->mark_decode_started();
     return std::make_shared<Reader>(std::move(impl), std::move(asset));
@@ -1038,13 +1045,75 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
 
     MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
-    AVStream* audio_stream = asset_impl->fmt_ctx.audio_stream();
-    int audio_stream_idx = asset_impl->fmt_ctx.audio_stream_index();
+    const auto& info = m_media_file->info();
+
+    // Resolve flat source_channel → (av_stream_idx, channel_within_stream).
+    // The flat index is what JVE deals in everywhere above EMP
+    // (master_builder, resolver, peak generator). Containers like
+    // broadcast MXF split each channel into its own mono AVStream, so the
+    // mapping is non-trivial; a single multichannel stream collapses to
+    // one mapping entry and the math is a no-op. Composite (-1) is only
+    // legal on single-stream files — multi-stream composite would require
+    // demuxing N streams in parallel and mixing, which no caller needs
+    // today. Fail loud rather than silently picking stream 0 (rule 2.13).
+    int resolved_av_stream_idx = -1;
+    int channel_within_stream = -1;
+    if (source_channel < 0) {
+        if (info.audio_streams.size() != 1) {
+            return Error::unsupported(
+                "Composite audio decode (source_channel=-1) not supported "
+                "for multi-stream audio files (" +
+                std::to_string(info.audio_streams.size()) +
+                " streams); use per-channel source_channel");
+        }
+        resolved_av_stream_idx = info.audio_streams[0].av_stream_idx;
+        channel_within_stream = -1;  // composite over the single stream
+    } else {
+        for (const auto& m : info.audio_streams) {
+            if (source_channel >= m.flat_channel_offset
+                    && source_channel < m.flat_channel_offset + m.channel_count) {
+                resolved_av_stream_idx = m.av_stream_idx;
+                channel_within_stream = source_channel - m.flat_channel_offset;
+                break;
+            }
+        }
+        if (resolved_av_stream_idx < 0) {
+            return Error::invalid_arg(
+                "DecodeAudioRangeUS: source_channel " +
+                std::to_string(source_channel) +
+                " out of range for " + std::to_string(info.audio_channels) +
+                "-channel source");
+        }
+    }
+    AVStream* audio_stream = fmt_ctx->streams[resolved_av_stream_idx];
+    int audio_stream_idx = resolved_av_stream_idx;
+
+    // Bind / rebind audio codec context to the resolved AVStream. Lazy at
+    // first call (current_audio_av_stream_idx == -1 after Create); rebinds
+    // if the source_channel walks into a different stream. Both cases
+    // invalidate the PTS / decode cache / resampler FIFO because they are
+    // stream-specific.
+    if (m_impl->current_audio_av_stream_idx != resolved_av_stream_idx) {
+        auto codec_result = m_impl->audio_codec_ctx.init(audio_stream->codecpar);
+        if (codec_result.is_error()) {
+            return codec_result.error();
+        }
+        m_impl->current_audio_av_stream_idx = resolved_av_stream_idx;
+        m_impl->have_audio_pts = false;
+        m_impl->audio_pts_us = 0;
+        m_impl->resample_owed_samples = 0;
+        m_impl->audio_cache.clear();
+        // Force resample re-init below: zeroing out_rate makes the
+        // "out_rate changed" condition fire regardless of source_channel
+        // (out.sample_rate is always > 0 by validation upstream).
+        m_impl->current_audio_out_rate = 0;
+    }
     AVCodecContext* audio_codec = m_impl->audio_codec_ctx.get();
+    assert(audio_codec && "audio codec context was not bound");
 
     // Initialize or reinitialize resampler if output rate or channel routing
-    // changed. (A per-clip Reader has one fixed source_channel, so the channel
-    // condition is defensive — it won't fire in the common case.)
+    // changed. A per-clip Reader has one fixed source_channel in practice,
+    // so the channel condition normally fires once (on the lazy first call).
     if (m_impl->current_audio_out_rate != out.sample_rate
             || m_impl->current_source_channel != source_channel) {
         auto resample_result = m_impl->resample_ctx.init(
@@ -1052,7 +1121,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
             &audio_codec->ch_layout,
             audio_codec->sample_fmt,
             out.sample_rate,
-            source_channel
+            channel_within_stream
         );
         if (resample_result.is_error()) {
             return resample_result.error();

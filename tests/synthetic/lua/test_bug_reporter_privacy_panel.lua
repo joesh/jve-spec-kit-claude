@@ -18,21 +18,17 @@
 print("=== test_bug_reporter_privacy_panel.lua ===")
 require("test_env")
 
-local panel        = require("bug_reporter.ui.privacy_panel")
-local dialog_prefs = require("core.dialog_prefs")
+local panel = require("bug_reporter.ui.privacy_panel")
 
 local TMP = "/tmp/jve_privacy_panel_test_" .. tostring(math.random(1, 1e9))
 os.execute("/bin/mkdir -p " .. TMP .. "/.jve")
 
--- Redirect HOME so the panel writes into TMP/.jve, not the real ~/.jve.
-local real_home = os.getenv("HOME")
-os.execute("HOME=" .. TMP .. " /usr/bin/env true")  -- no-op; HOME is per-process
 -- Lua's os.setenv doesn't exist; use posix-ish workaround via
 -- monkey-patching os.getenv for dialog_prefs' jve_dir lookup. The
 -- panel module already cached its require, so we patch the global
 -- os.getenv that dialog_prefs.jve_dir reads on every call.
 local original_getenv = os.getenv
-os.getenv = function(k)
+os.getenv = function(k)  -- luacheck: ignore
     if k == "HOME" then return TMP end
     return original_getenv(k)
 end
@@ -117,7 +113,7 @@ do
 end
 
 -- Restore globals + clean up.
-os.getenv = original_getenv
+os.getenv = original_getenv  -- luacheck: ignore
 telemetry.apply_pref_toggle = saved_apply
 os.execute("/bin/rm -rf " .. TMP)
 print("✅ test_bug_reporter_privacy_panel.lua passed")
