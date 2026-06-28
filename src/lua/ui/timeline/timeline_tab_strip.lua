@@ -12,6 +12,7 @@
 -- the displayed tab directly — no display-aware accessor wrappers exist.
 
 local TimelineTab = require("ui.timeline.timeline_tab")
+local assert_and_continue = require("core.assert_and_continue")
 
 local TimelineTabStrip = {}
 TimelineTabStrip.__index = TimelineTabStrip
@@ -457,6 +458,7 @@ function TimelineTabStrip.deserialize(t)
     assert(type(t.tabs) == "table", "TimelineTabStrip.deserialize: tabs list required")
 
     local strip = TimelineTabStrip.new()
+    local Sequence = require("models.sequence")
 
     for _, serialized_tab in ipairs(t.tabs) do
         local tab = TimelineTab.deserialize(serialized_tab)
@@ -466,6 +468,18 @@ function TimelineTabStrip.deserialize(t)
         -- viewport, renderer) asserts. The empty source tab has no sequence
         -- to load — it stays the fresh empty containers (blank body).
         if not tab:is_empty_source() then
+            -- A persisted tab can point at a sequence that's been deleted
+            -- out of band — e.g. DeleteMasterClip historically didn't emit
+            -- sequence_list_changed, so the source tab was saved with a
+            -- dead id and load_from_database asserted on relaunch. Pre-check
+            -- with assert_and_continue: surface loud + trace, then drop the tab so
+            -- the project still opens.
+            if not assert_and_continue(Sequence.load(tab.sequence_id),
+                "TimelineTabStrip.deserialize: tab %s references missing sequence %s — "
+                .. "dropping tab and continuing",
+                tostring(tab.id), tostring(tab.sequence_id)) then
+                goto skip_tab
+            end
             tab:load_from_database()
         end
         table.insert(strip.tabs, tab)
@@ -474,9 +488,12 @@ function TimelineTabStrip.deserialize(t)
                 "TimelineTabStrip.deserialize: multiple source tabs in serialized state (invariant broken)")
             strip.source_tab = tab
         end
+        ::skip_tab::
     end
 
-    -- Resolve pointers by id (assert-on-miss; persisted state must reference real tabs).
+    -- Resolve pointers by id. Persisted state SHOULD reference real tabs,
+    -- but we may have dropped one above via assert_and_continue recovery — in that
+    -- case fall through to nil so the strip still opens.
     if t.displayed_tab_id then
         for _, tab in ipairs(strip.tabs) do
             if tab.id == t.displayed_tab_id then
@@ -484,9 +501,10 @@ function TimelineTabStrip.deserialize(t)
                 break
             end
         end
-        assert(strip.displayed_tab, string.format(
-            "TimelineTabStrip.deserialize: displayed_tab_id=%s does not match any tab",
-            t.displayed_tab_id))
+        assert_and_continue(strip.displayed_tab,
+            "TimelineTabStrip.deserialize: displayed_tab_id=%s does not match any "
+            .. "remaining tab (likely dropped by sequence-missing recovery above)",
+            tostring(t.displayed_tab_id))
     end
     if t.active_record_tab_id then
         for _, tab in ipairs(strip.tabs) do

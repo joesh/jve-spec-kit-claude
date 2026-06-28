@@ -220,6 +220,7 @@ function M.execute(args)
 
     return {
         sequence_id      = sequence_id,
+        project_id       = parent.project_id,
         new_sequence_id  = new_seq_id,
         new_track_id     = new_track_id,
         new_clip_id      = new_clip_id,
@@ -257,6 +258,7 @@ local SPEC = {
         new_track_id    = { kind = "string" },
         new_clip_id     = { kind = "string" },
         moved           = {},
+        project_id      = { kind = "string" },
     },
 }
 
@@ -273,6 +275,14 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("new_track_id",    cap.new_track_id)
         command:set_parameter("new_clip_id",     cap.new_clip_id)
         command:set_parameter("moved",           cap.moved)
+        command:set_parameter("project_id",      cap.project_id)
+        -- New nested sequence row exists → tab strip + project browser need
+        -- to see it (same contract as DeleteSequence / CreateSequence
+        -- — every command that adds or removes a sequence row must emit).
+        assert(cap.project_id and cap.project_id ~= "",
+            "Nest: capture missing project_id for sequence_list_changed emit")
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", cap.project_id)
         return true
     end
 
@@ -285,6 +295,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             new_clip_id      = args.new_clip_id,
             moved            = args.moved,
         })
+        assert(args.project_id and args.project_id ~= "",
+            "UndoNest: persisted project_id missing — required for "
+            .. "sequence_list_changed emit after nested-sequence delete")
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", args.project_id)
         return true
     end
 

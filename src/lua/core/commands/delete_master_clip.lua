@@ -203,6 +203,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             delete_sequence_mod.snapshot_for_delete(db, seq_id))
         delete_master_sequence_rows(seq_id)
 
+        -- Fire sequence_list_changed so timeline_state closes the source
+        -- tab pointing at this master (timeline_state.lua:1198). Without
+        -- this, the source tab persists with a dead sequence_id and the
+        -- next project save → relaunch asserts in TimelineTab:load_from_database
+        -- (timeline_tab.lua:327). Matches DeleteSequence's emit
+        -- (delete_sequence.lua:174).
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", seq.project_id)
+
         log.event("Deleted master sequence %s", seq.name or seq_id)
         return true
     end
@@ -308,6 +317,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local timeline_msg = #deleted_timeline_clips > 0
             and string.format(" and %d timeline clip(s)", #deleted_timeline_clips)
             or ""
+        local restored_project_id = args.master_clip_snapshot.sequence
+            and args.master_clip_snapshot.sequence.project_id
+        assert(restored_project_id and restored_project_id ~= "",
+            "UndoDeleteMasterClip: snapshot.sequence.project_id missing — "
+            .. "needed for sequence_list_changed emit")
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", restored_project_id)
+
         log.event("Undo DeleteMasterClip: restored master sequence %s%s",
             seq_name, timeline_msg)
         return true

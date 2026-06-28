@@ -241,11 +241,18 @@ for _, t in ipairs(restored.tabs) do
 end
 print("✓ serialize/deserialize round trip preserves tabs + pointers + identity")
 
--- deserialize asserts on dangling pointer
+-- deserialize survives a dangling displayed_tab_id (assert_and_continue recovery).
+-- A poisoned project file from an older missing-emit bug (e.g.
+-- DeleteMasterClip pre-2026-06-27 not firing sequence_list_changed) would
+-- otherwise crash JVE on every launch. The contract is: loud ERROR log +
+-- stack trace, then continue with displayed_tab=nil so the strip still
+-- opens. Downstream code already tolerates a nil displayed_tab.
 local bad = strip:serialize()
 bad.displayed_tab_id = "nonexistent-id"
-ok, err = pcall(function() return TimelineTabStrip.deserialize(bad) end)
-assert(not ok and err:find("nonexistent-id", 1, true), "dangling displayed_tab_id asserts")
-print("✓ deserialize asserts on dangling pointer")
+local restored_bad = TimelineTabStrip.deserialize(bad)
+assert(restored_bad, "deserialize must succeed on dangling pointer (assert_and_continue recovery)")
+assert(restored_bad.displayed_tab == nil,
+    "dangling displayed_tab_id must leave displayed_tab=nil after assert_and_continue recovery")
+print("✓ deserialize soft-recovers from dangling displayed_tab_id")
 
 print("✅ test_timeline_tab_strip.lua passed")
