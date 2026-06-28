@@ -142,9 +142,28 @@ static int lua_grab_window(lua_State* L) {
     grab_timer.start();
     QPixmap pixmap = mainWidget->grab();
     qint64 grab_ms = grab_timer.elapsed();
-    JVE_LOG_EVENT(Ui, "bug_reporter grab_window: %lld ms (widget=%p size=%dx%d)",
-        (long long)grab_ms, (void*)mainWidget,
-        pixmap.width(), pixmap.height());
+    
+    static int capture_count = 0;
+    static qint64 total_grab_ms = 0;
+    static QElapsedTimer log_timer;
+    static bool log_timer_started = false;
+
+    if (!log_timer_started) {
+        log_timer.start();
+        log_timer_started = true;
+    }
+
+    capture_count++;
+    total_grab_ms += grab_ms;
+
+    if (log_timer.hasExpired(60000)) {
+        JVE_LOG_EVENT(Ui, "bug_reporter grab_window: %d captures in last min (avg %lld ms, widget=%p size=%dx%d)",
+            capture_count, (long long)(total_grab_ms / capture_count), (void*)mainWidget,
+            pixmap.width(), pixmap.height());
+        capture_count = 0;
+        total_grab_ms = 0;
+        log_timer.restart();
+    }
 
     // Create QPixmap userdata
     QPixmap** userData = (QPixmap**)lua_newuserdata(L, sizeof(QPixmap*));

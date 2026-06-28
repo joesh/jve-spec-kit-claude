@@ -378,9 +378,10 @@ if(JVE_BUNDLE_LUA STREQUAL "symlink")
         COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/src/lua' && ln -sfn '${CMAKE_SOURCE_DIR}/src/lua' '$<TARGET_FILE_DIR:jve>/../Resources/src/lua'"
         COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/keymaps' && ln -sfn '${CMAKE_SOURCE_DIR}/keymaps' '$<TARGET_FILE_DIR:jve>/../Resources/keymaps'"
         COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/resources' && ln -sfn '${CMAKE_SOURCE_DIR}/resources' '$<TARGET_FILE_DIR:jve>/../Resources/resources'"
+        COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/tools' && ln -sfn '${CMAKE_SOURCE_DIR}/tools' '$<TARGET_FILE_DIR:jve>/../Resources/tools'"
         COMMAND sh -c "rm -f  '$<TARGET_FILE_DIR:jve>/../Resources/menus.xml' && ln -sfn '${CMAKE_SOURCE_DIR}/menus.xml' '$<TARGET_FILE_DIR:jve>/../Resources/menus.xml'"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Symlinking src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=symlink)"
+        COMMENT "Symlinking src/lua + keymaps + resources + tools + menus.xml into jve.app (JVE_BUNDLE_LUA=symlink)"
         VERBATIM
     )
 else()
@@ -389,10 +390,10 @@ else()
     # working. --delete removes stale entries left by previous builds.
     add_custom_target(bundle_runtime_tree ALL
         COMMAND rsync -aR --delete
-            src/lua keymaps resources menus.xml
+            src/lua keymaps resources tools menus.xml
             "$<TARGET_FILE_DIR:jve>/../Resources/"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Bundling src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=copy)"
+        COMMENT "Bundling src/lua + keymaps + resources + tools + menus.xml into jve.app (JVE_BUNDLE_LUA=copy)"
         VERBATIM
     )
 endif()

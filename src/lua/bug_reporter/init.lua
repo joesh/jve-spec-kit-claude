@@ -101,7 +101,6 @@ function BugReporter.capture_screenshot()
         return
     end
 
-    log.event("bug_reporter timer fired — calling grab_window")
     local pixmap = grab_window()
     if pixmap then
         capture_manager:capture_screenshot(pixmap)
