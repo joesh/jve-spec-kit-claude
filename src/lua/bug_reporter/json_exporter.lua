@@ -200,33 +200,38 @@ function JsonExporter.convert_gesture_log(gesture_buffer)
     return result
 end
 
--- Convert command ring buffer to JSON format
+-- Convert command ring buffer to JSON format. Parameters + result
+-- are redacted via bug_reporter.redact so filesystem paths and
+-- $HOME-prefixed strings don't ship to the Worker (FR-019/FR-020).
 function JsonExporter.convert_command_log(command_buffer)
+    local redact = require("bug_reporter.redact")
     local result = {}
-
-    for i, entry in ipairs(command_buffer) do
+    for _, entry in ipairs(command_buffer) do
         table.insert(result, {
             id = entry.id,
             timestamp_ms = entry.timestamp_ms,
             command = entry.command,
-            parameters = entry.parameters,
-            result = entry.result,
-            triggered_by_gesture = entry.triggered_by_gesture
+            parameters = redact.redact_parameters(entry.parameters),
+            result = redact.redact_parameters(entry.result),
+            triggered_by_gesture = entry.triggered_by_gesture,
         })
     end
-
     return result
 end
 
--- Convert log ring buffer to JSON format
+-- Convert log ring buffer to JSON format. Messages run through
+-- redact.redact_string so $HOME-prefixed paths and /Users/<name>/...
+-- substrings in log lines (which are user-facing strings, often
+-- carrying paths the user touched) don't ship verbatim.
 function JsonExporter.convert_log_output(log_buffer)
+    local redact = require("bug_reporter.redact")
     local result = {}
 
     for i, entry in ipairs(log_buffer) do
         table.insert(result, {
             timestamp_ms = entry.timestamp_ms,
             level = entry.level,
-            message = entry.message
+            message = redact.redact_string(entry.message)
         })
     end
 
