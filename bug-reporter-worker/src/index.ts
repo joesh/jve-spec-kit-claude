@@ -258,7 +258,10 @@ async function handle_report(req: Request, env: Env, ctx: ExecutionContext): Pro
         return json({ error: "malformed_payload" }, 400);
     }
 
-    // Idempotency.
+    // Idempotency. report_idempotency.get JOINs reports + clusters so the
+    // replay returns the same shape as the original 200 — cluster_id and
+    // cluster_count populated, not empty strings (pass 2 #22 HIGH:
+    // contracts/report.md response shape was violated on replay).
     const local_id = req.headers.get("X-Report-Local-Id") ?? "";
     if (local_id) {
         const prior = await d1.report_idempotency.get(env.DB, install_id, local_id);
@@ -266,8 +269,8 @@ async function handle_report(req: Request, env: Env, ctx: ExecutionContext): Pro
             return json({
                 report_id: prior.report_id,
                 ref_short: prior.report_id.slice(0, 8),
-                cluster_id: "",  // not stored in idempotency; clients rely on the original response
-                cluster_count: 0,
+                cluster_id: prior.cluster_id,
+                cluster_count: prior.cluster_count,
                 server_ts: now,
             }, 200);
         }
@@ -380,14 +383,24 @@ async function handle_promote(req: Request, env: Env, _ctx: ExecutionContext): P
     // Stage 3: create.
     const title = (body.title_override as string)
         ?? `[cluster] ${members[0]?.user_title?.slice(0, 60) ?? "Untitled cluster"}`;
-    const r2_urls = members.map((m) => `- ${m.r2_key}`).join("\n");
+    // Pass 2 #23 HIGH: prior body listed raw r2_keys claiming "presigned
+    // URLs" without actually signing them — the links didn't work as URLs.
+    // Until /promote learns to mint presigned URLs (R2 supports it via
+    // S3-compatible signing — see worker scratchpad), surface the keys
+    // as a one-line wrangler command Joe can paste locally. Bucket name
+    // hardcoded here matches wrangler.toml's BUCKET binding.
+    const fetch_lines = members.map((m) =>
+        `npx wrangler r2 object get jve-bug-reports/${m.r2_key} --file=${m.id.slice(0, 8)}.zip`
+    ).join("\n");
     const body_text = (body.body_override as string) ?? [
         `Cluster ${cluster_id}`,
         `Signature: ${cluster.signature}`,
         `Member count: ${cluster.count}`,
         ``,
-        `R2 artifacts (presigned URLs expire in 1h — re-click cluster in triage UI to refresh):`,
-        r2_urls,
+        `Fetch the zip artifacts locally (run from any directory):`,
+        '```',
+        fetch_lines,
+        '```',
         ``,
         `Promote source: /promote`,
     ].join("\n");

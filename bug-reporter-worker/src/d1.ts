@@ -164,9 +164,18 @@ export const reports = {
 };
 
 export const report_idempotency = {
-    async get(db: D1Database, install_id: string, local_id: string): Promise<{ report_id: string } | null> {
-        return await db.prepare(`SELECT report_id FROM report_idempotency WHERE install_id = ? AND local_id = ?`)
-            .bind(install_id, local_id).first();
+    // Replay returns cluster_id + count via JOIN so the handler can return
+    // the same response shape it did on first POST (pass 2 #22 HIGH: empty
+    // cluster_id violated contracts/report.md).
+    async get(db: D1Database, install_id: string, local_id: string)
+        : Promise<{ report_id: string; cluster_id: string; cluster_count: number } | null> {
+        return await db.prepare(`
+            SELECT ri.report_id, r.cluster_id, c.count AS cluster_count
+              FROM report_idempotency AS ri
+              JOIN reports  AS r ON r.id = ri.report_id
+              JOIN clusters AS c ON c.id = r.cluster_id
+             WHERE ri.install_id = ? AND ri.local_id = ?
+        `).bind(install_id, local_id).first();
     },
 
     async insert(db: D1Database, install_id: string, local_id: string, report_id: string, now: number): Promise<void> {
