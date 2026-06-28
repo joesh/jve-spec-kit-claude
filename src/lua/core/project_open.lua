@@ -107,6 +107,7 @@ local function another_jve_owns_project(project_path)
     if prior == our_pid() then return false end
     return pid_is_alive(prior)
 end
+M.another_jve_owns_project = another_jve_owns_project
 
 function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, project_path, parent_window)
     assert(db_module and db_module.set_path, "project_open: db_module.set_path is required")
