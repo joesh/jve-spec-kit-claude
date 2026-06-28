@@ -79,47 +79,50 @@ function M.submit(state, on_done)
         return
     end
 
-    local bug_reporter = require("bug_reporter")
-    local capture_path = bug_reporter.capture_manual(state.title, state.description)
-    assert(capture_path, "report_bug.submit: capture_manual returned nil")
-    local zip_path, zip_bytes, capture_dir = zip_capture(capture_path, state.text_only)
-    local metadata_json = build_metadata_json(state, capture_dir)
-
-    -- FR-024a: 10 MB cap. Worker returns 413 payload_too_large above
-    -- this; clamp client-side so the user gets an actionable refusal
-    -- instead of the generic Worker rejection.
     local MAX_PAYLOAD_BYTES = 10 * 1024 * 1024
-    if #zip_bytes > MAX_PAYLOAD_BYTES then
-        local mb = math.floor(#zip_bytes / (1024 * 1024))
-        local msg = string.format(
-            "Bug report is too large to send (%d MB; max 10 MB). " ..
-            "Try the 'Text only' option to exclude the slideshow.", mb)
-        log.warn("report_bug.submit: payload %d bytes exceeds %d cap — refusing post",
-            #zip_bytes, MAX_PAYLOAD_BYTES)
-        on_done({ ok = false, zip_path = zip_path, user_message = msg })
-        return
-    end
+    local bug_reporter = require("bug_reporter")
+    bug_reporter.capture_manual_async(state.title, state.description,
+        function(capture_path, capture_err)
+            assert(capture_path,
+                "report_bug.submit: capture_manual_async returned nil: " .. tostring(capture_err))
+            local zip_path, zip_bytes, capture_dir = zip_capture(capture_path, state.text_only)
+            local metadata_json = build_metadata_json(state, capture_dir)
 
-    local transport     = require("bug_reporter.transport")
-    local pending_queue = require("bug_reporter.pending_queue")
-    local local_id = require("uuid").generate()
-
-    transport.post_report(metadata_json, zip_bytes, local_id,
-        record.install_id, record.nonce, function(result)
-            if result.ok then
-                log.event("Bug report sent: ref %s", tostring(result.ref_short))
-                on_done({ ok = true, ref_short = result.ref_short, zip_path = zip_path,
-                    user_message = "Report sent — reference #" .. tostring(result.ref_short) })
+            -- FR-024a: client-side 10 MB cap (Worker returns 413
+            -- payload_too_large above this). Clamp here so the user
+            -- gets an actionable refusal instead of the generic reject.
+            if #zip_bytes > MAX_PAYLOAD_BYTES then
+                local mb = math.floor(#zip_bytes / (1024 * 1024))
+                local msg = string.format(
+                    "Bug report is too large to send (%d MB; max 10 MB). " ..
+                    "Try the 'Text only' option to exclude the slideshow.", mb)
+                log.warn("report_bug.submit: payload %d bytes exceeds %d cap — refusing post",
+                    #zip_bytes, MAX_PAYLOAD_BYTES)
+                on_done({ ok = false, zip_path = zip_path, user_message = msg })
                 return
             end
-            if result.code == "rate_limited" then
-                on_done({ ok = false, zip_path = zip_path,
-                    user_message = "Over today's submission cap — try again tomorrow" })
-                return
-            end
-            pending_queue.enqueue(zip_bytes, metadata_json, local_id)
-            on_done({ ok = false, zip_path = zip_path,
-                user_message = "Queued for retry on next launch" })
+
+            local transport     = require("bug_reporter.transport")
+            local pending_queue = require("bug_reporter.pending_queue")
+            local local_id = require("uuid").generate()
+
+            transport.post_report(metadata_json, zip_bytes, local_id,
+                record.install_id, record.nonce, function(result)
+                    if result.ok then
+                        log.event("Bug report sent: ref %s", tostring(result.ref_short))
+                        on_done({ ok = true, ref_short = result.ref_short, zip_path = zip_path,
+                            user_message = "Report sent — reference #" .. tostring(result.ref_short) })
+                        return
+                    end
+                    if result.code == "rate_limited" then
+                        on_done({ ok = false, zip_path = zip_path,
+                            user_message = "Over today's submission cap — try again tomorrow" })
+                        return
+                    end
+                    pending_queue.enqueue(zip_bytes, metadata_json, local_id)
+                    on_done({ ok = false, zip_path = zip_path,
+                        user_message = "Queued for retry on next launch" })
+                end)
         end)
 end
 

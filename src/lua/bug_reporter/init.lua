@@ -158,26 +158,40 @@ function BugReporter.capture_on_error(error_message, stack_trace)
     return json_path
 end
 
--- Manual bug capture (user-initiated)
-function BugReporter.capture_manual(description, expected_behavior)
-    local metadata = {
+local function manual_metadata(description, expected_behavior)
+    return {
         capture_type = "user_submitted",
         test_name = description or "User-submitted bug report",
         category = "user_report",
         tags = {"user_submitted", "manual"},
         user_description = description,
-        user_expected_behavior = expected_behavior
+        user_expected_behavior = expected_behavior,
     }
+end
 
-    local json_path, err = BugReporter.export_capture(metadata)
-
-    if json_path then
-        log.event("Manual capture saved to: %s", json_path)
-    else
-        log.error("Manual capture failed: %s", err or "unknown error")
-    end
-
+-- Manual bug capture (sync). Kept for callers that cannot wait on the
+-- Qt event loop. F12/user-submitted path uses capture_manual_async.
+function BugReporter.capture_manual(description, expected_behavior)
+    local json_path = BugReporter.export_capture(manual_metadata(description, expected_behavior))
+    log.event("Manual capture saved to: %s", json_path)
     return json_path
+end
+
+-- Async sibling. Fires on_done(json_path, err) once the slideshow
+-- QProcess finishes. Returns immediately; the F12 dialog updates its
+-- status_label between Submit-click and on_done firing.
+function BugReporter.capture_manual_async(description, expected_behavior, on_done)
+    assert(type(on_done) == "function", "capture_manual_async: on_done required")
+    capture_manager:export_capture_async(
+        manual_metadata(description, expected_behavior),
+        function(json_path, err)
+            if json_path then
+                log.event("Manual capture saved to: %s", json_path)
+            else
+                log.error("Manual capture failed: %s", err or "unknown error")
+            end
+            on_done(json_path, err)
+        end)
 end
 
 return BugReporter

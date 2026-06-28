@@ -37,77 +37,42 @@ local JsonExporter = {}
 --   if path then
 --     print("Exported to: " .. path)
 --   end
-function JsonExporter.export(capture_data, metadata, output_dir)
-    -- Validate parameters
-    if not capture_data then
-        return nil, "capture_data is required"
-    end
-
+-- Shared sync prep: validate inputs, mkdir capture/, mkdir screenshots/,
+-- dump pixmap ring to PNGs. Returns (capture_dir, screenshot_dir, count)
+-- on success; raises on failure (FR-015 fail-fast — partial captures
+-- with no on-disk root would otherwise leak ring-buffer references).
+local function prepare_capture_dir(capture_data, output_dir)
+    assert(capture_data, "json_exporter: capture_data is required")
     local valid, err = utils.validate_non_empty(output_dir, "output_dir")
-    if not valid then
-        return nil, err
-    end
-
-    metadata = metadata or {}
-
-    -- Create output directory
+    assert(valid, err)
     local timestamp = os.time()
     local capture_id = "capture-" .. utils.human_datestamp_for_filename(timestamp) .. "-" .. uuid.generate():sub(1, 8)
     local capture_dir = output_dir .. "/" .. capture_id
-
     local dir_ok, dir_err = utils.mkdir_p(capture_dir)
-    if not dir_ok then
-        return nil, dir_err or ("Failed to create output directory: " .. capture_dir)
-    end
-
-    -- Export screenshots to disk
+    assert(dir_ok, "json_exporter: " .. (dir_err or ("mkdir failed: " .. capture_dir)))
     local screenshot_dir = capture_dir .. "/screenshots"
-    local screenshot_success, screenshot_err = utils.mkdir_p(screenshot_dir)
-    if not screenshot_success then
-        return nil, screenshot_err or ("Failed to create screenshot directory: " .. screenshot_dir)
-    end
+    local ss_ok, ss_err = utils.mkdir_p(screenshot_dir)
+    assert(ss_ok, "json_exporter: " .. (ss_err or ("mkdir failed: " .. screenshot_dir)))
+    local count = JsonExporter.export_screenshots(capture_data.screenshots, screenshot_dir)
+    return capture_dir, screenshot_dir, count, timestamp, capture_id
+end
 
-    local screenshot_count = JsonExporter.export_screenshots(
-        capture_data.screenshots,
-        screenshot_dir
-    )
-
-    -- Generate slideshow video (Phase 3)
-    local slideshow_path = nil
-    if screenshot_count > 0 then
-        local slideshow_generator = require("bug_reporter.slideshow_generator")
-        local video_path, gen_err = slideshow_generator.generate(
-            screenshot_dir,
-            screenshot_count
-        )
-
-        if video_path then
-            slideshow_path = video_path
-            log.event("Slideshow video generated: %s", video_path)
-        else
-            log.warn("Slideshow generation failed: %s", gen_err or "unknown")
-        end
-    end
-
-    -- Feature 027 FR-011 + FR-015: raw PNGs MUST NOT ship in the
-    -- payload. Delete the screenshots/ subdir unconditionally — either
-    -- slideshow.mp4 carries the visual record, slideshow generation
-    -- failed (no PNGs worth retaining), or there were never any
-    -- screenshots to begin with (empty dir, harmless to remove).
-    -- Fail-loud per Constitution VI: a surviving screenshots/ subdir
-    -- would let raw frames leak into the next capture's payload.
+-- Build + write capture.json. FR-011 + FR-015: rm screenshots/ dir
+-- unconditionally before returning so raw PNGs cannot leak into the
+-- payload regardless of slideshow success/failure.
+local function finalize_capture(capture_dir, screenshot_dir, screenshot_count,
+                                slideshow_path, capture_data, metadata,
+                                timestamp, capture_id)
     local rm_ok, rm_err = qt_fs_remove_dir_recursive(screenshot_dir)
     assert(rm_ok, "json_exporter: failed to remove " .. screenshot_dir ..
         ": " .. tostring(rm_err))
 
-    -- Build JSON structure
     local json_data = {
         test_format_version = "1.0",
         test_id = capture_id,
         test_name = metadata.test_name or "Captured bug report",
         category = metadata.category or "unknown",
         tags = metadata.tags or {"capture"},
-
         capture_metadata = {
             capture_type = metadata.capture_type or "automatic",
             capture_timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", timestamp),
@@ -118,41 +83,81 @@ function JsonExporter.export(capture_data, metadata, output_dir)
             error_message = metadata.error_message,
             lua_stack_trace = metadata.lua_stack_trace
         },
-
         window_geometry = metadata.window_geometry or {},
-
         gesture_log = JsonExporter.convert_gesture_log(capture_data.gestures),
         command_log = JsonExporter.convert_command_log(capture_data.commands),
-        log_output = JsonExporter.convert_log_output(capture_data.logs),
-
-        -- Feature 027 FR-011a: .jvp DB content MUST NOT ship in any
-        -- payload — database_snapshots block dropped entirely.
-        -- FR-011: only slideshow.mp4 + capture.json ride along; the
-        -- video_recording / YouTube block dropped with the Dec-2025
-        -- upload stack.
+        log_output  = JsonExporter.convert_log_output(capture_data.logs),
+        -- Feature 027 FR-011a: .jvp DB content MUST NOT ship; the
+        -- legacy database_snapshots/video_recording blocks are dropped.
         screenshots = {
             screenshot_count = screenshot_count,
             screenshot_interval_ms = metadata.screenshot_interval_ms or 1000,
             slideshow_video = slideshow_path,
         },
     }
-
-    -- Write JSON file
     local json_path = capture_dir .. "/capture.json"
     local json_str, encode_err = dkjson.encode(json_data, { indent = true })
-    if not json_str then
-        return nil, "Failed to encode JSON: " .. (encode_err or "unknown error")
-    end
-
-    local file = io.open(json_path, "w")
-    if not file then
-        return nil, "Failed to write JSON file: " .. json_path
-    end
-
+    assert(json_str, "json_exporter: encode failed: " .. tostring(encode_err))
+    local file, open_err = io.open(json_path, "w")
+    assert(file, "json_exporter: open failed: " .. tostring(open_err))
     file:write(json_str)
     file:close()
-
     return json_path
+end
+
+function JsonExporter.export(capture_data, metadata, output_dir)
+    metadata = metadata or {}
+    local capture_dir, screenshot_dir, screenshot_count, timestamp, capture_id
+        = prepare_capture_dir(capture_data, output_dir)
+
+    local slideshow_path = nil
+    if screenshot_count > 0 then
+        local slideshow_generator = require("bug_reporter.slideshow_generator")
+        local video_path, gen_err = slideshow_generator.generate(
+            screenshot_dir, screenshot_count)
+        if video_path then
+            slideshow_path = video_path
+            log.event("Slideshow video generated: %s", video_path)
+        else
+            log.warn("Slideshow generation failed: %s", gen_err or "unknown")
+        end
+    end
+
+    return finalize_capture(capture_dir, screenshot_dir, screenshot_count,
+        slideshow_path, capture_data, metadata, timestamp, capture_id)
+end
+
+-- Async sibling of export(). Slideshow ffmpeg runs in a background
+-- QProcess; everything else is identical (sync). on_done(json_path, err)
+-- fires once when the chain completes. Used by F12/user-submitted path
+-- to avoid the 10s GUI freeze; crash-capture still uses sync export()
+-- because the app may be unwinding and event loop is gone.
+function JsonExporter.export_async(capture_data, metadata, output_dir, on_done)
+    assert(type(on_done) == "function", "export_async: on_done required")
+    metadata = metadata or {}
+    local capture_dir, screenshot_dir, screenshot_count, timestamp, capture_id
+        = prepare_capture_dir(capture_data, output_dir)
+
+    if screenshot_count == 0 then
+        local path = finalize_capture(capture_dir, screenshot_dir, 0, nil,
+            capture_data, metadata, timestamp, capture_id)
+        on_done(path, nil)
+        return
+    end
+
+    local slideshow_generator = require("bug_reporter.slideshow_generator")
+    slideshow_generator.generate_async(screenshot_dir, screenshot_count, nil,
+        function(video_path, gen_err)
+            if video_path then
+                log.event("Slideshow video generated: %s", video_path)
+            else
+                log.warn("Slideshow generation failed: %s", gen_err or "unknown")
+            end
+            local path = finalize_capture(capture_dir, screenshot_dir,
+                screenshot_count, video_path, capture_data, metadata,
+                timestamp, capture_id)
+            on_done(path, nil)
+        end)
 end
 
 -- Export screenshots from ring buffer to disk

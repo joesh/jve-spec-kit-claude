@@ -57,13 +57,19 @@ state:set_title("Artifact shape — automated test report")
 state:set_description("synthetic capture for T005")
 -- text_only stays false: zip MUST then contain slideshow.mp4.
 
--- Drive the same Submit-handler the dialog's button invokes.
--- submit is async (transport is async); the stub binding fires the
--- callback synchronously in --test mode, so result lands before the
--- next line runs.
+-- Drive the same Submit-handler the dialog's button invokes. submit
+-- is async — capture_manual_async runs ffmpeg under qt_process_* and
+-- post_report runs under QNetworkAccessManager. Pump the event loop
+-- until on_done fires (or timeout, which is a real failure).
 local result
 report_bug.submit(state, function(r) result = r end)
-assert(result, "report_bug.submit on_done never fired")
+local deadline_iters = 600  -- ~60s @ 100ms naps (ffmpeg + HTTPS)
+while result == nil and deadline_iters > 0 do
+    qt_constants.CONTROL.PROCESS_EVENTS()
+    os.execute("sleep 0.1")
+    deadline_iters = deadline_iters - 1
+end
+assert(result, "report_bug.submit on_done never fired within 60s")
 assert(result.ok or result.user_message,
     "report_bug.submit must always deliver either ok or a user_message")
 assert(result.zip_path and #result.zip_path > 0,

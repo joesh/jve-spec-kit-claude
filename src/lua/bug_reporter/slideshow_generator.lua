@@ -119,6 +119,70 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
     return output_path
 end
 
+-- Async sibling of generate(). Fires `on_done(output_path, nil)` on
+-- success or `on_done(nil, err)` on failure. The Qt event loop keeps
+-- the GUI responsive during the ffmpeg run (otherwise io.popen freezes
+-- the main thread for ~10s on a 5-min slideshow — the F12 beachball).
+function SlideshowGenerator.generate_async(screenshot_dir, screenshot_count, output_path, on_done)
+    assert(type(on_done) == "function", "generate_async: on_done required")
+    local valid, err = utils.validate_non_empty(screenshot_dir, "screenshot_dir")
+    if not valid then on_done(nil, err); return end
+    if not screenshot_count or screenshot_count == 0 then
+        on_done(nil, "No screenshots to process"); return
+    end
+    if type(screenshot_count) ~= "number" or screenshot_count < 0 then
+        on_done(nil, "screenshot_count must be a positive number"); return
+    end
+
+    local has_ffmpeg, ffmpeg_path = SlideshowGenerator.check_ffmpeg()
+    if not has_ffmpeg then
+        on_done(nil, "ffmpeg not available: " .. ffmpeg_path); return
+    end
+
+    if not output_path then
+        local dir = screenshot_dir:gsub("/$", "")
+        output_path = dir:gsub("/[^/]+$", "") .. "/slideshow.mp4"
+    end
+
+    assert(type(qt_process_create) == "function",
+        "generate_async: qt_process_* bindings missing (not running under jve --test or live app)")
+    local proc = qt_process_create()
+    local stderr_chunks = {}
+    qt_process_set_stderr_cb(proc, function(chunk)
+        stderr_chunks[#stderr_chunks + 1] = chunk
+    end)
+    qt_process_set_stdout_cb(proc, function(chunk)
+        stderr_chunks[#stderr_chunks + 1] = chunk
+    end)
+    qt_process_set_finished_cb(proc, function(exit_code, exit_status)
+        local output = table.concat(stderr_chunks)
+        qt_process_destroy(proc)
+        if exit_status ~= "normal" or exit_code ~= 0 then
+            log.error("ffmpeg failed (exit=%s status=%s):\n%s",
+                tostring(exit_code), tostring(exit_status), output)
+            on_done(nil, string.format("ffmpeg failed (exit %s)", tostring(exit_code)))
+            return
+        end
+        local size = SlideshowGenerator.get_file_size(output_path)
+        log.event("Generated %s (%.2f MB)", output_path, size / (1024 * 1024))
+        on_done(output_path, nil)
+    end)
+
+    local args = {
+        "-framerate", "2",
+        "-i", screenshot_dir .. "/screenshot_%03d.png",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-y", output_path,
+    }
+    log.event("Running ffmpeg async: %s %s", ffmpeg_path, table.concat(args, " "))
+    local ok, start_err = qt_process_start(proc, ffmpeg_path, args)
+    if not ok then
+        qt_process_destroy(proc)
+        on_done(nil, "qt_process_start failed: " .. tostring(start_err))
+    end
+end
+
 -- Get file size in bytes. wc -c is the only POSIX route that gives a
 -- bare integer without parsing differences across BSD/GNU stat.
 function SlideshowGenerator.get_file_size(path)

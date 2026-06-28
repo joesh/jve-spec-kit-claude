@@ -281,41 +281,51 @@ function CaptureManager:clear_buffers()
     log.event("Buffers cleared")
 end
 
--- Export current capture to disk (Phase 2 implementation)
-function CaptureManager:export_capture(metadata)
-    local json_exporter = require("bug_reporter.json_exporter")
-
-    -- Freeze capture (stop accepting new entries temporarily)
+-- Freeze ring buffers + snapshot data + resolve output_dir. Shared
+-- prep for sync and async export. Caller is responsible for re-enabling
+-- capture (after the sync export returns or in the async callback).
+function CaptureManager:_freeze_and_snapshot(metadata)
     local was_enabled = self.capture_enabled
     self.capture_enabled = false
-
     -- Feature 027 FR-011a: .jvp content MUST NOT ship in any payload.
-    -- The legacy database-snapshot branch is removed entirely; metadata
-    -- no longer carries a database_snapshot_after field.
     local capture_data = {
-        gestures = self.gesture_ring_buffer,
-        commands = self.command_ring_buffer,
-        logs = self.log_ring_buffer,
-        screenshots = self.screenshot_ring_buffer
+        gestures    = self.gesture_ring_buffer,
+        commands    = self.command_ring_buffer,
+        logs        = self.log_ring_buffer,
+        screenshots = self.screenshot_ring_buffer,
     }
     metadata.screenshot_interval_ms = self.screenshot_interval_ms
-
-    -- Set default output directory
     local output_dir = path_utils.resolve_repo_path(metadata.output_dir or "tests/captures")
+    return was_enabled, capture_data, output_dir
+end
 
-    -- Export to JSON
-    local json_path, err = json_exporter.export(capture_data, metadata, output_dir)
-
-    -- Re-enable capture
+-- Sync export. Used by capture_on_error (crash path — event loop may
+-- be gone, can't wait on QProcess). Blocks for the duration of ffmpeg.
+function CaptureManager:export_capture(metadata)
+    local json_exporter = require("bug_reporter.json_exporter")
+    local was_enabled, capture_data, output_dir = self:_freeze_and_snapshot(metadata)
+    local json_path = json_exporter.export(capture_data, metadata, output_dir)
     self.capture_enabled = was_enabled
-
-    if not json_path then
-        log.error("Export failed: %s", err or "unknown error")
-        return nil, err
-    end
-
     log.event("Exported capture to: %s", json_path)
     return json_path
+end
+
+-- Async sibling. Used by F12/user-submitted path so the GUI stays
+-- responsive while ffmpeg builds slideshow.mp4 (FR-021 — Submit's
+-- "Sending…" label updates during the run instead of beachballing).
+function CaptureManager:export_capture_async(metadata, on_done)
+    assert(type(on_done) == "function", "export_capture_async: on_done required")
+    local json_exporter = require("bug_reporter.json_exporter")
+    local was_enabled, capture_data, output_dir = self:_freeze_and_snapshot(metadata)
+    json_exporter.export_async(capture_data, metadata, output_dir, function(json_path, err)
+        self.capture_enabled = was_enabled
+        if json_path then
+            log.event("Exported capture to: %s", json_path)
+        else
+            log.error("Async export failed: %s", err or "unknown error")
+        end
+        on_done(json_path, err)
+    end)
 end
 
 -- Return module

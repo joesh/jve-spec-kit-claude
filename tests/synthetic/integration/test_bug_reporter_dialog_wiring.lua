@@ -81,7 +81,13 @@ assert(io.open(sentinel_path, "r") == nil,
 state:set_text_only(false)
 local result
 report_bug.submit(state, function(r) result = r end)
-assert(result, "report_bug.submit on_done never fired")
+local deadline_iters = 600  -- ~60s @ 100ms naps (ffmpeg + HTTPS round-trip)
+while result == nil and deadline_iters > 0 do
+    qt_constants.CONTROL.PROCESS_EVENTS()
+    os.execute("sleep 0.1")
+    deadline_iters = deadline_iters - 1
+end
+assert(result, "report_bug.submit on_done never fired within 60s")
 assert(result.ok, "report_bug.submit failed: " .. tostring(result.user_message))
 
 local hooked_path
