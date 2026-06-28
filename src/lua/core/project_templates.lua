@@ -21,6 +21,7 @@
 local M = {}
 local log = require("core.logger").for_area("media")
 local path_utils = require("core.path_utils")
+local fs_utils = require("core.fs_utils")
 local uuid = require("uuid")
 
 -- Template presets: each drives both combobox display and .jvp generation
@@ -161,12 +162,7 @@ function M.create_project_from_template(template, project_name, dest_path)
     -- This prep used to live in new_project.lua. Hoisted here so EVERY caller
     -- — current dialog, future scripted creates, tests — gets the same
     -- guarantee, and the dialog can't accidentally bypass it.
-    local function path_exists(p)
-        local f = io.open(p, "rb")
-        if f then f:close(); return true end
-        return false
-    end
-    assert(not path_exists(dest_path),
+    assert(not fs_utils.file_exists(dest_path),
         "project_templates.create_project_from_template: project already exists at "
         .. dest_path)
     local project_open = require("core.project_open")
@@ -176,7 +172,7 @@ function M.create_project_from_template(template, project_name, dest_path)
         .. "Quit that instance first.")
     for _, suffix in ipairs({"-wal", "-shm", "-journal", "-jve-pidlock"}) do
         local p = dest_path .. suffix
-        if path_exists(p) then
+        if fs_utils.file_exists(p) then
             local ok_rm, rm_err = os.remove(p)
             assert(ok_rm,
                 "project_templates.create_project_from_template: failed to clean "

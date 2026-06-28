@@ -117,11 +117,14 @@ assert(new_track_count == 6, "expected 6 tracks in new project, got: " .. tostri
 -- ===========================================================================
 -- Test 5: create_project_from_template asserts on empty name
 -- ===========================================================================
+-- Domain: a refused create leaves no .jvp on disk; user can try a different
+-- name. We don't pin the assert wording — the contract is the side-effect.
 print("  test: create_project_from_template rejects empty name")
 database.init(setup_db_path)
-local ok, err = pcall(project_templates.create_project_from_template, template, "", TMP_DIR .. "/bad.jvp")
+local bad_dest = TMP_DIR .. "/bad.jvp"
+local ok = pcall(project_templates.create_project_from_template, template, "", bad_dest)
 assert(not ok, "should reject empty name")
-assert(tostring(err):find("project_name required"), "wrong error: " .. tostring(err))
+assert(not io.open(bad_dest, "rb"), "refused create must leave no .jvp on disk")
 
 -- ===========================================================================
 -- Test 6: create_project_from_template asserts on existing dest
