@@ -232,8 +232,12 @@ static int lua_create_timer(lua_State* L) {
     lua_pushvalue(L, 3);
     int callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
-    // Create timer
-    QTimer* timer = new QTimer();
+    // Parent to qApp so QApplication shutdown reaps the timer cleanly
+    // if Lua never GC's the userdata. Without a parent, a long-lived
+    // Lua-side reference (e.g. global) keeps the QTimer alive past
+    // QApplication teardown, then the eventual GC `delete` runs after
+    // the QObject machinery is gone — dangling-timeout on shutdown.
+    QTimer* timer = new QTimer(qApp);
     timer->setInterval(interval_ms);
     timer->setSingleShot(!repeat_mode);
 
@@ -286,9 +290,15 @@ static int qtimer_stop(lua_State* L) {
  */
 static int qtimer_gc(lua_State* L) {
     QTimer** userData = (QTimer**)luaL_checkudata(L, 1, "QTimer");
-    (*userData)->stop();
-    delete *userData;
-    *userData = nullptr;
+    if (*userData) {
+        (*userData)->stop();
+        // deleteLater (not direct delete) so any in-flight timeout
+        // event Qt has already posted gets flushed against the still-
+        // live object before the destructor runs. Direct delete here
+        // would crash on the queued timeout (use-after-free).
+        (*userData)->deleteLater();
+        *userData = nullptr;
+    }
     return 0;
 }
 
