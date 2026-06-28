@@ -119,13 +119,15 @@ All are NEW separate files → `[P]` among themselves (T009 excepted — needs T
   native_rate` (`:530`) + `MediaFrameRate = native_rate` (`:573`) already produce the fixture
   bytes once T011/T012 feed frame-domain audio values. Verify against the RED test; only touch the
   writer if a genuine audio-specific divergence shows up (D10 expects none). → confirms GREEN T002.
-- [ ] **T013a** `drt_writer.build_in_element` (FR-003): emit the sub-frame `<In>` form
-  `<frames>|<hex LE-double fraction>` when an audio clip's `in_offset` is non-integer (a
-  source-in off the frame boundary). Today it loud-asserts integer-only (deliberate D10
-  trip-wire); Joe's call (2026-06-27) is to **implement** the sub-frame encoding, not round.
-  Needs a fixture-grounded byte test for the audio `frames|hex` form (mirror the video
-  retime-subframe encoder). Producer already carries the sub-frame fraction
-  (`source_*_subframe`, master_clock_hz ticks). See [[todo_026_subframe_audio_in_encoding]].
+- [X] **T013a** `drt_writer.build_in_element` (FR-003): emit the sub-frame `<In>` form
+  `<frames>|<hex LE-double fraction>` when a clip's `in_offset` is non-integer (an audio
+  source-in off the frame boundary). Was a loud integer-only assert (deliberate D10
+  trip-wire); now emits the fractional form — whole frame as decimal, fractional part as a
+  16-hex LE IEEE-754 double, joined by `|`. Byte-grounded against `retime-test.drt`
+  (`<In>447|00f05d74d145e73f</In>`, phase0-findings §C); the importer's `parse_resolve_tracks`
+  already decodes this same form, so the round-trip is symmetric. Test:
+  `tests/synthetic/binding/test_drt_subframe_audio_in.lua`. RESOLVED
+  [[todo_026_subframe_audio_in_encoding]].
 
 ### Gap #3 — payload-driven routing (FR-007/008/009)
 > **Import-side prerequisite discovered during impl (not in original task list).** Routing

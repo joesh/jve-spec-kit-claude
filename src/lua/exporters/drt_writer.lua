@@ -272,23 +272,29 @@ end
 --   when sub-frame. JVE payloads carry integer frames; the sub-frame form
 --   is only emitted if a non-integer source_in is passed (defensive).
 
--- <In> = file-relative source-in frames. JVE payloads carry integer frames;
--- the sub-frame `<frames>|<hex_LE_double>` form is unreachable by current
--- JVE model state (all source_in / start_tc_frame are integers — see
--- feedback_timecode_is_truth and feedback_clip_lua_field_names). If JVE ever
--- adopts sub-frame source-in this assert will fire and force a deliberate
--- format extension rather than a silent precision loss.
+-- <In> = file-relative source-in frames. Video clips carry whole frames; audio
+-- clips (gap #1) carry FRAME-domain values that are sample-accurate and so may
+-- be fractional. Resolve encodes a fractional <In> as
+--   <whole_frames>|<hex little-endian IEEE-754 double of the fractional part>
+-- — the whole frame as decimal text, the sub-frame remainder as a 16-hex
+-- LE double, joined by '|'. Byte-attested by retime-test.drt §C
+-- (phase0-findings §C): <In>447|00f05d74d145e73f</In> = frame 447 + 0.72727…
+-- Rounding to an integer would silently shift the audio off the sample it was
+-- cut on (FR-003), so the fractional part is preserved exactly.
 local function build_in_element(in_offset)
-    assert(in_offset == math.floor(in_offset), string.format(
-        "drt_writer.build_in_element: in_offset must be integer frames, "
-        .. "got %s. Sub-frame source-in is not part of JVE's model; if "
-        .. "you're reaching this assert, extend the writer + drp_importer "
-        .. "together with the `<frames>|<hex_LE_double>` form.",
-        tostring(in_offset)))
+    assert(type(in_offset) == "number" and in_offset >= 0, string.format(
+        "drt_writer.build_in_element: in_offset must be a non-negative number, "
+        .. "got %s", tostring(in_offset)))
     if in_offset == 0 then
         return self_close("In")
     end
-    return text_elem("In", tostring(in_offset))
+    local whole = math.floor(in_offset)
+    local frac  = in_offset - whole
+    if frac == 0 then
+        return text_elem("In", tostring(whole))
+    end
+    return text_elem("In",
+        string.format("%d|%s", whole, enc.encode_le_double(frac)))
 end
 
 -- MediaTimemapBA — un-retimed timing curve for the clip.

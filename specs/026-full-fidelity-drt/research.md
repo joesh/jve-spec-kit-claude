@@ -396,10 +396,16 @@ standalone-audio `<In>` form, because every standalone-WAV clip in the fixtures 
 (source_in=0); the only non-zero `In` (`71|hex`) is on a video-file's audio/video clip. So
 "audio In = frames at seq fps" is the design that fits ALL observed evidence but the standalone
 non-zero case is confirmed only by the T002 round-trip + a live-Resolve spot-check, not a fixture.
-**spec.md FR-001/002/003 still say "sample units" and were NOT rewritten** — they need Joe's
-confirm (FR-003 "sample-accurate fractional precision" stays TRUE under D10; FR-002 "computed in
-sample units" is the mechanism claim that conflicts). plan.md:164, research D3, drt-members.md #1
-row carry the same stale mechanism wording pending that confirm.
+**spec.md FR-002/003 were rewritten to the D10 frame-domain reality** (commit 730ea689):
+FR-002 = "frame-domain at seq fps, NOT raw sample units"; FR-003 = audio sub-frame remainder via
+the `<frames>|<hex LE-double>` `<In>` form, MUST NOT silently round. **T013a (2026-06-27)
+implements that encoder** in `drt_writer.build_in_element`, byte-grounded against the only
+fixture-attested non-zero pipe form (`retime-test.drt` `<In>447|00f05d74d145e73f</In>` = frame
+447 + 0.72727… — a video-file clip's audio/video clip; standalone-WAV clips in the fixtures all
+have `In=empty`). The importer's `parse_resolve_tracks` already decodes the same `NN|hex` form,
+so the round-trip is symmetric. The non-zero *standalone-WAV* case is still confirmed only by the
+round-trip + a live-Resolve spot-check, not its own fixture — but the byte form is identical
+regardless of whether the clip is embedded-A/V or standalone, so there is no separate byte risk.
 
 ---
 
