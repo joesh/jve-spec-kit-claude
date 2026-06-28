@@ -19,7 +19,7 @@ crons = ["0 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "jve-bug-reports"
-database_id = "TBD-after-wrangler-d1-create"
+database_id = "e3b77b88-7880-443d-b971-084aba8a775b"
 migrations_dir = "migrations"
 
 # R2 — report-zip artifacts. bucket_name filled in after `wrangler r2
@@ -30,7 +30,7 @@ bucket_name = "jve-bug-reports"
 
 # === Non-secret env ======================================================
 [vars]
-GITHUB_OWNER = "joeshapiro"
+GITHUB_OWNER = "jve-org"
 GITHUB_REPO  = "jve-bugs"
 # Schema version the Worker accepts on X-Schema-Version. Bump when the
 # wire contract changes incompatibly.

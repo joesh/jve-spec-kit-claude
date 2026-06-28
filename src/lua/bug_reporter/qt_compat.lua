@@ -160,6 +160,16 @@ function M.SET_TEXT(widget, text)
     qt.PROPERTIES.SET_TEXT(widget, text)
 end
 
+function M.GET_TEXT(widget)
+    assert(M.init(), "qt_compat.GET_TEXT: core.qt_constants not loaded")
+    return qt.PROPERTIES.GET_TEXT(widget)
+end
+
+function M.GET_CHECKED(widget)
+    assert(M.init(), "qt_compat.GET_CHECKED: core.qt_constants not loaded")
+    return qt.PROPERTIES.GET_CHECKED(widget)
+end
+
 function M.SET_CURRENT_INDEX(widget, index)
     if not M.init() then return end
     qt.PROPERTIES.SET_COMBOBOX_CURRENT_INDEX(widget, index)

@@ -58,10 +58,16 @@ state:set_description("synthetic capture for T005")
 -- text_only stays false: zip MUST then contain slideshow.mp4.
 
 -- Drive the same Submit-handler the dialog's button invokes.
-local result = report_bug.submit(state)
-assert(result and result.ok, "report_bug.submit did not return ok=true")
+-- submit is async (transport is async); the stub binding fires the
+-- callback synchronously in --test mode, so result lands before the
+-- next line runs.
+local result
+report_bug.submit(state, function(r) result = r end)
+assert(result, "report_bug.submit on_done never fired")
+assert(result.ok or result.user_message,
+    "report_bug.submit must always deliver either ok or a user_message")
 assert(result.zip_path and #result.zip_path > 0,
-    "report_bug.submit did not return a zip_path")
+    "report_bug.submit must deliver zip_path so the reveal-in-Finder hook can find the artifact")
 
 local function read_text(path)
     local f = io.open(path, "r")

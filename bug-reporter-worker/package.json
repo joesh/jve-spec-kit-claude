@@ -11,10 +11,14 @@
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "@cloudflare/vitest-pool-workers": "^0.16.20",
     "@cloudflare/workers-types": "^4.20240620.0",
     "typescript": "^5.5.0",
-    "vitest": "2.1.9",
-    "wrangler": "^3.60.0"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.105.0"
+  },
+  "allowScripts": {
+    "workerd@1.20260625.1": true,
+    "esbuild@0.28.1": true
   }
 }

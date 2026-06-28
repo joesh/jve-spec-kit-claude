@@ -13,7 +13,6 @@
 
 local signals = require("core.signals")
 local log     = require("core.logger").for_area("ui")
-local uuid    = require("uuid")
 local utils   = require("bug_reporter.utils")
 
 local M = {}
@@ -82,7 +81,9 @@ local function write_pair(id, payload_zip_bytes, metadata_json)
     f:write(metadata_json); f:close()
 end
 
-function M.enqueue(payload_zip_bytes, metadata_json)
+function M.enqueue(payload_zip_bytes, metadata_json, local_id)
+    assert(type(local_id) == "string" and #local_id > 0,
+        "pending_queue.enqueue: local_id required (must match the X-Report-Local-Id used on the first attempt to enable Worker idempotency)")
     ensure_root()
     local pairs_list = list_pairs()
     if #pairs_list >= MAX_PAIRS then
@@ -90,44 +91,47 @@ function M.enqueue(payload_zip_bytes, metadata_json)
         delete_pair(oldest.id)
         signals.emit("bug_report_queue_cap_warning", { dropped_id = oldest.id })
     end
-    local id = uuid.generate()
-    write_pair(id, payload_zip_bytes, metadata_json)
-    return id
+    write_pair(local_id, payload_zip_bytes, metadata_json)
+    return local_id
 end
 
-function M.drain(install_id, nonce)
+local function post_one_then_continue(entries, idx, install_id, nonce, on_done)
+    if idx > #entries then on_done(); return end
+    local entry = entries[idx]
+    local meta_path = root .. "/" .. entry.id .. ".metadata.json"
+    local zip_path  = root .. "/" .. entry.id .. ".payload.zip"
+    local mf = io.open(meta_path, "r")
+    local zf = io.open(zip_path, "rb")
+    if not (mf and zf) then
+        if mf then mf:close() end
+        if zf then zf:close() end
+        delete_pair(entry.id)
+        return post_one_then_continue(entries, idx + 1, install_id, nonce, on_done)
+    end
+    local metadata = mf:read("*a"); mf:close()
+    local zip_bytes = zf:read("*a"); zf:close()
+    local transport = require("bug_reporter.transport")
+    transport.post_report(metadata, zip_bytes, entry.id, install_id, nonce, function(result)
+        if result.ok then
+            delete_pair(entry.id)
+            return post_one_then_continue(entries, idx + 1, install_id, nonce, on_done)
+        end
+        if result.code == "rate_limited" then
+            log.event("pending_queue: 429 during drain — dropping %s", entry.id)
+            delete_pair(entry.id)
+            return post_one_then_continue(entries, idx + 1, install_id, nonce, on_done)
+        end
+        log.warn("pending_queue: transport/server error during drain (%s) — stopping",
+            tostring(result.code))
+        on_done()
+    end)
+end
+
+function M.drain(install_id, nonce, on_done)
+    on_done = on_done or function() end
     ensure_root()
     local pairs_list = list_pairs()
-    for _, entry in ipairs(pairs_list) do
-        local meta_path = root .. "/" .. entry.id .. ".metadata.json"
-        local zip_path  = root .. "/" .. entry.id .. ".payload.zip"
-        local mf = io.open(meta_path, "r")
-        local zf = io.open(zip_path, "rb")
-        if not (mf and zf) then
-            if mf then mf:close() end
-            if zf then zf:close() end
-            delete_pair(entry.id)
-        else
-            local metadata = mf:read("*a"); mf:close()
-            local zip_bytes = zf:read("*a"); zf:close()
-            local transport = require("bug_reporter.transport")
-            local result = transport.post_report(metadata, zip_bytes, entry.id, install_id, nonce)
-            if result and result.ok then
-                delete_pair(entry.id)
-            elseif result and result.code == "rate_limited" then
-                -- Amended FR-024: 429 during drain is log-only; we drop
-                -- the pair so it doesn't keep cycling.
-                log.event("pending_queue: 429 during drain — dropping %s", entry.id)
-                delete_pair(entry.id)
-            else
-                -- Transport / server error → leave pair in place and
-                -- stop draining so we don't hammer a sick server.
-                log.warn("pending_queue: transport/server error during drain (%s) — stopping",
-                    tostring(result and result.code or "unknown"))
-                return
-            end
-        end
-    end
+    post_one_then_continue(pairs_list, 1, install_id, nonce, on_done)
 end
 
 return M

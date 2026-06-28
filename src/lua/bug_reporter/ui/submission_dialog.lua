@@ -50,22 +50,17 @@ local function build_widgets(state, vbox)
 end
 
 -- Pull widget values into the state model. Called from Submit so the
--- state reflects whatever the user typed (qt_set_line_edit_text_changed
--- takes a global function NAME not a closure; widget-to-state flow is
--- simpler as a pull-at-Submit rather than per-keystroke push).
-local function sync_state_from_widgets(state, widgets)
-    if _G.qt_get_text and widgets.title_edit then
-        local text = _G.qt_get_text(widgets.title_edit)
-        if type(text) == "string" then state:set_title(text) end
-    end
-    if _G.qt_get_text and widgets.desc_edit then
-        local text = _G.qt_get_text(widgets.desc_edit)
-        if type(text) == "string" then state:set_description(text) end
-    end
-    if _G.qt_check_box_is_checked and widgets.text_only then
-        local checked = _G.qt_check_box_is_checked(widgets.text_only)
-        state:set_text_only(checked and true or false)
-    end
+-- state reflects whatever the user typed (the change-handler bindings
+-- take a global function NAME not a closure; pull-at-Submit is simpler
+-- than per-keystroke push). Module-level so the widget→state contract
+-- is independently testable without driving the full submit pipeline.
+function M.sync_state_from_widgets(state, widgets)
+    assert(state and widgets, "sync_state_from_widgets: state and widgets required")
+    assert(widgets.title_edit and widgets.desc_edit and widgets.text_only,
+        "sync_state_from_widgets: expected title_edit, desc_edit, text_only widgets")
+    state:set_title(qt.GET_TEXT(widgets.title_edit))
+    state:set_description(qt.GET_TEXT(widgets.desc_edit))
+    state:set_text_only(qt.GET_CHECKED(widgets.text_only) and true or false)
 end
 
 -- Public: create a submission dialog bound to `state` (T012). Returns
@@ -86,28 +81,43 @@ function M.create(state)
         widgets = widgets,
     }
 
+    -- Named-global pattern: qt_set_button_click_handler only accepts a
+    -- global-name string, not a function literal (see ui/welcome_screen.lua).
+    -- Handlers nil their own slots before returning — the executing function
+    -- holds its own stack reference, so clearing _G mid-call is safe and
+    -- removes the leak without forcing callers to remember a cleanup step.
+    local submit_name = "__bug_reporter_submit_dialog_submit"
+    local cancel_name = "__bug_reporter_submit_dialog_cancel"
+
     function wrapper.on_submit()
-        sync_state_from_widgets(state, widgets)
+        M.sync_state_from_widgets(state, widgets)
         if not state:is_submittable() then
-            log.warn("submission_dialog: Submit invoked but state is not submittable — ignoring")
+            log.warn("submission_dialog: Submit invoked but state is not submittable — title=%q desc_len=%d text_only=%s",
+                tostring(state.title), #(state.description or ""), tostring(state.text_only))
             return false
         end
         local report_bug = require("core.commands.report_bug")
         assert(type(report_bug.submit) == "function",
             "submission_dialog: core.commands.report_bug.submit missing (T014c)")
-        local result = report_bug.submit(state)
-        qt.CLOSE_DIALOG(dialog, true)
-        return result and result.ok or false
+        report_bug.submit(state, function(result)
+            wrapper.last_result = result
+            qt.CLOSE_DIALOG(dialog, true)
+            _G[submit_name] = nil
+            _G[cancel_name] = nil
+        end)
+        return true
     end
 
     function wrapper.on_cancel()
         qt.CLOSE_DIALOG(dialog, false)
+        _G[submit_name] = nil
+        _G[cancel_name] = nil
     end
 
-    if qt_set_button_click_handler then
-        qt_set_button_click_handler(widgets.submit_btn, wrapper.on_submit)
-        qt_set_button_click_handler(widgets.cancel_btn, wrapper.on_cancel)
-    end
+    _G[submit_name] = wrapper.on_submit
+    _G[cancel_name] = wrapper.on_cancel
+    qt_set_button_click_handler(widgets.submit_btn, submit_name)
+    qt_set_button_click_handler(widgets.cancel_btn, cancel_name)
 
     return wrapper
 end

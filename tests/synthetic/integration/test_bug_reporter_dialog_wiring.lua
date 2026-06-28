@@ -79,8 +79,10 @@ assert(io.open(sentinel_path, "r") == nil,
 -- (3) Submit handler with text_only=false produces a zip whose listing
 -- includes slideshow.mp4.
 state:set_text_only(false)
-local result = report_bug.submit(state)
-assert(result and result.ok, "report_bug.submit failed: " .. tostring(result and result.error))
+local result
+report_bug.submit(state, function(r) result = r end)
+assert(result, "report_bug.submit on_done never fired")
+assert(result.ok, "report_bug.submit failed: " .. tostring(result.user_message))
 
 local hooked_path
 do
@@ -106,8 +108,9 @@ assert(zip_lists(hooked_path, "slideshow.mp4"),
 -- (4) Toggle text_only on, re-submit, verify slideshow.mp4 absent.
 os.remove(sentinel_path)
 state:set_text_only(true)
-local result2 = report_bug.submit(state)
-assert(result2 and result2.ok, "second submit failed: " .. tostring(result2 and result2.error))
+local result2
+report_bug.submit(state, function(r) result2 = r end)
+assert(result2 and result2.ok, "second submit failed: " .. tostring(result2 and result2.user_message))
 
 local hooked_path2
 do

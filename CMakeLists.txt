@@ -373,11 +373,23 @@ add_custom_command(TARGET jve POST_BUILD
     VERBATIM
 )
 
-# Always-fires runtime-tree bundling: ship src/lua + keymaps + resources
-# + menus.xml into Contents/Resources on every `make jve`. Without this,
-# Lua-only edits (no C++ recompile → no link → no POST_BUILD) would not
-# reach the bundled .app, and a developer iterating on Lua against the
-# bundled app would silently run stale code.
+# Runtime-tree bundling: ship src/lua + keymaps + resources + menus.xml
+# into Contents/Resources. Without this, the .app contains only the
+# binary and runs against stale (or absent) Lua.
+#
+# Two delivery surfaces — both must exist:
+#
+# (1) POST_BUILD command on `jve` (below). Fires after a link, so
+#     `make jve` after a C++ change correctly refreshes the lua bundle.
+#     Does NOT fire on a no-link build (pure-lua edit while binary is
+#     up-to-date), which is the right cmake behavior for POST_BUILD.
+#
+# (2) ALL custom_target `bundle_runtime_tree`. Always-runs whenever
+#     `make` (default target) is invoked — covers the pure-lua edit
+#     case where (1) wouldn't fire.
+#
+# Both delegate to the same shell command via JVE_BUNDLE_CMD so the
+# bundling logic lives in one place.
 #
 # JVE_BUNDLE_LUA selects how the runtime trees reach Contents/Resources:
 #   copy     (default) — rsync. Bundle is self-contained, portable to
@@ -395,33 +407,61 @@ if(NOT (JVE_BUNDLE_LUA STREQUAL "copy" OR JVE_BUNDLE_LUA STREQUAL "symlink"))
         "Invalid JVE_BUNDLE_LUA='${JVE_BUNDLE_LUA}'. Must be 'copy' or 'symlink'.")
 endif()
 
+# Resolved at generation time; $<TARGET_FILE_DIR:jve> expands per-generator.
+set(JVE_BUNDLE_DEST "$<TARGET_FILE_DIR:jve>/../Resources")
+
+# Build a multi-COMMAND list so the SAME bundling logic can be passed to
+# both add_custom_command(TARGET ... POST_BUILD) and add_custom_target.
+# Multi-COMMAND form (one `COMMAND` keyword per shell process) avoids
+# the cmake list-vs-semicolon hazard that a single `sh -c "...; ...; ..."`
+# string would hit (cmake re-splits `;` inside an unquoted expansion).
 if(JVE_BUNDLE_LUA STREQUAL "symlink")
-    # ln -sfn handles the idempotent re-symlink. The initial conversion
-    # from a copy-mode bundle requires removing the existing directory
-    # (ln -sfn refuses to replace a directory with a symlink).
-    add_custom_target(bundle_runtime_tree ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:jve>/../Resources/src"
-        COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/src/lua' && ln -sfn '${CMAKE_SOURCE_DIR}/src/lua' '$<TARGET_FILE_DIR:jve>/../Resources/src/lua'"
-        COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/keymaps' && ln -sfn '${CMAKE_SOURCE_DIR}/keymaps' '$<TARGET_FILE_DIR:jve>/../Resources/keymaps'"
-        COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/resources' && ln -sfn '${CMAKE_SOURCE_DIR}/resources' '$<TARGET_FILE_DIR:jve>/../Resources/resources'"
-        COMMAND sh -c "rm -f  '$<TARGET_FILE_DIR:jve>/../Resources/menus.xml' && ln -sfn '${CMAKE_SOURCE_DIR}/menus.xml' '$<TARGET_FILE_DIR:jve>/../Resources/menus.xml'"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Symlinking src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=symlink)"
-        VERBATIM
+    # `cmake -E rm -rf` handles the conversion-from-copy-mode case where
+    # the bundle dir is a real tree (ln -sfn refuses to replace a dir
+    # with a symlink). Each rm + ln is two COMMAND lines; cmake aborts
+    # on the first non-zero exit, so the ordering acts like `&&`.
+    set(JVE_BUNDLE_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${JVE_BUNDLE_DEST}/src"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf  "${JVE_BUNDLE_DEST}/src/lua"
+        COMMAND ln -sfn "${CMAKE_SOURCE_DIR}/src/lua"   "${JVE_BUNDLE_DEST}/src/lua"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf  "${JVE_BUNDLE_DEST}/keymaps"
+        COMMAND ln -sfn "${CMAKE_SOURCE_DIR}/keymaps"   "${JVE_BUNDLE_DEST}/keymaps"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf  "${JVE_BUNDLE_DEST}/resources"
+        COMMAND ln -sfn "${CMAKE_SOURCE_DIR}/resources" "${JVE_BUNDLE_DEST}/resources"
+        COMMAND ${CMAKE_COMMAND} -E rm -f   "${JVE_BUNDLE_DEST}/menus.xml"
+        COMMAND ln -sfn "${CMAKE_SOURCE_DIR}/menus.xml" "${JVE_BUNDLE_DEST}/menus.xml"
     )
+    set(JVE_BUNDLE_COMMENT "Symlinking src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=symlink)")
 else()
     # rsync incremental copy. -R preserves the leading path component
     # (src/lua, not just lua) so path_utils.resolve_repo_root keeps
     # working. --delete removes stale entries left by previous builds.
-    add_custom_target(bundle_runtime_tree ALL
-        COMMAND rsync -aR --delete
-            src/lua keymaps resources menus.xml
-            "$<TARGET_FILE_DIR:jve>/../Resources/"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Bundling src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=copy)"
-        VERBATIM
+    set(JVE_BUNDLE_COMMANDS
+        COMMAND rsync -aR --delete src/lua keymaps resources menus.xml "${JVE_BUNDLE_DEST}/"
     )
+    set(JVE_BUNDLE_COMMENT "Bundling src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=copy)")
 endif()
+
+# Surface (1): POST_BUILD on jve — covers `make jve` after a C++ change.
+# Fires after link, so the bundled tree always matches the binary that
+# just got built. Does NOT fire on a no-link build (pure-lua edit while
+# binary is up-to-date) — that case is covered by surface (2).
+add_custom_command(TARGET jve POST_BUILD
+    ${JVE_BUNDLE_COMMANDS}
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "${JVE_BUNDLE_COMMENT}"
+    VERBATIM
+)
+
+# Surface (2): always-fires target — covers `make` after a pure-lua edit
+# where the binary is already up-to-date. ALL attaches to the default
+# target so `make` (no target) triggers it.
+add_custom_target(bundle_runtime_tree ALL
+    ${JVE_BUNDLE_COMMANDS}
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "${JVE_BUNDLE_COMMENT}"
+    VERBATIM
+)
 # Order: jve must be linked first (so Contents/MacOS exists for
 # $<TARGET_FILE_DIR:jve> to resolve), then bundle into Resources.
 add_dependencies(bundle_runtime_tree jve)

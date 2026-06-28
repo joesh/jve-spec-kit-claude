@@ -36,13 +36,17 @@ local CONSENT_TEXT = load_consent_text()
 
 -- Public: prompt the user. Returns "accept" or "decline".
 -- The dialog runs modally (qt_show_dialog with modal=true).
+--
+-- Click handlers go through the codebase's named-global pattern
+-- (see ui/welcome_screen.lua) because qt_set_button_click_handler
+-- only accepts a global-name string, not a function literal.
 function M.prompt()
     local dialog = qt.CREATE_DIALOG("JVE — Privacy Consent", 640, 560)
     local vbox = qt.CREATE_LAYOUT("vertical")
     qt.SET_WIDGET_LAYOUT(dialog, vbox)
 
     local body = qt.CREATE_TEXT_EDIT(CONSENT_TEXT)
-    if _G.qt_set_text_edit_read_only then _G.qt_set_text_edit_read_only(body, true) end
+    qt.SET_WIDGET_PROPERTY(body, "readOnly", true)
     qt.LAYOUT_ADD_WIDGET(vbox, body)
 
     local btn_row = qt.CREATE_LAYOUT("horizontal")
@@ -54,18 +58,23 @@ function M.prompt()
     qt.LAYOUT_ADD_LAYOUT(vbox, btn_row)
 
     local result = "decline"  -- default if window-closed without choice
-    if _G.qt_set_button_click_handler then
-        _G.qt_set_button_click_handler(accept_btn, function()
-            result = "accept"
-            qt.CLOSE_DIALOG(dialog, true)
-        end)
-        _G.qt_set_button_click_handler(decline_btn, function()
-            result = "decline"
-            qt.CLOSE_DIALOG(dialog, false)
-        end)
+    local accept_name = "__bug_reporter_consent_accept"
+    local decline_name = "__bug_reporter_consent_decline"
+    _G[accept_name] = function()
+        result = "accept"
+        qt.CLOSE_DIALOG(dialog, true)
     end
+    _G[decline_name] = function()
+        result = "decline"
+        qt.CLOSE_DIALOG(dialog, false)
+    end
+    _G.qt_set_button_click_handler(accept_btn, accept_name)
+    _G.qt_set_button_click_handler(decline_btn, decline_name)
 
-    if _G.qt_show_dialog then _G.qt_show_dialog(dialog, true) end
+    _G.qt_show_dialog(dialog, true)
+
+    _G[accept_name] = nil
+    _G[decline_name] = nil
     return result
 end
 

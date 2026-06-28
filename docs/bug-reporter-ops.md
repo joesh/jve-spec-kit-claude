@@ -82,13 +82,24 @@ F12 path will surface "Bug reporting is disabled."
 ## Cloudflare analytics IP capture
 
 By default the Workers analytics dashboard records the Client IP for
-every request. Disable this so the bug-reporter pipeline never has
-raw IPs in its analytics history either:
+every request. FR-025 carves this out as Joe's call: the spec-binding
+boundary is D1 / R2 / KV (only `sha256(ip)` stored — see
+`bug-reporter-worker/src/auth.ts` `check_install_register_rate`),
+not edge-level access logs.
 
-1. Open your Cloudflare dashboard → Workers → jve-bug-relay → Settings.
-2. Under "Observability", set **Logs → Client IP** to "Off".
-3. The D1 path already only stores `sha256(ip)` (`install_register_attempts.ip_hash`),
-   so this is the last surface where raw IPs appear in the platform.
+As of 2026-06, the Cloudflare dashboard no longer exposes a per-field
+Client IP toggle under Workers → Settings → Observability → Logs. The
+panel offers only:
+- Logs **Enabled** (on/off)
+- Include Invocation logs (on/off)
+- Persist logs to the Workers dashboard (on/off)
+
+Decision (2026-06-26): leave Logs **Enabled** for debug visibility.
+Raw IPs may appear in the per-request invocation log accessible from
+your Workers dashboard; that surface is account-walled. D1 / R2
+remain IP-clean. If you want strict zero-IP-anywhere later, toggle
+Logs → Enabled to off (loses live debug — `wrangler tail` against
+live traffic becomes the only diagnostic).
 
 ## Endpoint override for development
 
