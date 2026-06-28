@@ -70,6 +70,42 @@ local function load_pref_enabled()
     return prefs[PREF_KEY] and true or false
 end
 
+-- Module-level so it's directly testable without driving the dialog.
+-- Flips the runtime state via telemetry AND persists the pref to disk
+-- so TogglePreferenceBugReporting's nil/true/false semantics stay in
+-- sync. Returns the new boolean for the caller to display.
+function M.apply_toggle(new_value)
+    assert(type(new_value) == "boolean",
+        "privacy_panel.apply_toggle: new_value must be boolean; got " .. type(new_value))
+    local telemetry = require("bug_reporter.telemetry")
+    telemetry.apply_pref_toggle(new_value)
+    local prefs = dialog_prefs.load(dialog_prefs.path_for(PREFS_FILENAME))
+    prefs[PREF_KEY] = new_value
+    dialog_prefs.save(dialog_prefs.path_for(PREFS_FILENAME), prefs)
+    log.event("PrivacyPanel: bug_reporter_enabled = %s", tostring(new_value))
+    return new_value
+end
+
+-- Delete the install file so the next launch's telemetry.init treats
+-- this as a fresh install and re-prompts. Returns "revoked" if a file
+-- existed and was deleted, "absent" if there was nothing to remove.
+-- Module-level so the test can drive it without needing a dialog.
+function M.revoke()
+    local home = os.getenv("HOME")
+    assert(home and home ~= "", "PrivacyPanel.revoke: HOME unset")
+    local p = home .. "/.jve/install_id.json"
+    local f = io.open(p, "r")
+    if f then
+        f:close()
+        local ok, err = os.remove(p)
+        assert(ok, "PrivacyPanel.revoke: os.remove " .. p .. " failed: " .. tostring(err))
+        log.event("PrivacyPanel: revoked — removed %s", p)
+        return "revoked"
+    end
+    log.event("PrivacyPanel: revoke — %s already absent", p)
+    return "absent"
+end
+
 -- Public: show the modal. Returns nothing (state changes hit disk).
 function M.show()
     local dialog = qt.CREATE_DIALOG("JVE — Privacy & Bug Reporting", 620, 520)
@@ -107,38 +143,18 @@ function M.show()
 
     local toggle_conn = qt_signals.connect(toggle, "clicked", function()
         local new_value = qt.GET_CHECKED(toggle) and true or false
-        local telemetry = require("bug_reporter.telemetry")
-        telemetry.apply_pref_toggle(new_value)
-        -- Persist to disk so TogglePreferenceBugReporting's nil/true/false
-        -- semantics stay in sync — apply_pref_toggle only flips runtime
-        -- state, not the prefs file. Drive both through the same pref.
-        local prefs = dialog_prefs.load(dialog_prefs.path_for(PREFS_FILENAME))
-        prefs[PREF_KEY] = new_value
-        dialog_prefs.save(dialog_prefs.path_for(PREFS_FILENAME), prefs)
+        M.apply_toggle(new_value)
         qt.SET_TEXT(action_label,
             new_value and "Bug reporting enabled." or "Bug reporting disabled.")
-        log.event("PrivacyPanel: bug_reporter_enabled = %s", tostring(new_value))
     end)
     assert(toggle_conn, "PrivacyPanel: failed to connect toggle.clicked")
 
     _G[revoke_name] = function()
-        -- Delete the install file so the next launch's telemetry.init
-        -- treats this as a fresh install and re-prompts. Current session
-        -- continues using its in-memory nonce until quit — explained
-        -- in the action_label so the user isn't surprised.
-        local home = os.getenv("HOME")
-        assert(home and home ~= "", "PrivacyPanel.revoke: HOME unset")
-        local p = home .. "/.jve/install_id.json"
-        local f = io.open(p, "r")
-        if f then
-            f:close()
-            local ok, err = os.remove(p)
-            assert(ok, "PrivacyPanel.revoke: os.remove " .. p .. " failed: " .. tostring(err))
-            log.event("PrivacyPanel: revoked — removed %s", p)
+        local outcome = M.revoke()
+        if outcome == "revoked" then
             qt.SET_TEXT(action_label,
                 "Revoked. Quit and relaunch JVE — you will be re-prompted for consent.")
         else
-            log.event("PrivacyPanel: revoke — %s already absent", p)
             qt.SET_TEXT(action_label,
                 "No install record on disk; nothing to revoke. Next launch will prompt for consent.")
         end
