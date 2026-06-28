@@ -11,9 +11,13 @@
 #include <ctime>
 #include <string>
 #include <unordered_map>
+#include <sys/stat.h>
+#include <cstdarg>
 
 // ---- Global level array (default: WARN for all areas) ----
 JveLevel g_jve_area_levels[static_cast<int>(JveArea::COUNT)];
+
+static FILE* g_log_file = nullptr;
 
 // ---- Extended area levels for hierarchical names (e.g. "ui.find") ----
 static std::unordered_map<std::string, JveLevel> g_extended_levels;
@@ -92,6 +96,24 @@ static void apply_entry(const char* area_str, int area_len, JveLevel level) {
 // ---- Init ----
 
 void jve_init_log() {
+    // Open log file in ~/.jve/jve.log
+    const char* home = getenv("HOME");
+    if (home) {
+        std::string jve_dir = std::string(home) + "/.jve";
+        mkdir(jve_dir.c_str(), 0755); // Ignore error if it already exists
+        std::string log_path = jve_dir + "/jve.log";
+        g_log_file = fopen(log_path.c_str(), "a");
+        if (g_log_file) {
+            time_t now = time(nullptr);
+            struct tm tm_buf;
+            localtime_r(&now, &tm_buf);
+            char time_str[64];
+            strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
+            fprintf(g_log_file, "\n--- JVE Editor Started at %s ---\n", time_str);
+            fflush(g_log_file);
+        }
+    }
+
     // Default: all areas at WARN
     for (int i = 0; i < static_cast<int>(JveArea::COUNT); ++i) {
         g_jve_area_levels[i] = JveLevel::Warn;
@@ -153,10 +175,20 @@ void jve_log(JveArea area, JveLevel level, const char* fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
+    va_list args_copy;
+    va_copy(args_copy, args);
     vfprintf(stderr, fmt, args);
     va_end(args);
 
     fputc('\n', stderr);
+
+    if (g_log_file) {
+        fprintf(g_log_file, "[%s] [%s] %s: ", time_str, area_name, level_name);
+        vfprintf(g_log_file, fmt, args_copy);
+        fputc('\n', g_log_file);
+        fflush(g_log_file);
+    }
+    va_end(args_copy);
 }
 
 // ---- Hierarchical area check ----
@@ -200,6 +232,11 @@ static void jve_log_str(const char* area_name, JveLevel level, const char* msg) 
         ? LEVEL_NAMES[level_idx] : "???";
 
     fprintf(stderr, "[%s] [%s] %s: %s\n", time_str, area_name, level_name, msg);
+
+    if (g_log_file) {
+        fprintf(g_log_file, "[%s] [%s] %s: %s\n", time_str, area_name, level_name, msg);
+        fflush(g_log_file);
+    }
 }
 
 // ---- FFI exports ----

@@ -35,6 +35,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - LuaJIT 2.1 (UI/commands/model), C++17/Qt 6.x (one new binding) + `core.command_manager`, `core.signals`, `models.clip`, `models.track`, `ui.timeline.timeline_panel`, `ui.timeline.view.timeline_view_renderer`, `ui.timeline.view.timeline_view_input`, `core.playback.playback_engine_transport`, `qt_bindings.cpp` (025-five-timeline-ux)
 - SQLite `.jvp` — no schema change (025-five-timeline-ux)
 - LuaJIT 2.1 export layer (`core/resolve_bridge/payload_builder`, `exporters/drt_writer`, `models/media`+`clip_marker`); existing `qt_zstd_*` FFI for the Sm2MpVideoClip FieldsBlob; SQLite `.jvp` read-only, output `.drt` zip; no schema change (026-full-fidelity-drt)
+- LuaJIT 2.1 (UI/commands/transport policy), C++17 / Qt 6.x (FFI + hardware queries + HTTP), TypeScript (Cloudflare Worker only) + Qt6 (Core, Widgets, Gui, Network — already linked), OpenSSL Crypto (already linked, for HMAC-SHA256 + SHA-256), dkjson (Lua JSON), lsqlite3 (Lua, existing), libzstd (existing, not needed here) (027-user-facing-bug)
+- Cloudflare R2 (payload artifacts) + Cloudflare D1 (`installs`, `reports`, `clusters` tables) + local `~/.jve/install_id.json` (install_id + nonce) + local `~/.jve/pending-reports/` (offline retry queue) + local `tests/captures/<id>/` (in-memory then on-disk capture during Phase A) (027-user-facing-bug)
 
 READ ENGINEERING.md
 

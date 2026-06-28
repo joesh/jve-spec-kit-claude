@@ -134,6 +134,8 @@ globals = {
     "grab_window",
     "qt_widget_geometry_in",
     "qt_pixmap_fill_rect",
+    "qt_pixmap_byte_count",
+    "qt_fs_atomic_write_secure",
     "create_timer",
     "post_mouse_event",
     "post_key_event",
