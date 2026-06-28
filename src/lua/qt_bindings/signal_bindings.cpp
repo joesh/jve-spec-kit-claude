@@ -600,10 +600,20 @@ private:
 
 int lua_set_button_click_handler(lua_State* L) {
     QAbstractButton* button = get_widget<QAbstractButton>(L, 1);
-    const char* handler_name = lua_tostring(L, 2);
-    if (!button || !handler_name) return 0;
-
-    std::string handler_str(handler_name);
+    if (!button) {
+        return luaL_error(L, "qt_set_button_click_handler: arg 1 must be a QAbstractButton");
+    }
+    // arg 2 MUST be a string naming a Lua global. Passing a function silently
+    // produced a NULL handler_name and skipped wiring — a real bug bit the
+    // bug-reporter dialogs (consent + submission) in 2026-06. Fail loud
+    // instead, so future callers see the type mismatch immediately.
+    if (lua_type(L, 2) != LUA_TSTRING) {
+        return luaL_error(L,
+            "qt_set_button_click_handler: arg 2 must be a string naming a Lua global handler "
+            "(got %s) — see ui/welcome_screen.lua for the named-global pattern",
+            lua_typename(L, lua_type(L, 2)));
+    }
+    std::string handler_str(lua_tostring(L, 2));
     QObject::connect(button, &QAbstractButton::clicked, [L, handler_str]() {
         LuaHandlerCaller cb(L, handler_str.c_str(), "signal.button_clicked");
         if (cb.ready()) {

@@ -1,358 +1,170 @@
---- submission_dialog.lua
--- Bug submission review dialog (shows before uploading)
-local json_test_loader = require("bug_reporter.json_test_loader")
-local github_issue_creator = require("bug_reporter.github_issue_creator")
-local log = require("core.logger").for_area("ui")
+-- Feature 027 T013: bug-report submission dialog. View layer per
+-- Constitution I MVC — owns the widgets, binds them to a
+-- submission_state model (T012), and routes user actions to the
+-- ReportBug submit handler (T014c).
+--
+-- Phase A surface:
+--   - Title field (required for Submit)
+--   - Multiline description
+--   - Text-only checkbox (excludes slideshow.mp4 from the zip)
+--   - Submit + Cancel buttons
+--
+-- All references to YouTube/OAuth/github_issue_creator/json_test_loader
+-- dropped — those modules are slated for delete in T015 / T052.
+
 local qt = require("bug_reporter.qt_compat")
-local ui_constants = require("core.ui_constants")
+local log = require("core.logger").for_area("ui")
 
-local SubmissionDialog = {}
+local M = {}
 
--- Create bug submission review dialog
--- @param test_path: Path to test JSON file
--- @return: Dialog widget
--- Helper: build a `<bold-label> <value>` row with min-width on the label.
-local function build_info_row(layout, label_text, value_text)
-    local row = qt.CREATE_LAYOUT("horizontal")
-    local label = qt.CREATE_LABEL(label_text)
-    qt.SET_WIDGET_STYLE(label, "font-weight: bold; min-width: 100px;")
-    qt.LAYOUT_ADD_WIDGET(row, label)
-    qt.LAYOUT_ADD_WIDGET(row, qt.CREATE_LABEL(value_text))
-    qt.LAYOUT_ADD_STRETCH(row)
-    qt.LAYOUT_ADD_LAYOUT(layout, row)
-end
-
-local function build_info_section(test)
-    local group  = qt.CREATE_GROUP_BOX("Bug Information")
-    local layout = qt.CREATE_LAYOUT("vertical")
-
-    build_info_row(layout, "Name:",     test.test_name or test.test_id)
-    build_info_row(layout, "Category:", test.category or "bug")
-    if test.capture_metadata and test.capture_metadata.timestamp then
-        build_info_row(layout, "Captured:",
-            os.date("%Y-%m-%d %H:%M:%S", test.capture_metadata.timestamp))
+local function build_privacy_preview_text()
+    local install = require("bug_reporter.install")
+    local rec = install.read()
+    -- FR-005: surface what's about to ship. install_id.json is the
+    -- single source of truth for the per-install fields; we render
+    -- them so the user can audit before clicking Submit.
+    local lines = {
+        "What will be sent with this report:",
+        "  • Title + description (this dialog)",
+        "  • capture.json: gestures, commands, log lines from the last 5 minutes",
+        "    (file/user paths are redacted to ~/<user>/ before sending)",
+        "  • slideshow.mp4: ~5 minutes of 1 Hz screenshots (unless Text-only is checked)",
+        "  • Install identity, JVE build SHA, hardware snapshot",
+        "      (all set once at first launch; visible in ~/.jve/install_id.json)",
+    }
+    if rec then
+        lines[#lines + 1] = string.format("  • install_id: %s", rec.install_id)
+        lines[#lines + 1] = string.format("  • jve_sha:    %s", rec.jve_sha_at_register or "(unknown)")
     end
-    build_info_row(layout, "Statistics:", string.format(
-        "%d gestures, %d commands, %d screenshots",
-        #(test.gesture_log or {}),
-        #(test.command_log or {}),
-        (test.screenshots and test.screenshots.screenshot_count or 0)))
-
-    qt.SET_WIDGET_LAYOUT(group, layout)
-    return group
+    return table.concat(lines, "\n")
 end
 
-local function build_preview_section(test)
-    local group  = qt.CREATE_GROUP_BOX("GitHub Issue Preview")
-    local layout = qt.CREATE_LAYOUT("vertical")
+local function build_widgets(state, vbox)
+    local title_label = qt.CREATE_LABEL("Title (required):")
+    qt.LAYOUT_ADD_WIDGET(vbox, title_label)
+    local title_edit = qt.CREATE_LINE_EDIT(state.title or "")
+    qt.LAYOUT_ADD_WIDGET(vbox, title_edit)
 
-    local title_row = qt.CREATE_LAYOUT("horizontal")
-    local title_label = qt.CREATE_LABEL("Title:")
-    qt.SET_WIDGET_STYLE(title_label, "font-weight: bold;")
-    qt.LAYOUT_ADD_WIDGET(title_row, title_label)
-    qt.LAYOUT_ADD_LAYOUT(layout, title_row)
+    local desc_label = qt.CREATE_LABEL("Description:")
+    qt.LAYOUT_ADD_WIDGET(vbox, desc_label)
+    local desc_edit = qt.CREATE_TEXT_EDIT(state.description or "")
+    qt.LAYOUT_ADD_WIDGET(vbox, desc_edit)
 
-    local issue_title = require("bug_reporter.bug_submission").format_issue_title(test)
-    local title_edit = qt.CREATE_LINE_EDIT(issue_title)
-    qt.LAYOUT_ADD_WIDGET(layout, title_edit)
+    -- FR-006: Text-only opt-out.
+    local text_only_cb = qt.CREATE_CHECKBOX("Text only (exclude slideshow video)")
+    qt.LAYOUT_ADD_WIDGET(vbox, text_only_cb)
 
-    qt.LAYOUT_ADD_SPACING(layout, 5)
+    -- FR-005: privacy preview pane. Read-only summary of what the
+    -- report will carry. Keeps the user informed without forcing
+    -- them to introspect ~/.jve/ or read the consent text again.
+    local preview = qt.CREATE_TEXT_EDIT(build_privacy_preview_text())
+    qt.SET_WIDGET_PROPERTY(preview, "readOnly", true)
+    qt.LAYOUT_ADD_WIDGET(vbox, preview)
 
-    local body_label = qt.CREATE_LABEL("Body:")
-    qt.SET_WIDGET_STYLE(body_label, "font-weight: bold;")
-    qt.LAYOUT_ADD_WIDGET(layout, body_label)
+    local status_label = qt.CREATE_LABEL("")
+    qt.LAYOUT_ADD_WIDGET(vbox, status_label)
 
-    local body_text = qt.CREATE_TEXT_EDIT(github_issue_creator.format_bug_report_body(test))
-    qt.SET_WIDGET_PROPERTY(body_text, "readOnly", true)
-    qt.SET_WIDGET_PROPERTY(body_text, "minimumHeight", 200)
-    qt.LAYOUT_ADD_WIDGET(layout, body_text)
-
-    qt.SET_WIDGET_LAYOUT(group, layout)
-    return group, title_edit, body_text
-end
-
-local function build_options_section(video_path)
-    local group  = qt.CREATE_GROUP_BOX("Submission Options")
-    local layout = qt.CREATE_LAYOUT("vertical")
-
-    local upload_video = qt.CREATE_CHECKBOX("Upload slideshow video to YouTube")
-    qt.SET_CHECKED(upload_video, true)
-    qt.LAYOUT_ADD_WIDGET(layout, upload_video)
-
-    if not video_path then
-        qt.SET_ENABLED(upload_video, false)
-        local note = qt.CREATE_LABEL("  (No slideshow video found)")
-        qt.SET_WIDGET_STYLE(note, "color: red;")
-        qt.LAYOUT_ADD_WIDGET(layout, note)
-    else
-        local info = qt.CREATE_LABEL("  Video: " .. video_path)
-        qt.SET_WIDGET_STYLE(info, "color: gray; font-size: 9pt;")
-        qt.LAYOUT_ADD_WIDGET(layout, info)
-    end
-
-    local create_issue = qt.CREATE_CHECKBOX("Create GitHub issue")
-    qt.SET_CHECKED(create_issue, true)
-    qt.LAYOUT_ADD_WIDGET(layout, create_issue)
-
-    local privacy_row = qt.CREATE_LAYOUT("horizontal")
-    local privacy_combo = qt.CREATE_COMBOBOX({"Unlisted", "Private", "Public"})
-    qt.SET_CURRENT_INDEX(privacy_combo, 0)
-    qt.LAYOUT_ADD_WIDGET(privacy_row, qt.CREATE_LABEL("  Video privacy:"))
-    qt.LAYOUT_ADD_WIDGET(privacy_row, privacy_combo)
-    qt.LAYOUT_ADD_STRETCH(privacy_row)
-    qt.LAYOUT_ADD_LAYOUT(layout, privacy_row)
-
-    qt.SET_WIDGET_LAYOUT(group, layout)
-    return group, upload_video, create_issue, privacy_combo
-end
-
-local function build_button_row(video_path)
-    local row = qt.CREATE_LAYOUT("horizontal")
-    qt.LAYOUT_ADD_STRETCH(row)
-
-    local preview_btn = qt.CREATE_BUTTON("Preview Video")
-    if not video_path then qt.SET_ENABLED(preview_btn, false) end
-
-    local submit_btn = qt.CREATE_BUTTON("Submit Bug Report")
-    qt.SET_WIDGET_STYLE(submit_btn,
-        "background-color: " .. ui_constants.COLORS.ACCENT_SUCCESS .. "; color: white; font-weight: bold; padding: 8px;")
-
+    local btn_row = qt.CREATE_LAYOUT("horizontal")
+    qt.LAYOUT_ADD_STRETCH(btn_row)
     local cancel_btn = qt.CREATE_BUTTON("Cancel")
-
-    qt.LAYOUT_ADD_WIDGET(row, preview_btn)
-    qt.LAYOUT_ADD_WIDGET(row, submit_btn)
-    qt.LAYOUT_ADD_WIDGET(row, cancel_btn)
-    return row, preview_btn, submit_btn, cancel_btn
-end
-
-function SubmissionDialog.create(test_path)
-    if not qt.is_available() then
-        log.error("Qt bindings not available for submission dialog")
-        return nil
-    end
-
-    local test, err = json_test_loader.load(test_path)
-    if not test then
-        log.error("Failed to load test: %s", err)
-        return nil
-    end
-
-    local dialog = qt.CREATE_DIALOG("Submit Bug Report")
-    if not dialog then
-        log.error("Failed to create submission dialog")
-        return nil
-    end
-
-    local main_layout = qt.CREATE_LAYOUT("vertical")
-    if not main_layout then
-        log.error("Failed to create submission dialog layout")
-        return nil
-    end
-
-    local header = qt.CREATE_LABEL("Review Bug Report Before Submission")
-    qt.SET_WIDGET_STYLE(header, "font-size: 14pt; font-weight: bold;")
-    qt.LAYOUT_ADD_WIDGET(main_layout, header)
-    qt.LAYOUT_ADD_SPACING(main_layout, 10)
-
-    qt.LAYOUT_ADD_WIDGET(main_layout, build_info_section(test))
-    qt.LAYOUT_ADD_SPACING(main_layout, 10)
-
-    local preview_group, title_edit, body_text = build_preview_section(test)
-    qt.LAYOUT_ADD_WIDGET(main_layout, preview_group)
-    qt.LAYOUT_ADD_SPACING(main_layout, 10)
-
-    local video_path = SubmissionDialog.find_slideshow_video(test_path)
-    local options_group, upload_video, create_issue, privacy_combo =
-        build_options_section(video_path)
-    qt.LAYOUT_ADD_WIDGET(main_layout, options_group)
-
-    qt.LAYOUT_ADD_SPACING(main_layout, 20)
-    local button_row, preview_video, submit, cancel = build_button_row(video_path)
-    qt.LAYOUT_ADD_LAYOUT(main_layout, button_row)
-
-    qt.SET_DIALOG_LAYOUT(dialog, main_layout)
+    qt.LAYOUT_ADD_WIDGET(btn_row, cancel_btn)
+    local submit_btn = qt.CREATE_BUTTON("Submit")
+    qt.LAYOUT_ADD_WIDGET(btn_row, submit_btn)
+    qt.LAYOUT_ADD_LAYOUT(vbox, btn_row)
 
     return {
-        dialog = dialog,
-        test_path = test_path,
-        test = test,
-        widgets = {
-            title_edit    = title_edit,
-            body_text     = body_text,
-            upload_video  = upload_video,
-            create_issue  = create_issue,
-            privacy_combo = privacy_combo,
-            preview_video = preview_video,
-            submit        = submit,
-            cancel        = cancel,
-        }
+        title_edit   = title_edit,
+        desc_edit    = desc_edit,
+        text_only    = text_only_cb,
+        submit_btn   = submit_btn,
+        cancel_btn   = cancel_btn,
+        status_label = status_label,
     }
 end
 
--- Find slideshow video for test
--- @param test_path: Path to test JSON file
--- @return: Video path or nil
-function SubmissionDialog.find_slideshow_video(test_path)
-    local test_dir = test_path:match("(.*/)")
-    if not test_dir then
-        return nil
-    end
-
-    local video_path = test_dir .. "slideshow.mp4"
-    local file = io.open(video_path, "r")
-    if file then
-        file:close()
-        return video_path
-    end
-
-    return nil
+-- Pull widget values into the state model. Called from Submit so the
+-- state reflects whatever the user typed (the change-handler bindings
+-- take a global function NAME not a closure; pull-at-Submit is simpler
+-- than per-keystroke push). Module-level so the widget→state contract
+-- is independently testable without driving the full submit pipeline.
+function M.sync_state_from_widgets(state, widgets)
+    assert(state and widgets, "sync_state_from_widgets: state and widgets required")
+    assert(widgets.title_edit and widgets.desc_edit and widgets.text_only,
+        "sync_state_from_widgets: expected title_edit, desc_edit, text_only widgets")
+    state:set_title(qt.GET_TEXT(widgets.title_edit))
+    state:set_description(qt.GET_TEXT(widgets.desc_edit))
+    state:set_text_only(qt.GET_CHECKED(widgets.text_only) and true or false)
 end
 
--- Show submission result dialog
--- @param result: Submission result from bug_submission
-function SubmissionDialog.show_result(result)
-    if not qt.is_available() then
-        return
-    end
+-- Public: create a submission dialog bound to `state` (T012). Returns
+-- a wrapper:
+--   { dialog, widgets, on_submit(), on_cancel() }
+function M.create(state)
+    assert(state and type(state.is_submittable) == "function",
+        "submission_dialog.create: requires a submission_state instance")
 
-    local dialog = qt.CREATE_DIALOG("Submission Complete")
-    if not dialog then
-        log.error("Failed to create submission result dialog")
-        return nil
-    end
+    local dialog = qt.CREATE_DIALOG("Submit Bug Report", 520, 480)
+    local vbox = qt.CREATE_LAYOUT("vertical")
+    qt.SET_WIDGET_LAYOUT(dialog, vbox)
 
-    local layout = qt.CREATE_LAYOUT("vertical")
-    if not layout then
-        log.error("Failed to create submission result layout")
-        return nil
-    end
+    local widgets = build_widgets(state, vbox)
 
-    -- Success/failure header
-    local header_label
-    if result.video_url or result.issue_url then
-        header_label = qt.CREATE_LABEL("✓ Bug Report Submitted Successfully")
-        qt.SET_WIDGET_STYLE(header_label, "color: green; font-size: 14pt; font-weight: bold;")
-    else
-        header_label = qt.CREATE_LABEL("✗ Submission Failed")
-        qt.SET_WIDGET_STYLE(header_label, "color: red; font-size: 14pt; font-weight: bold;")
-    end
-    qt.LAYOUT_ADD_WIDGET(layout, header_label)
+    local wrapper = {
+        dialog  = dialog,
+        widgets = widgets,
+    }
 
-    qt.LAYOUT_ADD_SPACING(layout, 10)
+    -- Named-global pattern: qt_set_button_click_handler only accepts a
+    -- global-name string, not a function literal (see ui/welcome_screen.lua).
+    -- Handlers nil their own slots before returning — the executing function
+    -- holds its own stack reference, so clearing _G mid-call is safe and
+    -- removes the leak without forcing callers to remember a cleanup step.
+    local submit_name = "__bug_reporter_submit_dialog_submit"
+    local cancel_name = "__bug_reporter_submit_dialog_cancel"
 
-    -- Video URL
-    if result.video_url then
-        local video_label = qt.CREATE_LABEL("Video URL:")
-        qt.SET_WIDGET_STYLE(video_label, "font-weight: bold;")
-        qt.LAYOUT_ADD_WIDGET(layout, video_label)
-
-        local video_link = qt.CREATE_LINE_EDIT(result.video_url)
-        qt.SET_WIDGET_PROPERTY(video_link, "readOnly", true)
-        qt.LAYOUT_ADD_WIDGET(layout, video_link)
-
-        qt.LAYOUT_ADD_SPACING(layout, 5)
-    end
-
-    -- Issue URL
-    if result.issue_url then
-        local issue_label = qt.CREATE_LABEL("GitHub Issue:")
-        qt.SET_WIDGET_STYLE(issue_label, "font-weight: bold;")
-        qt.LAYOUT_ADD_WIDGET(layout, issue_label)
-
-        local issue_link = qt.CREATE_LINE_EDIT(result.issue_url)
-        qt.SET_WIDGET_PROPERTY(issue_link, "readOnly", true)
-        qt.LAYOUT_ADD_WIDGET(layout, issue_link)
-
-        qt.LAYOUT_ADD_SPACING(layout, 5)
-    end
-
-    -- Errors
-    if result.errors and #result.errors > 0 then
-        qt.LAYOUT_ADD_SPACING(layout, 10)
-        local error_label = qt.CREATE_LABEL("Errors:")
-        qt.SET_WIDGET_STYLE(error_label, "font-weight: bold; color: red;")
-        qt.LAYOUT_ADD_WIDGET(layout, error_label)
-
-        for _, error_msg in ipairs(result.errors) do
-            local error_text = qt.CREATE_LABEL("  • " .. error_msg)
-            qt.SET_WIDGET_STYLE(error_text, "color: red;")
-            qt.LAYOUT_ADD_WIDGET(layout, error_text)
+    function wrapper.on_submit()
+        M.sync_state_from_widgets(state, widgets)
+        if not state:is_submittable() then
+            qt.SET_TEXT(widgets.status_label, "Title is required.")
+            return false
         end
+        qt.SET_ENABLED(widgets.submit_btn, false)
+        qt.SET_ENABLED(widgets.cancel_btn, false)
+        qt.SET_TEXT(widgets.submit_btn, "Sending…")
+        qt.SET_TEXT(widgets.status_label, "Sending report — this may take a few seconds.")
+        local report_bug = require("core.commands.report_bug")
+        assert(type(report_bug.submit) == "function",
+            "submission_dialog: core.commands.report_bug.submit missing")
+        report_bug.submit(state, function(result)
+            wrapper.last_result = result
+            assert(result and result.user_message,
+                "report_bug.submit must always deliver result.user_message")
+            qt.SET_TEXT(widgets.status_label, result.user_message)
+            qt.SET_TEXT(widgets.submit_btn, "Close")
+            qt.SET_ENABLED(widgets.submit_btn, true)
+            _G[submit_name] = function()
+                qt.CLOSE_DIALOG(dialog, result.ok and true or false)
+                _G[submit_name] = nil
+                _G[cancel_name] = nil
+            end
+            log.event("submission_dialog: result ok=%s msg=%s",
+                tostring(result.ok), tostring(result.user_message))
+        end)
+        return true
     end
 
-    -- OK button
-    qt.LAYOUT_ADD_SPACING(layout, 20)
-    local button_layout = qt.CREATE_LAYOUT("horizontal")
-    qt.LAYOUT_ADD_STRETCH(button_layout)
+    function wrapper.on_cancel()
+        qt.CLOSE_DIALOG(dialog, false)
+        _G[submit_name] = nil
+        _G[cancel_name] = nil
+    end
 
-    local ok_button = qt.CREATE_BUTTON("OK")
-    qt.LAYOUT_ADD_WIDGET(button_layout, ok_button)
-    qt.LAYOUT_ADD_LAYOUT(layout, button_layout)
+    _G[submit_name] = wrapper.on_submit
+    _G[cancel_name] = wrapper.on_cancel
+    qt_set_button_click_handler(widgets.submit_btn, submit_name)
+    qt_set_button_click_handler(widgets.cancel_btn, cancel_name)
 
-    qt.SET_DIALOG_LAYOUT(dialog, layout)
-
-    return dialog
+    return wrapper
 end
 
--- Show progress dialog during submission
--- @return: Dialog widget with progress bar
-function SubmissionDialog.show_progress()
-    if not qt.is_available() then
-        return nil
-    end
-
-    local dialog = qt.CREATE_DIALOG("Submitting Bug Report")
-    if not dialog then
-        log.error("Failed to create submission progress dialog")
-        return nil
-    end
-
-    local layout = qt.CREATE_LAYOUT("vertical")
-    if not layout then
-        log.error("Failed to create submission progress layout")
-        return nil
-    end
-
-    local status_label = qt.CREATE_LABEL("Preparing submission...")
-    qt.LAYOUT_ADD_WIDGET(layout, status_label)
-
-    qt.LAYOUT_ADD_SPACING(layout, 10)
-
-    local progress_bar = qt.CREATE_PROGRESS_BAR()
-    qt.SET_WIDGET_PROPERTY(progress_bar, "minimum", 0)
-    qt.SET_WIDGET_PROPERTY(progress_bar, "maximum", 100)
-    qt.SET_WIDGET_PROPERTY(progress_bar, "value", 0)
-    qt.LAYOUT_ADD_WIDGET(layout, progress_bar)
-
-    qt.LAYOUT_ADD_SPACING(layout, 10)
-
-    local cancel_button = qt.CREATE_BUTTON("Cancel")
-    qt.LAYOUT_ADD_WIDGET(layout, cancel_button)
-
-    qt.SET_DIALOG_LAYOUT(dialog, layout)
-
-    -- Return wrapper table (dialog is C++ userdata)
-    return {
-        dialog = dialog,
-        widgets = {
-            status = status_label,
-            progress = progress_bar,
-            cancel = cancel_button
-        }
-    }
-end
-
--- Update progress dialog
--- @param wrapper: Progress dialog wrapper table
--- @param status: Status message
--- @param percent: Progress percentage (0-100)
-function SubmissionDialog.update_progress(wrapper, status, percent)
-    if not wrapper or not wrapper.widgets then
-        return
-    end
-
-    qt.SET_TEXT(wrapper.widgets.status, status)
-    qt.SET_WIDGET_PROPERTY(wrapper.widgets.progress, "value", percent)
-end
-
-return SubmissionDialog
+return M

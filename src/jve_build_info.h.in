@@ -1,0 +1,7 @@
+#pragma once
+
+// Generated at build time by cmake/generate_build_info.cmake (invoked by the
+// `generate_build_info` ALL custom target). Updated only when the SHA
+// actually changes, so non-SHA-bumping rebuilds don't invalidate every TU
+// that includes this header.
+#define JVE_GIT_SHA "@JVE_GIT_SHA@"

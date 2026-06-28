@@ -1664,6 +1664,13 @@ function M.create()
     end
     log.event("Project browser created (media=%d timelines=%d)", media_count, sequence_count)
 
+    -- Feature 027 FR-020a: project browser shows filesystem paths in
+    -- the Path column. Route registration through bug_reporter's
+    -- policy module — that's where the missing-binding fail-fast
+    -- lives. M.tree is set above by both code paths in M.create().
+    assert(M.tree, "project_browser.create: M.tree must be set by end of create()")
+    require("bug_reporter.pixmap_redact").register(M.tree, "project_browser tree")
+
     return container
 end
 

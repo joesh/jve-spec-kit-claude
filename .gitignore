@@ -19,6 +19,9 @@ build/Makefile2
 *build-log*
 *.tlog
 
+# Generated at build time by cmake/generate_build_info.cmake (feature 027)
+src/jve_build_info.h
+
 # CMake generated files
 CMakeCache.txt
 CMakeFiles/

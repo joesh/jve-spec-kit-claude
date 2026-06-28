@@ -51,6 +51,25 @@ globals = {
     "qt_compose_bt709_csc",
     -- spec 023 — Resolve-bridge client process identity (QCoreApplication::applicationPid).
     "qt_get_pid",
+    -- spec 027 T001 — build provenance for bug reporter (git SHA at compile time).
+    "qt_get_build_info",
+    -- spec 027 T010b — QPixmap dimension accessors used by bug-reporter capture tests.
+    "qpixmap_width",
+    "qpixmap_height",
+    -- spec 027 T007 + T030 — bug-reporter crypto (SHA-256 and HMAC-SHA256).
+    "qt_sha256",
+    "qt_hmac_sha256",
+    -- spec 027 T011 — filesystem helpers used by the bug-reporter exporter.
+    "qt_fs_listdir",
+    "qt_fs_remove_dir_recursive",
+    -- spec 027 T032 — async HTTP for transport.lua.
+    "qt_http_post_json",
+    "qt_http_post_multipart",
+    -- spec 027 T031 — hardware introspection for register/heartbeat.
+    "qt_get_cpu_info",
+    "qt_get_system_memory_mb",
+    "qt_get_gpu_info_metal",
+    "qt_get_uname",
     -- spec 023 — helper_supervisor wait_for_bind: replaces test/sleep shellouts.
     "qt_thread_msleep",
     "qt_fs_path_exists",

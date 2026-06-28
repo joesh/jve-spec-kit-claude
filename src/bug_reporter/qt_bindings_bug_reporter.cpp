@@ -1,9 +1,15 @@
 #include "qt_bindings_bug_reporter.h"
 #include "../jve_log.h"
 #include "../jve_lua_callback.h"
+#include "../qt_bindings.h"
 #include "gesture_logger.h"
 #include <QWidget>
 #include <QPixmap>
+#include <QPainter>
+#include <QPointer>
+#include <QColor>
+#include <QPoint>
+#include <QRect>
 #include <QTimer>
 #include <QApplication>
 #include <QMouseEvent>
@@ -11,11 +17,20 @@
 #include <QWheelEvent>
 #include <QThread>
 #include <QElapsedTimer>
+#include <QList>
 
 namespace bug_reporter {
 
 // Global gesture logger instance
 static GestureLogger* g_gestureLogger = nullptr;
+
+// Feature 027 FR-019: widgets that must be visually redacted in every
+// screenshot before the pixmap reaches the in-memory ring. UI code
+// (e.g. project_browser.lua) marks its tree as sensitive at setup
+// time; lua_grab_window walks this list post-grab and fills each
+// visible widget's rect with solid grey. QPointer auto-nils when the
+// underlying QWidget is destroyed, so stale entries don't crash.
+static QList<QPointer<QWidget>> s_redact_widgets;
 
 //============================================================================
 // Gesture Logger Bindings
@@ -119,43 +134,64 @@ static int lua_set_gesture_logger_enabled(lua_State* L) {
  * Captures screenshot of widget.
  */
 static int lua_grab_window(lua_State* L) {
-    // For now, grab the main application widget
-    QWidget* mainWidget = qApp->activeWindow();
-    if (!mainWidget) {
-        // Try to get any top-level widget
-        QWidgetList topLevel = qApp->topLevelWidgets();
-        if (!topLevel.isEmpty()) {
-            mainWidget = topLevel.first();
+    // Feature 027 T010b: target the JVE main window by objectName so a
+    // transient dialog focused at F12 time can't poison the capture.
+    // The main window's objectName is set in src/lua/ui/layout.lua just
+    // after WIDGET.CREATE_MAIN_WINDOW (T010a). If no widget matches,
+    // fail loud — per Constitution VI we do NOT silently fall back to
+    // whatever activeWindow happens to be.
+    QWidget* mainWidget = nullptr;
+    for (QWidget* w : qApp->topLevelWidgets()) {
+        if (w && w->objectName() == QStringLiteral("JVEMainWindow")) {
+            mainWidget = w;
+            break;
         }
     }
-
     if (!mainWidget) {
-        lua_pushnil(L);
-        lua_pushstring(L, "No window available to capture");
-        return 2;
+        return luaL_error(L,
+            "bug_reporter grab_window: no top-level widget has objectName 'JVEMainWindow' — "
+            "is layout.lua's qt_set_object_name call wired (T010a)?");
     }
 
-    // Grab the window — INSTRUMENTED to measure main-thread stall.
-    // Suspected cause of 1 Hz periodic playback cadence outliers; log every
-    // call's wall-clock duration so we can correlate with the playback diag.
+    // Time JUST the grab (not redaction) so the 1-min aggregate measures
+    // the main-thread stall master was investigating, not the painter
+    // overhead 027 added on top.
     QElapsedTimer grab_timer;
     grab_timer.start();
     QPixmap pixmap = mainWidget->grab();
     qint64 grab_ms = grab_timer.elapsed();
-    
+
+    // FR-019: scrub registered sensitive widget regions out of the
+    // pixmap before it can be stored in the ring. Path strings shown
+    // by project_browser are the canonical leak; UI code marks the
+    // widget via qt_bug_reporter_redact_widget at setup. QPointer
+    // guards against widgets destroyed between mark and grab.
+    if (!s_redact_widgets.isEmpty()) {
+        QPainter painter(&pixmap);
+        const QColor mask(96, 96, 96);
+        for (const QPointer<QWidget>& wp : s_redact_widgets) {
+            QWidget* w = wp.data();
+            if (!w || !w->isVisible()) continue;
+            QPoint topLeft = w->mapTo(mainWidget, QPoint(0, 0));
+            QRect r(topLeft, w->size());
+            painter.fillRect(r, mask);
+        }
+        painter.end();
+    }
+
+    // 1-minute aggregate logging (master pre-027) — measures the grab
+    // stall ONLY (set before redaction painter pass). Static so the
+    // aggregate spans calls.
     static int capture_count = 0;
     static qint64 total_grab_ms = 0;
     static QElapsedTimer log_timer;
     static bool log_timer_started = false;
-
     if (!log_timer_started) {
         log_timer.start();
         log_timer_started = true;
     }
-
     capture_count++;
     total_grab_ms += grab_ms;
-
     if (log_timer.hasExpired(60000)) {
         JVE_LOG_EVENT(Ui, "bug_reporter grab_window: %d captures in last min (avg %lld ms, widget=%p size=%dx%d)",
             capture_count, (long long)(total_grab_ms / capture_count), (void*)mainWidget,
@@ -169,10 +205,71 @@ static int lua_grab_window(lua_State* L) {
     QPixmap** userData = (QPixmap**)lua_newuserdata(L, sizeof(QPixmap*));
     *userData = new QPixmap(pixmap);
 
-    // Set metatable (we'll define this below)
     luaL_getmetatable(L, "QPixmap");
     lua_setmetatable(L, -2);
 
+    return 1;
+}
+
+/**
+ * qt_bug_reporter_redact_widget(widget)
+ * Marks `widget` as visually sensitive — its rect will be filled with
+ * solid grey on every subsequent grab_window pixmap. Idempotent for
+ * the same QWidget*; the entry self-clears when the widget is destroyed
+ * (QPointer). FR-019.
+ */
+static int lua_bug_reporter_redact_widget(lua_State* L) {
+    void* ptr = lua_to_widget(L, 1);
+    if (!ptr) {
+        return luaL_error(L,
+            "qt_bug_reporter_redact_widget: widget arg required");
+    }
+    QWidget* w = static_cast<QWidget*>(ptr);
+    for (const QPointer<QWidget>& existing : s_redact_widgets) {
+        if (existing.data() == w) return 0;
+    }
+    s_redact_widgets.append(QPointer<QWidget>(w));
+    return 0;
+}
+
+/**
+ * qpixmap_width(pixmap) / qpixmap_height(pixmap) — accessors used by
+ * the bug-reporter main-window capture test (T004). Trivial wrappers
+ * over QPixmap::width()/height().
+ */
+static int lua_qpixmap_width(lua_State* L) {
+    QPixmap** userData = (QPixmap**)luaL_checkudata(L, 1, "QPixmap");
+    lua_pushinteger(L, (*userData)->width());
+    return 1;
+}
+static int lua_qpixmap_height(lua_State* L) {
+    QPixmap** userData = (QPixmap**)luaL_checkudata(L, 1, "QPixmap");
+    lua_pushinteger(L, (*userData)->height());
+    return 1;
+}
+
+/**
+ * QPixmap:byte_count() -> integer
+ * Conservative upper bound on the in-RAM cost of this pixmap, computed
+ * from the underlying QImage's sizeInBytes(). Used by capture_manager
+ * to bound the screenshot ring by total bytes rather than count; a
+ * 4K-monitor pixmap is ~33 MB at 32bpp, so the prior 300-entry cap
+ * meant up to 10 GB of RSS — pass 1+2 audit's #6 HIGH finding.
+ */
+static int lua_qpixmap_byte_count(lua_State* L) {
+    QPixmap** userData = (QPixmap**)luaL_checkudata(L, 1, "QPixmap");
+    QPixmap* pm = *userData;
+    if (!pm || pm->isNull()) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+    // toImage() copies; sizeInBytes is on the QImage. width*height*depth/8
+    // is the same number without the copy.
+    qint64 bytes = static_cast<qint64>(pm->width())
+                 * static_cast<qint64>(pm->height())
+                 * static_cast<qint64>(pm->depth() > 0 ? pm->depth() : 32)
+                 / 8;
+    lua_pushinteger(L, bytes);
     return 1;
 }
 
@@ -217,8 +314,12 @@ static int lua_create_timer(lua_State* L) {
     lua_pushvalue(L, 3);
     int callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
-    // Create timer
-    QTimer* timer = new QTimer();
+    // Parent to qApp so QApplication shutdown reaps the timer cleanly
+    // if Lua never GC's the userdata. Without a parent, a long-lived
+    // Lua-side reference (e.g. global) keeps the QTimer alive past
+    // QApplication teardown, then the eventual GC `delete` runs after
+    // the QObject machinery is gone — dangling-timeout on shutdown.
+    QTimer* timer = new QTimer(qApp);
     timer->setInterval(interval_ms);
     timer->setSingleShot(!repeat_mode);
 
@@ -271,9 +372,15 @@ static int qtimer_stop(lua_State* L) {
  */
 static int qtimer_gc(lua_State* L) {
     QTimer** userData = (QTimer**)luaL_checkudata(L, 1, "QTimer");
-    (*userData)->stop();
-    delete *userData;
-    *userData = nullptr;
+    if (*userData) {
+        (*userData)->stop();
+        // deleteLater (not direct delete) so any in-flight timeout
+        // event Qt has already posted gets flushed against the still-
+        // live object before the destructor runs. Direct delete here
+        // would crash on the queued timeout (use-after-free).
+        (*userData)->deleteLater();
+        *userData = nullptr;
+    }
     return 0;
 }
 
@@ -482,6 +589,12 @@ void registerBugReporterBindings(lua_State* L) {
 
     // Register screenshot functions
     lua_register(L, "grab_window", lua_grab_window);
+    lua_register(L, "qt_bug_reporter_redact_widget", lua_bug_reporter_redact_widget);
+    // QPixmap dimension + byte-count accessors — feature 027 T010b
+    // (byte_count added for capture_manager byte-bound ring, post-rewrite)
+    lua_register(L, "qpixmap_width", lua_qpixmap_width);
+    lua_register(L, "qpixmap_height", lua_qpixmap_height);
+    lua_register(L, "qpixmap_byte_count", lua_qpixmap_byte_count);
 
     // Register timer functions
     lua_register(L, "create_timer", lua_create_timer);

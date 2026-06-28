@@ -1,8 +1,11 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
+#include "../../jve_build_info.h" // Generated; carries JVE_GIT_SHA for qt_get_build_info
 #include "../../timeline_renderer.h" // For lua_create_timeline_renderer
 #include <chrono>
-#include <sys/stat.h>      // ::stat for nanosecond mtime/atime (POSIX)
+#include <fcntl.h>         // open(2), O_NOFOLLOW for atomic_write_secure
+#include <unistd.h>        // write(2), fsync(2), close(2), rename(2)
+#include <sys/stat.h>      // ::stat for nanosecond mtime/atime (POSIX); ::lstat for symlink check
 #include <dirent.h>        // opendir/readdir for qt_dir_scan
 #include <QApplication> // For QApplication::focusWidget()
 #include <QDir>
@@ -64,6 +67,17 @@ static int lua_qt_monotonic_s(lua_State* L) {
     auto now = std::chrono::steady_clock::now().time_since_epoch();
     double seconds = std::chrono::duration<double>(now).count();
     lua_pushnumber(L, seconds);
+    return 1;
+}
+
+// Build provenance — short git SHA the binary was compiled from. Used
+// by the bug-reporter pipeline (feature 027) to stamp captures so every
+// cluster signature includes a verifiable version anchor. SHA frozen at
+// compile time via cmake/generate_build_info.cmake.
+static int lua_qt_get_build_info(lua_State* L) {
+    lua_newtable(L);
+    lua_pushstring(L, JVE_GIT_SHA);
+    lua_setfield(L, -2, "git_sha");
     return 1;
 }
 
@@ -269,6 +283,149 @@ static int lua_qt_fs_mkdir_p(lua_State* L) {
         : "permission denied, invalid path, or non-directory component in parent chain";
     lua_pushnil(L);
     lua_pushfstring(L, "QDir::mkpath failed for %s: %s", path, reason);
+    return 2;
+}
+
+// Atomic, symlink-resistant, mode-controlled file write. Used for
+// secrets (install_id.json — nonce material) where partial writes,
+// world-readable race windows, and symlink redirection are all real
+// failure modes (Pass 1+2 audit: TOCTOU between touch+chmod; no
+// O_NOFOLLOW; non-atomic write bricks the file on crash).
+//
+// Pipeline:
+//   1. If target exists, lstat it; refuse on symlink (caller-provided
+//      path must not be redirected through an attacker-planted link in
+//      a shared home).
+//   2. Write to "<path>.tmp.<pid>.<seq>" with O_CREAT|O_EXCL|O_WRONLY
+//      |O_NOFOLLOW and the caller's mode (e.g. 0600). EXCL closes the
+//      race against any prior temp file from a crashed run.
+//   3. write all bytes, fsync, close.
+//   4. rename(temp, path) — atomic on the same filesystem. POSIX
+//      rename replaces an existing regular file in one step; readers
+//      see either the old file or the new one, never a partial.
+//
+// Returns (true, nil) on success, (false, err) on failure. Caller is
+// expected to assert on err.
+static int lua_qt_fs_atomic_write_secure(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    size_t content_len = 0;
+    const char* content = luaL_checklstring(L, 2, &content_len);
+    lua_Integer mode = luaL_optinteger(L, 3, 0600);
+
+    if (path[0] == '\0') {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "qt_fs_atomic_write_secure: path must not be empty");
+        return 2;
+    }
+
+    struct stat st;
+    if (::lstat(path, &st) == 0 && S_ISLNK(st.st_mode)) {
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "qt_fs_atomic_write_secure: refusing to write through symlink at %s", path);
+        return 2;
+    }
+
+    static int tmp_seq = 0;
+    ++tmp_seq;
+    QByteArray tmp_path = QByteArray(path) + ".tmp."
+        + QByteArray::number(static_cast<qint64>(::getpid())) + "."
+        + QByteArray::number(tmp_seq);
+
+    int fd = ::open(tmp_path.constData(),
+        O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW,
+        static_cast<mode_t>(mode));
+    if (fd < 0) {
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "qt_fs_atomic_write_secure: open(%s) failed: %s",
+            tmp_path.constData(), strerror(errno));
+        return 2;
+    }
+
+    size_t written = 0;
+    while (written < content_len) {
+        ssize_t n = ::write(fd, content + written, content_len - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            int saved = errno;
+            ::close(fd);
+            ::unlink(tmp_path.constData());
+            lua_pushboolean(L, 0);
+            lua_pushfstring(L, "qt_fs_atomic_write_secure: write failed: %s", strerror(saved));
+            return 2;
+        }
+        written += static_cast<size_t>(n);
+    }
+
+    if (::fsync(fd) < 0) {
+        int saved = errno;
+        ::close(fd);
+        ::unlink(tmp_path.constData());
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "qt_fs_atomic_write_secure: fsync failed: %s", strerror(saved));
+        return 2;
+    }
+    ::close(fd);
+
+    if (::rename(tmp_path.constData(), path) != 0) {
+        int saved = errno;
+        ::unlink(tmp_path.constData());
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "qt_fs_atomic_write_secure: rename(%s -> %s) failed: %s",
+            tmp_path.constData(), path, strerror(saved));
+        return 2;
+    }
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// Feature 027 T011: list a directory's regular files (no dirs, no
+// dotfiles). Used by the bug-reporter export to enumerate screenshots
+// before slideshow.mp4 build (the slideshow generator already does its
+// own scan, but qt_fs_listdir is the generic primitive for any future
+// caller). Returns a Lua array of basenames; nil on missing directory.
+static int lua_qt_fs_listdir(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    QDir dir(QString::fromUtf8(path));
+    if (!dir.exists()) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "qt_fs_listdir: directory does not exist: %s", path);
+        return 2;
+    }
+    QStringList names = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+    lua_newtable(L);
+    for (int i = 0; i < names.size(); ++i) {
+        lua_pushstring(L, names[i].toUtf8().constData());
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+// Feature 027 T011: recursive directory removal. Used to delete the
+// per-capture screenshots/ subdir after slideshow.mp4 is built — raw
+// PNGs MUST NOT ship in the payload (FR-011, FR-015). Returns
+// (true, nil) on success, (false, "<reason>") on failure. Missing
+// directory is idempotent success (caller pattern is "rm after a
+// build step that may have already cleaned up").
+static int lua_qt_fs_remove_dir_recursive(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    if (path[0] == '\0') {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "qt_fs_remove_dir_recursive: path must not be empty");
+        return 2;
+    }
+    QDir dir(QString::fromUtf8(path));
+    if (!dir.exists()) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (dir.removeRecursively()) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushboolean(L, 0);
+    lua_pushfstring(L, "QDir::removeRecursively failed for %s (likely "
+        "permission denied or open file handle on a child)", path);
     return 2;
 }
 

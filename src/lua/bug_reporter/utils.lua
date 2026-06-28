@@ -3,17 +3,30 @@
 local Utils = {}
 local time_utils = require("core.time_utils")
 
--- Escape a string for safe use in shell commands
--- Handles single quotes by closing quote, escaping, reopening
--- @param str: String to escape
--- @return: Safely escaped string
+-- Internal: escape single quotes within a string for the '...' shell
+-- form. Returns the escaped middle only — callers MUST wrap in '...'
+-- themselves. Use Utils.shell_quoted_arg for the safe form.
+local function escape_inner_quotes(str)
+    return (str:gsub("'", [['\'']]))
+end
+
+-- Return a fully-quoted shell argument: `'<escaped>'`. Inside single
+-- quotes /bin/sh expands NOTHING (no $, no backticks, no globs); the
+-- only thing that needs escaping is the closing quote itself, handled
+-- by escape_inner_quotes. Safe for arbitrary path/text input.
+function Utils.shell_quoted_arg(str)
+    assert(str ~= nil, "Utils.shell_quoted_arg: nil arg")
+    return "'" .. escape_inner_quotes(str) .. "'"
+end
+
+-- DEPRECATED. Returns inner escape only (no surrounding quotes); a
+-- caller that forgets the surrounding `'...'` produces a shell-injection
+-- vector. Use Utils.shell_quoted_arg instead. Retained for the slideshow
+-- generator which already wraps the result in `'...'` inside its format
+-- string; new callers must NOT use this.
 function Utils.shell_escape(str)
-    if not str then
-        return "''"
-    end
-    -- Replace ' with '\''
-    -- This closes the quote, adds an escaped quote, then reopens the quote
-    return str:gsub("'", "'\\''")
+    if not str then return "" end
+    return escape_inner_quotes(str)
 end
 
 -- URL encode a string (for HTTP requests)
@@ -92,35 +105,15 @@ function Utils.mkdir_p(path)
     return false, "Failed to create directory: " .. tostring(path) .. ": " .. tostring(err)
 end
 
--- Securely write file with restricted permissions
--- Creates file with 600 permissions before writing content to prevent credential exposure
--- @param path: File path
--- @param content: File content
--- @return: Success boolean, error message
+-- Atomic, symlink-resistant, mode-0600 file write for credential content.
+-- Delegates to qt_fs_atomic_write_secure (POSIX open + O_NOFOLLOW + EXCL temp
+-- + fsync + rename). Replaces the prior touch+chmod+io.open path which had a
+-- TOCTOU window (file briefly world-readable), no O_NOFOLLOW (symlink redirect),
+-- and was non-atomic (crash mid-write bricked the file).
+local MODE_0600 = tonumber("600", 8)
+
 function Utils.write_secure_file(path, content)
-    local escaped_path = Utils.shell_escape(path)
-
-    -- Create empty file with secure permissions (600) BEFORE writing sensitive content
-    -- This ensures there's no window where credentials are world-readable
-    local touch_result = os.execute("touch '" .. escaped_path .. "' && chmod 600 '" .. escaped_path .. "' 2>/dev/null")
-    if not (touch_result == true or touch_result == 0) then
-        return false, "Failed to create secure file: " .. path
-    end
-
-    -- Now write content to the already-secured file
-    local file, err = io.open(path, "w")
-    if not file then
-        return false, "Failed to open file for writing: " .. (err or "unknown error")
-    end
-
-    local write_success, write_err = file:write(content)
-    file:close()
-
-    if not write_success then
-        return false, "Failed to write to file: " .. (write_err or "unknown error")
-    end
-
-    return true
+    return qt_fs_atomic_write_secure(path, content, MODE_0600)
 end
 
 return Utils

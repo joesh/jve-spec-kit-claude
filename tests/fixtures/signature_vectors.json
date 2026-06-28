@@ -1,0 +1,65 @@
+{
+    "_comment": "Feature 027 (bug-reporter) signature fixtures. Consumed by Lua bug_reporter.signature (T002/T008) and TS bug-reporter-worker/src/signature.ts (T020/T040). Both implementations MUST produce identical hashes. Hashes hand-computed via python3 hashlib (see scripts/recompute_signature_vectors.py).",
+    "_formula": "sig = sha256(sig_input_commands + '|' + sig_input_text); sig_input_commands = last_3_commands.reject(c=='ReportBug').join(','); sig_input_text = capture_type=='automatic' ? normalize_error(error_message) : normalize_title(user_description). Per data-model.md §Signature, FR-012.",
+    "vectors": [
+        {
+            "name": "A_user_simple",
+            "capture_type": "user_submitted",
+            "last_commands": ["RippleTrimEdge", "MoveClip", "AddTrack"],
+            "error_message": null,
+            "user_description": "Cuts disappear after undo",
+            "sig_input_canonical": "RippleTrimEdge,MoveClip,AddTrack|cuts disappear after undo",
+            "expected_sig": "009b5cd35daff1e70529ebd978f8cef0c3850ff9eb69b1274d77c17295d353b1"
+        },
+        {
+            "name": "B_user_clusters_with_A",
+            "capture_type": "user_submitted",
+            "last_commands": ["RippleTrimEdge", "MoveClip", "AddTrack"],
+            "error_message": null,
+            "user_description": "CUTS, disappear! After... UNDO?",
+            "sig_input_canonical": "RippleTrimEdge,MoveClip,AddTrack|cuts disappear after undo",
+            "expected_sig": "009b5cd35daff1e70529ebd978f8cef0c3850ff9eb69b1274d77c17295d353b1",
+            "_cluster_invariant": "MUST match A's expected_sig — normalize_title strips punctuation+case so the same root cause clusters."
+        },
+        {
+            "name": "C_auto_path_normalized",
+            "capture_type": "automatic",
+            "last_commands": ["LoadProject", "ImportMedia", "PlayPause"],
+            "error_message": "Codec not supported: /Users/joe/Movies/clip.mov",
+            "user_description": null,
+            "sig_input_canonical": "LoadProject,ImportMedia,PlayPause|codec not supported:",
+            "expected_sig": "0a0eb1022df91c296af659b37272e489df1d6581a26fd7759c57d2214ec1b223",
+            "_normalization": "Absolute path matching /[A-Za-z0-9_./\\-]+\\.[a-z]+ stripped; trailing colon retained (not in strip rules); lowercase + collapse whitespace + trim."
+        },
+        {
+            "name": "D_auto_hex_id_normalized",
+            "capture_type": "automatic",
+            "last_commands": ["RenderFrame", "ApplyEffect", "Composite"],
+            "error_message": "Texture handle 0xdeadbeefcafe not found in cache 1234567890abcdef",
+            "user_description": null,
+            "sig_input_canonical": "RenderFrame,ApplyEffect,Composite|texture handle not found in cache",
+            "expected_sig": "e5451bb1d18f255ed876607d738e44e89dd7e867194382ec6fd6f85d425977b0",
+            "_normalization": "0x-prefixed hex AND standalone hex of length >= 16 both stripped per data-model.md §Signature normalize_error."
+        },
+        {
+            "name": "E_reportbug_trailing_stripped",
+            "capture_type": "user_submitted",
+            "last_commands": ["RippleTrimEdge", "MoveClip", "ReportBug"],
+            "error_message": null,
+            "user_description": "Test bug",
+            "sig_input_canonical": "RippleTrimEdge,MoveClip|test bug",
+            "expected_sig": "e58ac5d8679d9103735f369af7dc27518cb91278e72f2c3c6134e12c98bc2d66",
+            "_cluster_invariant": "Trailing ReportBug filtered before join — F12 must not dominate cluster space (FR-012)."
+        },
+        {
+            "name": "F_fewer_than_three_commands",
+            "capture_type": "user_submitted",
+            "last_commands": ["LoadProject"],
+            "error_message": null,
+            "user_description": "Crash on startup",
+            "sig_input_canonical": "LoadProject|crash on startup",
+            "expected_sig": "2d25137511e0aae0f7c8e10ba2567602bee161ded851b3791713d41aac03048b",
+            "_edge_case": "Fresh launch — fewer than 3 prior commands; join just emits what's there."
+        }
+    ]
+}

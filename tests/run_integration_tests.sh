@@ -288,12 +288,25 @@ for t in \
   test_scroll_survives_tab_switch.lua \
   test_timeline_zoom_scroller.lua \
   test_clip_draw_stability.lua \
-  test_drag_select_no_layout_jump.lua
+  test_drag_select_no_layout_jump.lua \
+  test_bug_reporter_capture_main_window.lua \
+  test_bug_reporter_artifact_shape.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
   fi
 done
+
+# test_bug_reporter_dialog_wiring needs JVE_BUG_REPORT_REVEAL_HOOK set
+# in the parent env so reveal_in_finder writes to a sentinel file
+# instead of opening Finder (Lua stdlib has no setenv). Use env -C-style
+# inline export so the variable survives into the launched binary.
+if [[ -f "$INTEG_DIR/test_bug_reporter_dialog_wiring.lua" ]]; then
+  PARALLEL_NAMES+=("test_bug_reporter_dialog_wiring")
+  REVEAL_SENTINEL="$(mktemp -t jve_test_reveal_XXXXXX.txt)"
+  JVE_BUG_REPORT_REVEAL_HOOK="$REVEAL_SENTINEL" \
+    launch_test "test_bug_reporter_dialog_wiring" "$BINARY" --test "$INTEG_DIR/test_bug_reporter_dialog_wiring.lua"
+fi
 
 wait
 collect_results "${PARALLEL_NAMES[@]}"

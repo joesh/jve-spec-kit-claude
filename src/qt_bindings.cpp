@@ -3,6 +3,15 @@
 #include "jve_lua_callback.h" // Shared pcall error drain for all binding callbacks
 #include <QPointer>
 
+// File-scope declarations so qt_bindings.cpp can call the C-linkage
+// registration entries defined in src/bug_reporter/.
+extern "C" void register_bug_reporter_crypto_bindings(lua_State*);            // T007 + T030
+extern "C" void register_bug_reporter_hardware_cpu_bindings(lua_State*);      // T031 (CPU + memory + uname)
+#if defined(__APPLE__)
+extern "C" void register_bug_reporter_hardware_gpu_bindings(lua_State*);      // T031 (Metal GPU)
+#endif
+extern "C" void register_bug_reporter_http_bindings(lua_State*);              // T032 (async HTTP)
+
 // Include all the newly split binding files. These files contain the implementations
 // of the Lua C functions and are compiled as part of this module.
 #include "lua/qt_bindings/binding_macros.h" // For get_widget template and other macros
@@ -352,6 +361,29 @@ void registerQtBindings(lua_State* L)
     // per-project pidlock owner check (replaces ps shellout).
     lua_pushcfunction(L, lua_qt_get_pid); lua_setglobal(L, "qt_get_pid");
 
+    // Build provenance for the bug-reporter pipeline (feature 027 T001).
+    // Returns {git_sha = "<7-char short SHA the binary was compiled from>"}.
+    lua_pushcfunction(L, lua_qt_get_build_info); lua_setglobal(L, "qt_get_build_info");
+
+    // Bug-reporter crypto bindings (feature 027 T007 + T030). Wires
+    // qt_sha256 + qt_hmac_sha256 into the global table.
+    register_bug_reporter_crypto_bindings(L);
+
+    // Feature 027 T031 — hardware introspection (CPU + memory + uname
+    // on every platform, GPU via Metal on macOS only).
+    register_bug_reporter_hardware_cpu_bindings(L);
+#if defined(__APPLE__)
+    register_bug_reporter_hardware_gpu_bindings(L);
+#endif
+
+    // Feature 027 T032 — async HTTP via QNetworkAccessManager.
+    register_bug_reporter_http_bindings(L);
+
+    // Feature 027 T011 — filesystem helpers used by the bug-reporter
+    // exporter (rm screenshots/ after slideshow build; list files).
+    lua_pushcfunction(L, lua_qt_fs_listdir); lua_setglobal(L, "qt_fs_listdir");
+    lua_pushcfunction(L, lua_qt_fs_remove_dir_recursive); lua_setglobal(L, "qt_fs_remove_dir_recursive");
+
     // Thread sleep + FS existence — replace the helper_supervisor
     // wait_for_bind shellouts (test -S / sleep). The fork-per-tick pattern
     // broke under Finder-launched .app's stripped PATH.
@@ -373,6 +405,11 @@ void registerQtBindings(lua_State* L)
     // Recursive mkdir via QDir::mkpath — replaces os.execute("mkdir -p")
     // shellouts that fail silently under Finder-launched .app (stripped PATH).
     lua_pushcfunction(L, lua_qt_fs_mkdir_p); lua_setglobal(L, "qt_fs_mkdir_p");
+
+    // Atomic, symlink-resistant, mode-controlled file write — for
+    // credential files (install_id.json). Replaces utils.write_secure_file's
+    // touch+chmod (TOCTOU) + io.open (non-atomic, follows symlinks).
+    lua_pushcfunction(L, lua_qt_fs_atomic_write_secure); lua_setglobal(L, "qt_fs_atomic_write_secure");
 
     // Register other global utility functions
     lua_pushcfunction(L, lua_set_layout_stretch_factor); lua_setglobal(L, "qt_set_layout_stretch_factor");

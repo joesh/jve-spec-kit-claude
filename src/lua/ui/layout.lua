@@ -348,6 +348,12 @@ end, 50)
 -- Create main window
 log.event("About to create main window...")
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
+-- Feature 027 T010a: identify the JVE main window by objectName so the
+-- bug-reporter capture path can find it regardless of focus state.
+-- lua_grab_window (T010b) walks qApp->topLevelWidgets() looking for
+-- this name and asserts if missing — fail-fast, never silently grab
+-- whichever transient dialog happens to be focused.
+qt_set_object_name(main_window, "JVEMainWindow")
 log.event("Main window created successfully")
 log.event("Applying main window stylesheet...")
 assert(ui_constants and ui_constants.STYLES and type(ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR) == "string" and ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR ~= "",
@@ -741,6 +747,19 @@ if not show_ok then
     log.error("Window SHOW triggered error (corrupt data?): %s", tostring(show_err))
 end
 log.event("Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
+
+-- Feature 027 T050: bug-reporter telemetry pulse. pcall so a
+-- consent-dialog failure can never block editor startup; fail-loud
+-- via log.warn (Constitution VI), app survives so the user can
+-- disable bug reporting from Preferences.
+if not is_test_mode then
+    local ok, err = pcall(function()
+        require("bug_reporter.telemetry").init()
+    end)
+    if not ok then
+        log.warn("bug_reporter.telemetry.init: %s", tostring(err))
+    end
+end
 
 -- Destroy welcome screen AFTER main window is visible (no window gap)
 if ws_handle then

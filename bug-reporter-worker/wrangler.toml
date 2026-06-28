@@ -1,0 +1,46 @@
+# Cloudflare Worker configuration for the JVE bug-reporter pipeline
+# (feature 027). The actual IDs / bucket names are filled in once Joe
+# provisions the resources; the keys below pin the SHAPE of the config
+# so the spec-vs-deployment contract is reviewable in this file alone.
+
+name = "jve-bug-relay"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+
+# T-NEW-C: hourly cleanup of install_register_attempts + report_idempotency.
+[triggers]
+crons = ["0 * * * *"]
+
+# === Resources ============================================================
+# D1 — primary store (installs, reports, clusters, report_idempotency,
+# install_register_attempts). database_id filled in after `wrangler d1
+# create jve-bug-reports`.
+[[d1_databases]]
+binding = "DB"
+database_name = "jve-bug-reports"
+database_id = "e3b77b88-7880-443d-b971-084aba8a775b"
+migrations_dir = "migrations"
+
+# R2 — report-zip artifacts. bucket_name filled in after `wrangler r2
+# bucket create jve-bug-reports`.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "jve-bug-reports"
+
+# === Non-secret env ======================================================
+[vars]
+GITHUB_OWNER = "jve-org"
+GITHUB_REPO  = "jve-bugs"
+# Schema version the Worker accepts on X-Schema-Version. Bump when the
+# wire contract changes incompatibly.
+WIRE_SCHEMA_VERSION = "1"
+# FR-027a comment-trigger cadence (every Nth report on a promoted cluster).
+ISSUE_COMMENT_EVERY_N = "10"
+
+# === Secrets (provisioned via `wrangler secret put`) =====================
+# GITHUB_BOT_TOKEN     — jve-bug-bot PAT with `issues:write`
+# JOE_PROMOTE_SECRET   — bearer used by triage-promote.html
+
+[observability]
+enabled = true

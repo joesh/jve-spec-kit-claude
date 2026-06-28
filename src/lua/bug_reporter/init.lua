@@ -8,18 +8,16 @@ local BugReporter = {
     gesture_logger_installed = false
 }
 
--- Initialize the bug reporter system
+-- Initialize the bug reporter system. Idempotent — safe to call from
+-- every project_open. Creates the timer + installs the gesture logger
+-- but leaves capture DISABLED. telemetry.init flips capture_enabled
+-- after consent is verified; capture pipeline ONLY records once that
+-- happens (pass 2 #1 HIGH).
 function BugReporter.init()
-    -- Initialize capture manager
     capture_manager:init()
-
-    -- Install gesture logger
     BugReporter.install_gesture_logger()
-
-    -- Start screenshot timer
-    BugReporter.start_screenshot_timer()
-
-    log.event("Initialized successfully")
+    BugReporter.create_screenshot_timer()
+    log.event("Bug reporter initialized (capture gated on telemetry consent)")
 end
 
 -- Install gesture logger with callback to capture_manager
@@ -43,36 +41,22 @@ function BugReporter.install_gesture_logger()
     log.event("Gesture logger installed")
 end
 
--- Start screenshot timer (captures every 1 second)
-function BugReporter.start_screenshot_timer()
-    -- If timer already running, don't create another
-    if BugReporter.screenshot_timer then
-        return
-    end
-
-    -- Check if Qt binding is available
+-- Create the 1-Hz screenshot timer but DO NOT start it. set_enabled(true)
+-- starts it once telemetry has verified consent + register.
+function BugReporter.create_screenshot_timer()
+    if BugReporter.screenshot_timer then return end
     if not create_timer then
         log.warn("create_timer not available (Qt bindings not loaded)")
         return
     end
-
-    -- Create timer with callback to capture screenshot
     BugReporter.screenshot_timer = create_timer(
-        1000,  -- 1 second interval
-        true,  -- repeat mode
-        function()
-            BugReporter.capture_screenshot()
-        end
+        1000,
+        true,
+        function() BugReporter.capture_screenshot() end
     )
-
-    -- Check if timer creation succeeded
-    if not BugReporter.screenshot_timer then
-        log.error("Failed to create screenshot timer")
-        return
-    end
-
-    BugReporter.screenshot_timer:start()
-    log.event("Screenshot timer started (1 second interval)")
+    assert(BugReporter.screenshot_timer,
+        "BugReporter: create_timer returned nil despite binding being present")
+    log.event("Screenshot timer created (idle until telemetry enables it)")
 end
 
 -- Capture a screenshot
@@ -97,8 +81,7 @@ function BugReporter.capture_screenshot()
     local transport = require("core.playback.transport")
     local engine = transport.record_engine
     if engine and engine:is_playing() then
-        log.event("bug_reporter timer fired during play — SKIPPING grab")
-        return
+        return  -- 1 Hz log line dropped per T010b; play-skip is the only quiet behavior worth its own line.
     end
 
     local pixmap = grab_window()
@@ -107,21 +90,10 @@ function BugReporter.capture_screenshot()
     end
 end
 
--- Update capture_manager to store QPixmap
-local _original_capture_screenshot = capture_manager.capture_screenshot  -- luacheck: ignore (kept for potential future use)
-function capture_manager:capture_screenshot(pixmap)
-    if not self.capture_enabled then
-        return
-    end
-
-    local entry = {
-        timestamp_ms = self:get_elapsed_ms(),
-        image = pixmap  -- QPixmap userdata from Qt
-    }
-
-    table.insert(self.screenshot_ring_buffer, entry)
-    self:trim_buffers()
-end
+-- (capture_manager:capture_screenshot(pixmap) lives on the class —
+-- previously this module monkey-patched a replacement here, which made
+-- ownership of the screenshot pipeline ambiguous and bypassed the
+-- class's byte-bound ring trimming.)
 
 -- Enable/disable entire bug reporter system
 function BugReporter.set_enabled(enabled)
@@ -186,26 +158,40 @@ function BugReporter.capture_on_error(error_message, stack_trace)
     return json_path
 end
 
--- Manual bug capture (user-initiated)
-function BugReporter.capture_manual(description, expected_behavior)
-    local metadata = {
+local function manual_metadata(description, expected_behavior)
+    return {
         capture_type = "user_submitted",
         test_name = description or "User-submitted bug report",
         category = "user_report",
         tags = {"user_submitted", "manual"},
         user_description = description,
-        user_expected_behavior = expected_behavior
+        user_expected_behavior = expected_behavior,
     }
+end
 
-    local json_path, err = BugReporter.export_capture(metadata)
-
-    if json_path then
-        log.event("Manual capture saved to: %s", json_path)
-    else
-        log.error("Manual capture failed: %s", err or "unknown error")
-    end
-
+-- Manual bug capture (sync). Kept for callers that cannot wait on the
+-- Qt event loop. F12/user-submitted path uses capture_manual_async.
+function BugReporter.capture_manual(description, expected_behavior)
+    local json_path = BugReporter.export_capture(manual_metadata(description, expected_behavior))
+    log.event("Manual capture saved to: %s", json_path)
     return json_path
+end
+
+-- Async sibling. Fires on_done(json_path, err) once the slideshow
+-- QProcess finishes. Returns immediately; the F12 dialog updates its
+-- status_label between Submit-click and on_done firing.
+function BugReporter.capture_manual_async(description, expected_behavior, on_done)
+    assert(type(on_done) == "function", "capture_manual_async: on_done required")
+    capture_manager:export_capture_async(
+        manual_metadata(description, expected_behavior),
+        function(json_path, err)
+            if json_path then
+                log.event("Manual capture saved to: %s", json_path)
+            else
+                log.error("Manual capture failed: %s", err or "unknown error")
+            end
+            on_done(json_path, err)
+        end)
 end
 
 return BugReporter
