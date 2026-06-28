@@ -74,10 +74,10 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
     -- -pix_fmt yuv420p: Compatible pixel format
     -- -y: Overwrite output file
     local cmd = string.format(
-        "ffmpeg -framerate 2 -i '%s/screenshot_%%03d.png' " ..
-        "-c:v libx264 -pix_fmt yuv420p -y '%s' 2>&1",
-        utils.shell_escape(screenshot_dir),
-        utils.shell_escape(output_path)
+        "ffmpeg -framerate 2 -i %s/screenshot_%%03d.png " ..
+        "-c:v libx264 -pix_fmt yuv420p -y %s 2>&1",
+        utils.shell_quoted_arg(screenshot_dir),
+        utils.shell_quoted_arg(output_path)
     )
 
     log.event("Running ffmpeg...")

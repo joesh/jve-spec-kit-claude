@@ -26,24 +26,22 @@ function M.set_root_for_tests(dir)
 end
 
 function M.clear_all_for_tests()
-    os.execute("/bin/rm -rf " .. utils.shell_escape(root))
-    os.execute("/bin/mkdir -p " .. utils.shell_escape(root))
+    -- Best-effort recursive remove; missing dir is OK (idempotent setup).
+    qt_fs_remove_dir_recursive(root)
+    assert(utils.mkdir_p(root))
 end
 
 local function ensure_root()
-    os.execute("/bin/mkdir -p " .. utils.shell_escape(root))
+    assert(utils.mkdir_p(root))
 end
 
--- Return {id, mtime} pairs sorted oldest-first. We invoke /usr/bin/stat
--- once per file rather than launching ls -laT (parsing format
--- differences across BSD/GNU stat is uglier than N forks of stat
--- at this small N).
+-- Return {id, mtime} pairs sorted oldest-first.
 local function list_pairs()
     local out = {}
-    local p = io.popen("/bin/ls -1 " .. utils.shell_escape(root) .. " 2>/dev/null")
-    if not p then return out end
+    local names = qt_fs_listdir(root)
+    if not names then return out end  -- root missing → no entries
     local files_by_id = {}
-    for name in p:lines() do
+    for _, name in ipairs(names) do
         local id, kind = name:match("^(.-)%.(payload%.zip)$")
         if not id then
             id, kind = name:match("^(.-)%.(metadata%.json)$")
@@ -53,13 +51,10 @@ local function list_pairs()
             files_by_id[id][kind] = true
         end
     end
-    p:close()
     for id, kinds in pairs(files_by_id) do
         if kinds["payload.zip"] and kinds["metadata.json"] then
-            local sp = io.popen("/usr/bin/stat -f %m " ..
-                utils.shell_escape(root .. "/" .. id .. ".metadata.json"))
-            local mtime = sp and tonumber(sp:read("*l")) or 0
-            if sp then sp:close() end
+            local mtime = qt_file_mtime(root .. "/" .. id .. ".metadata.json")
+            assert(mtime, "pending_queue.list_pairs: qt_file_mtime nil for " .. id)
             out[#out + 1] = { id = id, mtime = mtime }
         end
     end
@@ -72,13 +67,17 @@ local function delete_pair(id)
     os.remove(root .. "/" .. id .. ".metadata.json")
 end
 
+-- Both queue files are written mode-0600 via utils.write_secure_file —
+-- the zip can carry the user's window screenshots and the metadata
+-- carries the install_id, so they're per-user secrets even if the
+-- nonce itself lives elsewhere.
 local function write_pair(id, payload_zip_bytes, metadata_json)
-    local zip_path = root .. "/" .. id .. ".payload.zip"
+    local zip_path  = root .. "/" .. id .. ".payload.zip"
     local meta_path = root .. "/" .. id .. ".metadata.json"
-    local f = assert(io.open(zip_path, "wb"))
-    f:write(payload_zip_bytes); f:close()
-    f = assert(io.open(meta_path, "w"))
-    f:write(metadata_json); f:close()
+    local ok, err = utils.write_secure_file(zip_path, payload_zip_bytes)
+    assert(ok, "pending_queue.write_pair: zip write failed: " .. tostring(err))
+    ok, err = utils.write_secure_file(meta_path, metadata_json)
+    assert(ok, "pending_queue.write_pair: metadata write failed: " .. tostring(err))
 end
 
 function M.enqueue(payload_zip_bytes, metadata_json, local_id)

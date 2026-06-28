@@ -6,14 +6,25 @@
 -- timezone returned by the Worker, and jve_sha_at_register (which
 -- gates the FR-018 hardware re-snapshot on every heartbeat).
 --
--- Malformed JSON or missing required fields ASSERT — Constitution VI
--- fail-fast. FR-019a: silent drift is worse than a loud crash here.
+-- Writes go through utils.write_secure_file → qt_fs_atomic_write_secure
+-- (POSIX open + O_NOFOLLOW + O_EXCL temp + fsync + rename) so the file
+-- is mode-0600, never partially written, and never redirected through
+-- an attacker-planted symlink in $HOME.
+--
+-- Schema is versioned at the file level. If we read a file with a
+-- schema_version we don't know how to handle, we ASSERT — silent
+-- drift is worse than a loud crash (FR-019a). When the schema changes,
+-- bump SCHEMA_VERSION and add a migration in M.read.
+--
+-- Malformed JSON or missing required fields also ASSERT.
 
 local dkjson = require("dkjson")
 local utils  = require("bug_reporter.utils")
 local uuid   = require("uuid")
 
 local M = {}
+
+local SCHEMA_VERSION = 1
 
 local home_override
 local UUID_V4_PATTERN = "^[0-9a-f]+%-[0-9a-f]+%-4[0-9a-f]+%-[89ab][0-9a-f]+%-[0-9a-f]+$"
@@ -30,7 +41,6 @@ end
 local function jve_dir() return home() .. "/.jve" end
 local function path()    return jve_dir() .. "/install_id.json" end
 
--- Test-only override (T024 uses this; production never calls).
 function M.set_home_for_tests(dir)
     home_override = dir
 end
@@ -42,6 +52,11 @@ end
 local function validate(record, src)
     assert(type(record) == "table",
         "bug_reporter.install: " .. src .. " is not a JSON object")
+    assert(type(record.schema_version) == "number",
+        "bug_reporter.install: " .. src .. " missing schema_version (required since rewrite)")
+    assert(record.schema_version == SCHEMA_VERSION,
+        "bug_reporter.install: " .. src .. " schema_version=" .. tostring(record.schema_version) ..
+        " but current is " .. SCHEMA_VERSION .. " (no migration registered)")
     assert(type(record.install_id) == "string" and record.install_id:match(UUID_V4_PATTERN),
         "bug_reporter.install: " .. src .. " missing or invalid install_id")
     assert(type(record.nonce) == "string" and #record.nonce == 64
@@ -55,8 +70,6 @@ local function validate(record, src)
         "bug_reporter.install: " .. src .. " missing jve_sha_at_register")
 end
 
--- Returns the record or nil if no install_id.json exists. Asserts loud
--- on parse/missing-field errors (FR-019a).
 function M.read()
     local p = path()
     local f = io.open(p, "r")
@@ -67,16 +80,21 @@ function M.read()
     assert(decoded,
         "bug_reporter.install: failed to parse " .. p ..
         ": " .. tostring(err or "unknown"))
+    -- Backfill schema_version=1 for files written before the rewrite.
+    -- This is the ONE migration we accept (the original schema was V1
+    -- in all but name). Future bumps MUST do explicit migration here
+    -- and reject older versions cleanly.
+    if decoded.schema_version == nil then
+        decoded.schema_version = 1
+    end
     validate(decoded, p)
     return decoded
 end
 
 function M.write(record)
+    record.schema_version = SCHEMA_VERSION
     validate(record, "in-memory record")
-    local dir = jve_dir()
-    -- mkdir -p the parent. /bin/mkdir handles the case where it
-    -- already exists; absolute path defeats stripped-PATH trap.
-    os.execute("/bin/mkdir -p " .. utils.shell_escape(dir))
+    assert(utils.mkdir_p(jve_dir()))
     local ok, err = utils.write_secure_file(path(),
         dkjson.encode(record, { indent = true }))
     assert(ok, "bug_reporter.install: write failed: " .. tostring(err))

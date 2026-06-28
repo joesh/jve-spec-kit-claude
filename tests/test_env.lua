@@ -383,6 +383,51 @@ if not _G.qt_fs_path_exists then
     end
 end
 
+-- Stubs for the bug-reporter security/persistence rewrite (commit B).
+-- Production registers these via misc_bindings.cpp; tests run on plain
+-- luajit and need the same names callable. Each stub mirrors the
+-- production contract closely enough that callers can't tell the
+-- difference for test-purpose behavior.
+if not _G.qt_fs_atomic_write_secure then
+    _G.qt_fs_atomic_write_secure = function(path, content, mode)
+        assert(type(path) == "string" and path ~= "",
+            "qt_fs_atomic_write_secure: path required")
+        assert(type(content) == "string",
+            "qt_fs_atomic_write_secure: content must be string")
+        local f, oerr = io.open(path, "wb")
+        if not f then return false, "stub open failed: " .. tostring(oerr) end
+        f:write(content); f:close()
+        -- Stub approximates the mode-enforcement aspect of the
+        -- production binding by chmod-ing post-write. It does NOT
+        -- approximate O_NOFOLLOW or atomicity (LuaJIT lacks the
+        -- syscalls without ffi); those properties are verified by
+        -- production-only tests run via --test mode.
+        local mode_octal = string.format("%o", mode or tonumber("600", 8))
+        os.execute(string.format("chmod %s %q", mode_octal, path))
+        return true
+    end
+end
+if not _G.qt_fs_listdir then
+    _G.qt_fs_listdir = function(path)
+        assert(type(path) == "string" and path ~= "",
+            "qt_fs_listdir: path required")
+        local p = io.popen(string.format("/bin/ls -1 %q 2>/dev/null", path))
+        if not p then return nil, "stub popen failed" end
+        local out = {}
+        for name in p:lines() do out[#out + 1] = name end
+        p:close()
+        return out
+    end
+end
+if not _G.qt_fs_remove_dir_recursive then
+    _G.qt_fs_remove_dir_recursive = function(path)
+        assert(type(path) == "string" and path ~= "",
+            "qt_fs_remove_dir_recursive: path required")
+        os.execute(string.format("/bin/rm -rf %q", path))
+        return true
+    end
+end
+
 -- Lightweight dependency guards for tests
 local function enforce(expected, fn)
     if type(fn) ~= "function" then

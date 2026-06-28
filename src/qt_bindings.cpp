@@ -406,6 +406,11 @@ void registerQtBindings(lua_State* L)
     // shellouts that fail silently under Finder-launched .app (stripped PATH).
     lua_pushcfunction(L, lua_qt_fs_mkdir_p); lua_setglobal(L, "qt_fs_mkdir_p");
 
+    // Atomic, symlink-resistant, mode-controlled file write — for
+    // credential files (install_id.json). Replaces utils.write_secure_file's
+    // touch+chmod (TOCTOU) + io.open (non-atomic, follows symlinks).
+    lua_pushcfunction(L, lua_qt_fs_atomic_write_secure); lua_setglobal(L, "qt_fs_atomic_write_secure");
+
     // Register other global utility functions
     lua_pushcfunction(L, lua_set_layout_stretch_factor); lua_setglobal(L, "qt_set_layout_stretch_factor");
     lua_pushcfunction(L, lua_set_widget_alignment); lua_setglobal(L, "qt_set_widget_alignment");
