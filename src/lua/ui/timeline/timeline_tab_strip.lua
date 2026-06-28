@@ -12,7 +12,7 @@
 -- the displayed tab directly — no display-aware accessor wrappers exist.
 
 local TimelineTab = require("ui.timeline.timeline_tab")
-local assert_and_continue = require("core.assert_and_continue")
+local assert_and_continue = require("core.assert_and_continue").check
 
 local TimelineTabStrip = {}
 TimelineTabStrip.__index = TimelineTabStrip
@@ -513,9 +513,13 @@ function TimelineTabStrip.deserialize(t)
                 break
             end
         end
-        assert(strip.active_record_tab, string.format(
-            "TimelineTabStrip.deserialize: active_record_tab_id=%s does not match any record tab",
-            t.active_record_tab_id))
+        -- Same recovery shape as displayed_tab_id above — a record tab can
+        -- equally be orphaned by an out-of-band sequence delete. Keep both
+        -- asserts symmetric.
+        assert_and_continue(strip.active_record_tab,
+            "TimelineTabStrip.deserialize: active_record_tab_id=%s does not match any "
+            .. "remaining record tab (likely dropped by sequence-missing recovery above)",
+            tostring(t.active_record_tab_id))
     end
 
     return strip

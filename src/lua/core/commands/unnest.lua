@@ -150,16 +150,11 @@ function M.execute(args)
     -- The orphan-deleted branch's sequence_list_changed emit (and its
     -- undo companion) is queued from the executor wrapper below — it
     -- must be post-commit so tab strip / project browser see the same
-    -- row state we see after the SQL settles.
-
-    local parent = Sequence.load(sequence_id)
-    assert(parent and parent.project_id and parent.project_id ~= "",
-        "Unnest: parent sequence " .. tostring(sequence_id)
-        .. " missing project_id — required for sequence_list_changed")
-
+    -- row state we see after the SQL settles. Use clip.project_id rather
+    -- than re-loading the parent — same column, no second DB hit.
     return {
         sequence_id          = sequence_id,
-        project_id           = parent.project_id,
+        project_id           = clip.project_id,
         clip_capture         = clip_capture,
         moved                = moved,
         nested_id            = nested_id,
@@ -233,10 +228,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("nested_state_capture", cap.nested_state_capture)
         command:set_parameter("project_id",           cap.project_id)
         if cap.orphan_deleted then
-            assert(cap.project_id and cap.project_id ~= "",
-                "Unnest: capture missing project_id for sequence_list_changed emit")
-            require("core.command_manager").queue_post_commit_emit(
-                "sequence_list_changed", cap.project_id)
+            require("core.command_manager").notify_sequence_list_changed(cap.project_id)
         end
         return true
     end
@@ -252,11 +244,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             nested_state_capture = args.nested_state_capture,
         })
         if args.orphan_deleted then
-            assert(args.project_id and args.project_id ~= "",
-                "UndoUnnest: persisted project_id missing — required for "
-                .. "sequence_list_changed emit after nested-sequence resurrect")
-            require("core.command_manager").queue_post_commit_emit(
-                "sequence_list_changed", args.project_id)
+            require("core.command_manager").notify_sequence_list_changed(args.project_id)
         end
         return true
     end

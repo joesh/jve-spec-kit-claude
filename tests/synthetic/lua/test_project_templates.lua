@@ -126,11 +126,16 @@ assert(tostring(err):find("project_name required"), "wrong error: " .. tostring(
 -- ===========================================================================
 -- Test 6: create_project_from_template asserts on existing dest
 -- ===========================================================================
+-- Domain: the EXISTING dest is not overwritten — same identity intact afterwards.
 print("  test: create_project_from_template rejects existing dest")
 database.init(setup_db_path)
-local ok2, err2 = pcall(project_templates.create_project_from_template, template, "Dup", dest)
+local pre_pid = result.project_id
+local ok2 = pcall(project_templates.create_project_from_template, template, "Dup", dest)
 assert(not ok2, "should reject existing dest")
-assert(tostring(err2):find("project already exists"), "wrong error: " .. tostring(err2))
+database.init(dest)
+local survived = Project.load(pre_pid)
+assert(survived and survived.name == "My Film Project",
+    "existing project was clobbered by the failed create — name/project_id should be unchanged")
 
 -- ===========================================================================
 -- Test 6b: orphan SQLite sidecars (-wal/-shm/-journal/-jve-pidlock) at the
@@ -148,13 +153,23 @@ for _, suffix in ipairs({"-wal", "-shm", "-journal", "-jve-pidlock"}) do
     fh:write("stale"); fh:close()
 end
 local result3 = project_templates.create_project_from_template(template, "Orphan", orphan_dest)
-assert(result3 and result3.project_id, "should create successfully after cleaning orphans")
--- The orphan sidecars must be gone; SQLite may have created fresh -wal/-shm
--- during the open, but they belong to the NEW project, not the stale data.
-for _, suffix in ipairs({"-journal", "-jve-pidlock"}) do
-    assert(not io.open(orphan_dest .. suffix, "rb"),
-        "orphan " .. suffix .. " sidecar should have been removed")
-end
+assert(result3 and result3.project_id, "should create successfully despite orphan sidecars")
+-- Domain: the new project opens cleanly with the expected identity and contents.
+-- A stale -wal that wasn't cleaned would replay against the freshly-copied
+-- template and either corrupt it or reset its sequences/tracks — both caught
+-- by re-opening the dest and checking the template's known shape.
+database.init(orphan_dest)
+local opened_pid = database.get_current_project_id()
+assert(opened_pid == result3.project_id,
+    "opened project_id mismatch after create — stale -wal may have replayed")
+local opened = Project.load(opened_pid)
+assert(opened and opened.name == "Orphan",
+    "expected project name 'Orphan' after open, got: " .. tostring(opened and opened.name))
+local opened_seq = Sequence.load(result3.sequence_id)
+assert(opened_seq and opened_seq.frame_rate.fps_numerator == template.fps_num,
+    "expected template fps after open — sequence row corrupted")
+assert(Track.count_for_sequence(result3.sequence_id) == 6,
+    "expected 6 tracks after open — track rows corrupted")
 
 -- ===========================================================================
 -- Test 7: self-healing — delete template .jvp, get_template_path regenerates

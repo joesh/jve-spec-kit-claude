@@ -247,12 +247,26 @@ print("✓ serialize/deserialize round trip preserves tabs + pointers + identity
 -- otherwise crash JVE on every launch. The contract is: loud ERROR log +
 -- stack trace, then continue with displayed_tab=nil so the strip still
 -- opens. Downstream code already tolerates a nil displayed_tab.
+local pre_tab_count = #strip.tabs
 local bad = strip:serialize()
 bad.displayed_tab_id = "nonexistent-id"
 local restored_bad = TimelineTabStrip.deserialize(bad)
+-- Domain: the strip is USABLE after recovery — its tabs survived intact, and
+-- the user can still switch among them. Asserting just displayed_tab==nil
+-- would pass even if downstream APIs crashed on the recovered strip.
 assert(restored_bad, "deserialize must succeed on dangling pointer (assert_and_continue recovery)")
-assert(restored_bad.displayed_tab == nil,
-    "dangling displayed_tab_id must leave displayed_tab=nil after assert_and_continue recovery")
-print("✓ deserialize soft-recovers from dangling displayed_tab_id")
+assert(#restored_bad.tabs == pre_tab_count,
+    "recovery dropped tabs (expected " .. pre_tab_count .. ", got " .. #restored_bad.tabs .. ")")
+assert(restored_bad:get_displayed() == nil,
+    "get_displayed() must return nil after dropping the dangling pointer (no crash)")
+local first_record = nil
+for _, t in ipairs(restored_bad.tabs) do
+    if t.kind == "record" then first_record = t; break end
+end
+assert(first_record, "test setup: expected at least one record tab")
+restored_bad:switch_displayed(first_record)
+assert(restored_bad:get_displayed() == first_record,
+    "switch_displayed must rebind on the recovered strip — proves it's usable, not just non-crashing")
+print("✓ deserialize soft-recovers from dangling displayed_tab_id and remains usable")
 
 print("✅ test_timeline_tab_strip.lua passed")

@@ -146,8 +146,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- the DB (rollback discards the queued emit). project_browser
         -- subscribes; no other consumer should be added without thinking
         -- about whether `sequence_content_changed` is what they want instead.
-        require("core.command_manager").queue_post_commit_emit(
-            "sequence_list_changed", project_id)
+        require("core.command_manager").notify_sequence_list_changed(project_id)
         return true
     end
 

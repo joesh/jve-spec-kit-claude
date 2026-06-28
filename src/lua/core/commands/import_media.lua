@@ -295,38 +295,47 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Coalesce per-file media writes into one media_changed signal so
         -- peak_cache (and every other media_changed listener) sees the new
         -- masters as a single batch — drives waveform generation on import.
+        --
+        -- pcall the loop so end_batch ALWAYS runs: import_single_file
+        -- asserts on malformed media metadata, command_manager xpcalls the
+        -- executor and the process keeps running — without this guard a
+        -- single bad file would leave Media.batch_depth at 1 for the rest
+        -- of the session, silently swallowing every subsequent media_changed.
         Media.begin_batch()
-        for i, file_path in ipairs(file_paths) do
-            log.event("ImportMedia[%d]: %s", i, tostring(file_path))
+        local ok, loop_err = pcall(function()
+            for i, file_path in ipairs(file_paths) do
+                log.event("ImportMedia[%d]: %s", i, tostring(file_path))
 
-            local replay_ids = {
-                media_id              = media_ids[i],
-                master_sequence_id    = master_sequence_ids[i],
-                video_track_id        = video_track_ids[i],
-                video_media_ref_id    = video_media_ref_ids[i],
-                audio_track_ids       = audio_track_ids[i],
-                audio_media_ref_ids   = audio_media_ref_ids[i],
-            }
+                local replay_ids = {
+                    media_id              = media_ids[i],
+                    master_sequence_id    = master_sequence_ids[i],
+                    video_track_id        = video_track_ids[i],
+                    video_media_ref_id    = video_media_ref_ids[i],
+                    audio_track_ids       = audio_track_ids[i],
+                    audio_media_ref_ids   = audio_media_ref_ids[i],
+                }
 
-            local result = import_single_file(file_path, project_id, db, replay_ids, set_last_error)
+                local result = import_single_file(file_path, project_id, db, replay_ids, set_last_error)
 
-            if result then
-                media_ids[i]             = result.media_id
-                master_sequence_ids[i]   = result.master_sequence_id
-                video_track_ids[i]       = result.video_track_id
-                video_media_ref_ids[i]   = result.video_media_ref_id
-                audio_track_ids[i]       = result.audio_track_ids
-                audio_media_ref_ids[i]   = result.audio_media_ref_ids
-                media_metadata[i]        = result.metadata
+                if result then
+                    media_ids[i]             = result.media_id
+                    master_sequence_ids[i]   = result.master_sequence_id
+                    video_track_ids[i]       = result.video_track_id
+                    video_media_ref_ids[i]   = result.video_media_ref_id
+                    audio_track_ids[i]       = result.audio_track_ids
+                    audio_media_ref_ids[i]   = result.audio_media_ref_ids
+                    media_metadata[i]        = result.metadata
 
-                Media.mark_dirty(result.media_id)
-                success_count = success_count + 1
-                log.event("Imported: %s", file_path)
-            else
-                table.insert(error_messages, string.format("Failed to import: %s", file_path))
+                    Media.mark_dirty(result.media_id)
+                    success_count = success_count + 1
+                    log.event("Imported: %s", file_path)
+                else
+                    table.insert(error_messages, string.format("Failed to import: %s", file_path))
+                end
             end
-        end
+        end)
         Media.end_batch()
+        if not ok then error(loop_err) end
 
         command:set_parameters({
             media_ids             = media_ids,

@@ -170,8 +170,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         log.event("Deleted sequence %s (%d track(s), %d clip(s))",
             sequence_row.name or sequence_id, #tracks, #clips)
-        require("core.command_manager").queue_post_commit_emit(
-            "sequence_list_changed", sequence_row.project_id)
+        require("core.command_manager").notify_sequence_list_changed(sequence_row.project_id)
         return true
     end
 
@@ -179,15 +178,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         local snapshot = args.delete_sequence_snapshot
-        assert(type(snapshot) == "table" and type(snapshot.sequence) == "table"
-            and type(snapshot.sequence.project_id) == "string"
-            and snapshot.sequence.project_id ~= "",
-            "UndoDeleteSequence: delete_sequence_snapshot.sequence.project_id missing — "
-            .. "execute path must have captured it; sequence_list_changed needs the project id")
+        assert(type(snapshot) == "table" and type(snapshot.sequence) == "table",
+            "UndoDeleteSequence: delete_sequence_snapshot.sequence missing — "
+            .. "execute path must have captured it")
         local ok = restore_sequence_from_payload(db, set_last_error, snapshot)
         if ok then
-            require("core.command_manager").queue_post_commit_emit(
-                "sequence_list_changed", snapshot.sequence.project_id)
+            require("core.command_manager").notify_sequence_list_changed(
+                snapshot.sequence.project_id)
         end
         return ok
     end

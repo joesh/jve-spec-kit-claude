@@ -92,6 +92,20 @@ function M.queue_post_commit_emit(signal_name, ...)
     _post_commit_emits[#_post_commit_emits + 1] = { signal_name, ... }
 end
 
+--- Queue the `sequence_list_changed` signal for the given project after the
+--- current command commits. Every command that adds or removes a sequence
+--- row MUST call this (Create/DeleteSequence, Create/Delete master clip,
+--- Nest, Unnest's orphan-delete + resurrect, …). timeline_state's listener
+--- (timeline_state.lua:1198) closes tabs pointing at deleted sequences;
+--- skipping the emit lets persisted tab state hold dead ids → relaunch crash.
+--- Centralized so the "must emit on every list-mutating command" contract has
+--- one place to look, and project_id validation isn't restated at every site.
+function M.notify_sequence_list_changed(project_id)
+    assert(type(project_id) == "string" and project_id ~= "",
+        "notify_sequence_list_changed: project_id required (non-empty string)")
+    M.queue_post_commit_emit("sequence_list_changed", project_id)
+end
+
 -- Root command tracking for automatic undo grouping
 -- When a command executes nested commands, they all share the root's sequence_number as undo_group_id
 -- Nested commands also inherit the root's playhead and pre-selection context (same user action)
