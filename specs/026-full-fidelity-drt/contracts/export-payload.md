@@ -6,9 +6,12 @@ The internal contract between the **producer** (`payload_builder.build`) and the
 two modules can be built/tested independently (TDD).
 
 ## Producer obligations — `payload_builder.build(db, project_id, sequence_id)`
-1. **P1 (FR-001/002):** For each media item, emit the TC origin from the carrying stream:
-   video → `start_tc_frame` (`get_start_tc`); audio → `audio_start_tc = {samples, rate}`
-   (`get_audio_start_tc`). MUST NOT call `get_start_tc()` on audio media.
+1. **P1 (FR-001/002, CORRECTED per research D10):** For each media item, emit the TC origin from
+   the carrying stream. Video → `start_tc_frame` (`get_start_tc`, frames at native fps). Audio →
+   from `get_audio_start_tc()` `{samples, rate}`, but the **timeline clip is frame-domain**: emit
+   `native_rate` = seq fps and `start_tc_frame` = samples ÷ rate × seq_fps (so `<MediaFrameRate>` =
+   seq fps, `<MediaStartTime>` = seconds). MUST NOT call `get_start_tc()` on audio media. Raw
+   sample-domain values feed the gap-#2 `Sm2MpAudioClip` `TracksBA` only — NOT the timeline `<In>`.
    - *Assert:* a media item missing BOTH a video and audio TC origin → assert with
      `media.id` (genuinely-missing required characteristic, not a recoverable case).
 2. **P2 (FR-010):** Video media items carry their own `width/height/frame_rate/codec/
@@ -17,7 +20,11 @@ two modules can be built/tested independently (TDD).
      `<Clip>` blob's `f5` (it currently reads only path); a genuinely-unknown codec asserts
      (FR-019), never a hard-coded four-CC.
 3. **P3 (FR-007/008/009):** Every audio clip carries a `routing` descriptor
-   (`kind`, `media_track_idx`, `source_channel`, `virtual_audio_track`).
+   (`kind`, `media_track_idx`, `source_channel`, `virtual_audio_track`). `source_channel`
+   resolves through the **`clips.master_audio_track_id` pin** (the pinned master AUDIO
+   track's `media_refs.source_channel`), set at import by decoding the per-clip
+   `VirtualAudioTrackBA`/`ChannelsBA` (research D11). `media_track_idx` derives: synced → 2,
+   pinned single channel → `source_channel`, composite/whole-file → 0.
 4. **P4 (FR-013/014):** A video clip with synced audio carries `synced_linkage`
    (`audio_media_id`, `sample_offsets`, `virtual_track_index`) read from the **persisted
    link group** — `clip_link.get_link_group(clip_id)` (`clip_links`: `role` +

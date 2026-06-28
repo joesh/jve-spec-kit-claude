@@ -41,6 +41,8 @@ local MEDIA = {
         duration_frames = 7200,                   -- 5min @ 23.976
         start_tc_frame  = TC_1H_AT_23976,         -- file TC origin 01:00:00:00
         native_rate     = FR_23976,
+        kind            = "video",
+        file_mtime_us   = 1471909574000000,  -- Clip-blob date/f13 derive from it
     },
     {
         file_uuid       = "22222222-2222-4222-8222-222222222222",
@@ -48,6 +50,8 @@ local MEDIA = {
         duration_frames = 4800,
         start_tc_frame  = 0,                      -- tc=0 (most files)
         native_rate     = FR_23976,
+        kind            = "video",
+        file_mtime_us   = 1471909574000000,  -- Clip-blob date/f13 derive from it
     },
     {
         file_uuid       = "33333333-3333-4333-8333-333333333333",
@@ -55,6 +59,8 @@ local MEDIA = {
         duration_frames = 9600,
         start_tc_frame  = 2 * TC_1H_AT_23976,     -- 02:00:00:00
         native_rate     = FR_23976,
+        kind            = "video",
+        file_mtime_us   = 1471909574000000,  -- Clip-blob date/f13 derive from it
     },
 }
 

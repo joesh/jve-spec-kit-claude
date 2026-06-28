@@ -31,7 +31,7 @@ contracts/{export-payload.md, drt-members.md}, quickstart.md
 
 ## Phase 3.0: Decode gate (Phase-0 spike — must-succeed)
 
-- [ ] **T001** Decode the **gap #5 synced-linkage region** in the zstd
+- [X] **T001** Decode the **gap #5 synced-linkage region** in the zstd
   `Sm2MpVideoClip.FieldsBlob` against `tests/fixtures/resolve/synced clip example.drp` and
   the A005 fixture (phase0 §J line 285 / §K4 line 480). Produce a decoded byte map: which
   audio media ↔ which virtual track ↔ per-channel `SampleOffset`. Decode with the existing
@@ -46,19 +46,25 @@ contracts/{export-payload.md, drt-members.md}, quickstart.md
 
 All are NEW separate files → `[P]` among themselves (T009 excepted — needs T001's decode).
 
-- [ ] **T002** [P] RED test gap #1 (audio TC + source range, FR-001/002/003) in
-  `tests/synthetic/binding/test_drt_audio_tc_source_range.lua`. Assert: audio `<In>` =
-  sample-accurate fractional, video `<In>` = whole frame = `source_in − start_tc_frame`;
-  `MediaStartTime` in sample units for audio. Fixture `retime-test.drt` §C. No content shift.
+- [X] **T002** [P] RED test gap #1 (audio TC + source range, FR-001/002/003) in
+  `tests/synthetic/binding/test_drt_audio_tc_source_range.lua`. **CORRECTED per research D10:**
+  audio timeline clips are FRAME-domain (not sample-domain). Assert a standalone-audio
+  `Sm2TiAudioClip`: `<MediaFrameRate>` = the **sequence fps** (e.g. 23.976, NOT 48000),
+  `<In>` = `source_in − start_tc_frame` in **frames** at seq fps (sub-frame fraction preserves
+  sample accuracy), `<MediaStartTime>` = correct seconds (frames/fps); video `<In>` = whole
+  frame. Fixture `resolve_authored_full.drp` (standalone WAV `Sm2TiAudioClip`) — the §C audio
+  clips there carry MediaFrameRate=seq-fps, MediaStartTime=0. No content shift.
 - [ ] **T003** [P] RED test gap #2 (`Sm2MpAudioClip`, FR-004/005/006) in
   `tests/synthetic/binding/test_drt_audio_media_pool_item.lua`. Assert: exactly one
   `Sm2MpAudioClip` per standalone audio media; child order matches; file-specific fields =
   media's (path/rate/channels/dur); fixed bytes = fixture; `.wav` accepted; bad type
   loud-fails via `pcall`. Fixture `resolve_authored_full.drp` §K2.
-- [ ] **T004** [P] RED test gap #3 (routing, FR-007/008/009) in
-  `tests/synthetic/binding/test_drt_audio_routing.lua`. Assert: `MediaTrackIdx` per
-  relationship (not constant 0); `VirtualAudioTrackBA` matches §F form for mono / stereo /
-  synced. Fixture §F (`anamnesis-gold-timeline.drp` mono+stereo).
+- [X] **T004** [P] RED test gap #3 (routing, FR-007/008/009) in
+  `tests/synthetic/binding/test_drt_audio_routing.lua`. Producer-isolated: every audio clip
+  carries a `routing` descriptor; `MediaTrackIdx` varies (not constant 0); standalone WAV
+  reads file channel 2 → `source_channel == 1`, `media_track_idx == source_channel`. → GREEN
+  after T014. (Writer byte-shape for `VirtualAudioTrackBA` mono/stereo/synced is asserted at
+  T015, not here — the writer cannot emit a standalone-audio pool item until gap #2.)
 - [ ] **T005** [P] RED test gap #4 video descriptors (FR-010/011/012) in
   `tests/synthetic/binding/test_drt_video_descriptors.lua`. Assert a non-A005 video item
   carries its own resolution (`<Geometry>` Resolution = `%016x%016x` BE int64 w×h),
@@ -92,36 +98,96 @@ All are NEW separate files → `[P]` among themselves (T009 excepted — needs T
 
 ## Phase 3.2: Core implementation (ordered; shared-file edits SEQUENTIAL)
 
-### Gap #1 — audio TC origin + source range (FR-001/002/003)
-- [ ] **T011** `src/lua/core/resolve_bridge/payload_builder.lua` (≈`:140-150`,
-  `media_to_payload`): branch on media kind — video → `media:get_start_tc()`; audio →
-  `media:get_audio_start_tc()` (`{samples, rate}`). **Delete** the unconditional
-  video-frame-TC assert that crashes audio (the reported `:150` bug). Assert a media item
-  missing BOTH origins, naming `media.id` (D2). → GREEN T002 (TC half).
-- [ ] **T012** `payload_builder.lua` (same file, after T011): emit `source_in/out` whole-frame
-  for video, sample-accurate fractional for audio (FR-003, D3). → GREEN T002 (range half).
-- [ ] **T013** `src/lua/exporters/drt_writer.lua`: audio `<In>` / `MediaStartTime` math in
-  sample units for audio media (mirror the video path). → GREEN T002 fully.
+### Gap #1 — audio TC origin + source range (FR-001/002/003) — **REVISED per research D10**
+> Audio timeline clips are FRAME-domain at the conformed (sequence) fps, NOT sample-domain.
+> The writer's generic frame math is already correct; gap #1 is producer-only — supply
+> frame-domain values for audio so `<MediaFrameRate>`=seq fps and `<MediaStartTime>`=correct
+> seconds. Sample units stay in the gap-#2 `Sm2MpAudioClip` `TracksBA`.
+- [X] **T011** `src/lua/core/resolve_bridge/payload_builder.lua` (≈`:140-150`,
+  `media_to_payload`): branch on media kind — video → `media:get_start_tc()` (frames, native fps);
+  audio-only (`width` falsy / 0) → derive FRAME-domain: `native_rate` = **sequence fps**;
+  `start_tc_frame` = `get_audio_start_tc()` samples ÷ sample_rate × seq_fps. **Delete** the
+  unconditional `get_start_tc()` assert that crashes audio (`:150`). Assert a media item missing
+  BOTH a video TC and an audio TC origin, naming `media.id` (D2). Pass seq fps into
+  `media_to_payload` (new arg) since audio media has no inherent fps. → GREEN T002 (TC half).
+- [X] **T012** `payload_builder.lua` (after T011): clip `source_in/out` — video: whole frames;
+  audio: model samples converted to **frames** at seq fps (sub-frame fraction preserves sample
+  accuracy in `<In>`). JVE model keeps audio source_in in SAMPLES; convert at the payload
+  boundary only (D10). → GREEN T002 (range half).
+- [X] **T013** `src/lua/exporters/drt_writer.lua`: **NO CHANGE confirmed** — the generic
+  `in_offset = source_in − start_tc_frame` (`:509`) + `media_start_seconds = start_tc_frame /
+  native_rate` (`:530`) + `MediaFrameRate = native_rate` (`:573`) already produce the fixture
+  bytes once T011/T012 feed frame-domain audio values. Verify against the RED test; only touch the
+  writer if a genuine audio-specific divergence shows up (D10 expects none). → confirms GREEN T002.
 
 ### Gap #3 — payload-driven routing (FR-007/008/009)
-- [ ] **T014** `payload_builder.lua` (after T012): emit a per-clip **routing descriptor**
-  (`kind` mono|stereo|synced, `media_track_idx`, `source_channel`, `virtual_audio_track`)
-  **derived** from persisted state — `clip.source_channel`/`media_refs.source_channel`
-  (which channel) + `media.audio_channels` (mono/stereo) + `clip_link.is_linked` (synced);
-  there is NO stored `clip.routing` field (D5). A kind with no §F-matched form → loud fail
-  (FR-019).
-- [ ] **T015** `drt_writer.lua` (after T013, `:606-607`): drive `VirtualAudioTrackBA` +
-  `MediaTrackIdx` from the routing descriptor; **F1 — delete** `VIRTUAL_AUDIO_TRACK_BA_MONO_A1`
-  + `MediaTrackIdx="0"` hardcode. → GREEN T004.
+> **Import-side prerequisite discovered during impl (not in original task list).** Routing
+> derivation keys on which file channel a clip reads, persisted as the clip's pin to a master
+> AUDIO track (`clips.master_audio_track_id` → that track's `media_refs.source_channel`). But
+> DRP import populated this for ZERO clips: the per-clip channel selection lives in the clip's
+> `VirtualAudioTrackBA`, which the importer never decoded (anamnesis-gold: 1691 audio clips, 0
+> pinned). So gap #3 first decodes VATBA → pins the channel (T014a–c), THEN derives routing
+> (T014). This is the architecturally-correct realization of Joe's "fix importer to decode
+> VATBA" — a timeline audio clip resolves to the stream `(media_id, source_channel)` it
+> actually plays, per the stream-first-class canon. Backward-compatible: nil pin = composite,
+> unchanged. (Decoding-side RED: `test_drp_import_audio_channel_select.lua`.)
+- [X] **T014a** `src/lua/importers/drp_binary.lua`: `decode_audio_channel_select(hex)` — decode
+  the clip `VirtualAudioTrackBA` `ChannelsBA` payload (research D11). Mono block (12B) → byte 12
+  = 1-based file channel → 0-based `source_channel`; byte 9 routing type gates: `0x00`
+  embedded/standalone returns the channel, `0x20` linked/synced → nil (gap #5 owns the slot, and
+  a synced master holds camera+sync tracks at overlapping channel numbers). Stereo block (16B) /
+  absent → nil (composite). Reuses the shared `decode_tlv_fields` walker (`raw_payloads`).
+- [X] **T014b** `drp_importer.lua` `parse_resolve_tracks` (+ `importer_core.lua`): extract the
+  clip's `VirtualAudioTrackBA` → `clip.source_channel`; in `importer_core` pin
+  `master_audio_track_id` via new `Sequence.find_master_audio_track_for_channel(master_id, ch)`
+  (`models/sequence/queries.lua`) — the master AUDIO track carrying that channel. nil ch ⇒
+  unpinned (composite), as before.
+- [X] **T014c** `models/clip.lua` `Clip.load`: make the `source_channel` JOIN honor
+  `master_audio_track_id` (pinned ⇒ that channel's ref) using the SAME `EXISTS(track_type) AND
+  (master_audio_track_id IS NULL OR mr.track_id = …)` form already in the timeline clip-load
+  paths (`core/database.lua` build_clip_from_query_row). Unifies export/playback/waveform
+  channel resolution — no competing formulation.
+- [X] **T014** `payload_builder.lua` (after T012): emit a per-clip **routing descriptor**
+  (`kind` mono|stereo|synced, `media_track_idx`, `source_channel`) **derived** from persisted
+  state — the pin `clip.master_audio_track_id` + resolved `source_channel` (which channel) +
+  `media.audio_channels` (mono/stereo) + `clip_link.is_linked` (synced); there is NO stored
+  `clip.routing` field (D5). synced ⇒ `media_track_idx = 2` (gap #5 owns the linkage); pinned ⇒
+  mono, `media_track_idx = source_channel`; composite ⇒ stereo (2ch) / mono, `media_track_idx
+  = 0`. → GREEN T004.
+- [X] **T015** DONE 2026-06-26. New `drt_binary.encode_virtual_audio_track_ba(routing)`
+  synthesizes the VATBA blob (ChannelsBA TLV payload: block size 8+4·nch, per-channel
+  `[routing][00]40[ch]` descriptors; AudioType TLV int mono=1/stereo=0) — byte-equal to all
+  in-scope fixture forms (mono ch-N, stereo composite) verified against
+  resolve_authored_full.drp + anamnesis-gold-timeline.drp. `drt_writer.lua` audio branch now
+  drives `VirtualAudioTrackBA` + `MediaTrackIdx` from `clip.routing`; **F1 hardcode
+  `VIRTUAL_AUDIO_TRACK_BA_MONO_A1` + `MediaTrackIdx="0"` DELETED**. Synced → loud-fail (gap #5
+  owns the virtual-track slot, FR-014). Byte-shape RED→GREEN test
+  `tests/synthetic/binding/test_drt_writer_vatba.lua` (mono ch2 ≠ hardcode = the RED; stereo;
+  synced loud-fail via pcall). Adversarial review: tightened `payload_builder.build_audio_routing`
+  to loud-fail an unpinned >2-channel composite (was silently mis-routed to mono — no Adaptive
+  form in the JVE model; FR-019). Shared `drt_spike_fixture.build_a005_payload` audio clip now
+  carries the embedded mono-ch1 routing the producer always emits.
 
 ### Gap #2 — standalone-audio media-pool item (FR-004/005/006)
-- [ ] **T016** `payload_builder.lua` (after T014): emit standalone-audio media item fields
-  (`sample_rate`, `channel_layout`, `duration_samples`, `audio_start_tc`); dedup by
-  source-clip identity (D4).
-- [ ] **T017** `drt_writer.lua` (after T015): add `build_media_pool_audio_item` →
-  `Sm2MpAudioClip` (child order + fixed bytes from `resolve_authored_full.drp` §K2);
-  file-specific fields from the audio media; accept `.wav`; **loud-fail** unhandled audio
-  type naming the file (FR-019). → GREEN T003.
+**FOUNDATION LANDED 2026-06-27** (full dissection research D4a; reference XML
+`drt_canonical/full_reference_mp_audio_clip.xml`; `drt_binary.substitute_audio_tracks_ba`
+byte-equal to fixture w/ `test_drt_audio_tracks_ba.lua`). Builder/dispatch/producer + T003 remain.
+- [X] **T016** DONE 2026-06-27. `payload_builder.media_to_payload` emits the media `kind`
+  discriminant + audio-pool fields (`sample_rate`, `num_channels`, `duration_samples`) for
+  audio-only media. `drt_writer.build_mp_folder_xml` now dispatches by `kind` (asserts kind
+  present); `kind="audio"` currently **loud-fails** naming gap #2/T017 (honest "not yet
+  implemented" at the right layer — no longer routes a .wav through the video builder's
+  .mp4/.mov reject). Dedup by source-clip identity is the existing media_refs identity (D4).
+- [ ] **T017** `drt_writer.lua` (after T016): add `build_media_pool_audio_item` →
+  `Sm2MpAudioClip` from the reference XML (identity gsub + `substitute_audio_tracks_ba` for
+  rate/channels/duration + `encode_bt_clip_blob` for the path); replace the dispatch's
+  audio loud-fail with it; accept `.wav`; **loud-fail** unhandled audio type naming the file
+  (FR-019).
+  → GREEN T003. **Clip-blob tail RESOLVED 2026-06-27** (was flagged as opaque residue): it
+  is the file mtime (f13 µs) + media-type markers (f15/f18). Implemented option (b) — schema
+  V19 `media.file_mtime_us`, importer reads it from the Clip blob, `encode_bt_clip_blob`
+  re-emits it; byte-equal to the fixture audio Clip payload. Also fixed the video item's
+  stale date/mtime. See research D4b. T017 reuses `encode_bt_clip_blob` for the audio path.
 
 ### Gap #4 — arbitrary video descriptors + codec fold-in (FR-010/011/012)
 - [ ] **T018** [P] `src/lua/importers/drp_binary.lua`: extend `decode_bt_clip_path`

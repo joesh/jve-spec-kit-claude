@@ -428,6 +428,40 @@ function Sequence.count_master_audio_channels(master_id)
     return n
 end
 
+--- The master AUDIO track that carries a given source channel (the slot
+--- holding stream (media_id, source_channel)). Used by the importer to pin a
+--- timeline audio clip to the specific channel it reads (gap #3): a master is
+--- built one-track-per-channel, each track's AUDIO media_ref stamped with its
+--- 0-based source_channel. Returns the track id, or nil when no per-channel
+--- track matches (e.g. a composite master, or an out-of-range channel) — the
+--- caller treats nil as "leave the clip composite", never as a default track.
+---
+--- @param master_id string       master sequence id (sequences.id)
+--- @param source_channel integer 0-based file channel
+function Sequence.find_master_audio_track_for_channel(master_id, source_channel)
+    assert(master_id and master_id ~= "",
+        "Sequence.find_master_audio_track_for_channel: master_id required")
+    assert(type(source_channel) == "number"
+        and source_channel >= 0 and source_channel == math.floor(source_channel),
+        "Sequence.find_master_audio_track_for_channel: source_channel must be a "
+        .. "0-based integer, got " .. tostring(source_channel))
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT t.id FROM tracks t
+        JOIN media_refs mr ON mr.track_id = t.id
+        WHERE t.sequence_id = ? AND t.track_type = 'AUDIO'
+          AND mr.source_channel = ?
+        LIMIT 1
+    ]])
+    assert(stmt, "Sequence.find_master_audio_track_for_channel: prepare failed")
+    stmt:bind_value(1, master_id)
+    stmt:bind_value(2, source_channel)
+    assert(stmt:exec(), "Sequence.find_master_audio_track_for_channel: exec failed")
+    local track_id = stmt:next() and stmt:value(0) or nil
+    stmt:finalize()
+    return track_id
+end
+
 --- Read a master AUDIO track's per-channel state from
 --- media_refs_channel_state. Returns (enabled_bool, gain_db_number);
 --- on absent row returns the resolver-default contract (true, 0).

@@ -110,13 +110,6 @@ local A005_TEMPLATE_DBID                = "07caaf98-6659-4345-8968-de92c0b17e50"
 local A005_TEMPLATE_MP_FOLDER_BACKREF   = "fe7a26e6-8c49-49a6-be20-f21689c9a41f"
 local A005_TEMPLATE_UNIQUE_MP_ITEM_ID   = "297f29a9-65e8-499a-bcec-1d42da0ec926"
 local A005_TEMPLATE_NAME                = "A005_C052_0925BL_001.mp4"
--- ctime-style date inside the re-encoded <Clip> blobs. Template residue
--- (the reference capture's file mtime): Resolve binds by directory +
--- filename, not by this string — live-verified 2026-06-10 by a linked
--- import whose blob date predated the actual file by two years. A
--- general-media writer should stat the real file mtime; gated with the
--- rest of the a005-class limits.
-local A005_TEMPLATE_CLIP_DATE           = "Mon May 27 00:09:20 2024"
 
 -- ─── UUID minting ───────────────────────────────────────────────────────────
 --
@@ -297,12 +290,6 @@ local function build_in_element(in_offset)
     end
     return text_elem("In", tostring(in_offset))
 end
-
--- Restored: still referenced by audio clip path until #14 lands.
-local VIRTUAL_AUDIO_TRACK_BA_MONO_A1 =
-    "000000010000000200000014004300680061006e006e0065006c0073004200" ..
-    "410000000c000000000c000000020000000100004001000000120041007500" ..
-    "640069006f0054007900700065000000020000000001"
 
 -- MediaTimemapBA — un-retimed timing curve for the clip.
 --
@@ -602,9 +589,19 @@ local function build_clip_element(clip, media, track_type, state, seq_fps)
             }), {DbId = thumb_dbid}))
         parts[#parts + 1] = text_elem("ThumbnailDirtyFlag", "true")
     else
+        -- Per-clip channel/routing, payload-driven (gap #3, FR-007/008/009).
+        -- The producer (payload_builder.build_audio_routing) attaches a routing
+        -- descriptor to every audio clip; the writer synthesizes the wire bytes.
+        assert(type(clip.routing) == "table",
+            "drt_writer.build_clip_element: audio clip " .. tostring(clip.id)
+            .. " has no routing descriptor (gap #3 producer must run)")
+        assert(type(clip.routing.media_track_idx) == "number",
+            "drt_writer.build_clip_element: audio clip " .. tostring(clip.id)
+            .. " routing.media_track_idx missing/non-number")
         parts[#parts + 1] = text_elem("VirtualAudioTrackBA",
-            VIRTUAL_AUDIO_TRACK_BA_MONO_A1)
-        parts[#parts + 1] = text_elem("MediaTrackIdx", "0")
+            enc.encode_virtual_audio_track_ba(clip.routing))
+        parts[#parts + 1] = text_elem("MediaTrackIdx",
+            tostring(clip.routing.media_track_idx))
     end
 
     return elem(tag, table.concat(parts), {DbId = clip.id})
@@ -716,6 +713,17 @@ local function basename(path)
     return b
 end
 
+-- The Clip blob's f3 date string is the ctime-style local-time rendering of the
+-- file's mtime (the same instant f13 carries in µs — research D4a). Deriving
+-- both from media.file_mtime_us keeps them consistent; the space-padded day
+-- ("%e") matches Resolve's "Thu Apr  9 12:58:53 2026" shape.
+local function format_clip_date(mtime_us)
+    assert(type(mtime_us) == "number" and mtime_us >= 0,
+        "drt_writer.format_clip_date: non-negative mtime_us required, got "
+        .. tostring(mtime_us))
+    return os.date("%a %b %e %H:%M:%S %Y", math.floor(mtime_us / 1000000))
+end
+
 -- The full_reference_mp_video_clip_a005.xml template carries A005's
 -- BtVideoInfo with a baked Time blob (NumFrames=108, FrameRate=23.976,
 -- UniqueId=85fba73b-...). We rewrite the Time blob per payload via
@@ -807,15 +815,22 @@ local function build_media_pool_video_item(media, dbids, state)
     assert(directory and directory ~= "", string.format(
         "drt_writer.build_media_pool_video_item: media.file_path must be "
         .. "absolute with a directory component, got %q", media.file_path))
+    assert(type(media.file_mtime_us) == "number", string.format(
+        "drt_writer.build_media_pool_video_item: media.file_mtime_us required "
+        .. "(the Clip blob's date + f13 derive from it) — missing for %q. The "
+        .. "importer reads it from the DRP Clip blob; a media without it never "
+        .. "captured one.", media.file_path))
     local clip_common = {
         directory = directory,
         filename  = name,
-        date      = A005_TEMPLATE_CLIP_DATE,
+        date      = format_clip_date(media.file_mtime_us),
+        mtime_us  = media.file_mtime_us,
     }
     local video_blob = enc.encode_bt_clip_blob({
         directory = clip_common.directory,
         filename  = clip_common.filename,
         date      = clip_common.date,
+        mtime_us  = clip_common.mtime_us,
         codec     = "avc1",
         clip_name = name,
         clip_uuid = fresh_uuid(0xa2, state),
@@ -824,6 +839,7 @@ local function build_media_pool_video_item(media, dbids, state)
         directory = clip_common.directory,
         filename  = clip_common.filename,
         date      = clip_common.date,
+        mtime_us  = clip_common.mtime_us,
         codec     = "AAC",
     })
     local clip_blobs = { video_blob, audio_blob }
@@ -1010,13 +1026,29 @@ local function build_mp_folder_xml(template, payload, seq, dbids, state)
 
     template = sweep_reference_dbids(template, dbids)
 
-    -- Inject one Sm2MpVideoClip per media_ref. Without these, timeline
-    -- clips' <MediaRef> pointers dangle → Resolve drops the clips → empty
-    -- timeline. Substitutions happen AFTER the DbId sweep so the items
+    -- Inject one media-pool item per media_ref, dispatched by media kind: video
+    -- media → Sm2MpVideoClip, audio-only media → Sm2MpAudioClip. Without these,
+    -- timeline clips' <MediaRef> pointers dangle → Resolve drops the clips →
+    -- empty timeline. Substitutions happen AFTER the DbId sweep so the items
     -- carry payload media UUIDs, not freshly-minted ones.
     local items = {}
     for _, m in ipairs(payload.media_refs) do
-        items[#items + 1] = build_media_pool_video_item(m, dbids, state)
+        assert(m.kind == "video" or m.kind == "audio", string.format(
+            "drt_writer.build_mp_folder_xml: media_ref %s has no/unknown kind %q "
+            .. "(producer must set it)", tostring(m.file_uuid), tostring(m.kind)))
+        if m.kind == "video" then
+            items[#items + 1] = build_media_pool_video_item(m, dbids, state)
+        else
+            -- Standalone-audio pool item (Sm2MpAudioClip) is gap #2 / T017 — the
+            -- producer fields (sample_rate/num_channels/duration_samples) are
+            -- ready and substitute_audio_tracks_ba is built, but the item
+            -- assembler is not yet wired. Loud-fail here (FR-019) rather than
+            -- routing a .wav through the video builder.
+            assert(false, string.format(
+                "drt_writer.build_mp_folder_xml: standalone-audio media-pool item "
+                .. "not yet implemented (gap #2 / T017) — cannot author %q",
+                tostring(m.file_path)))
+        end
     end
     template = plain_gsub_required(template,
         "</MediaVec>", table.concat(items) .. " </MediaVec>")

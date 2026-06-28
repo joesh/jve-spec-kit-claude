@@ -50,6 +50,8 @@ local MEDIA = {
         duration_frames = 7200,
         start_tc_frame  = TC_1H,               -- file TC origin 01:00:00:00
         native_rate     = FR_23976,
+        kind            = "video",
+        file_mtime_us   = 1471909574000000,  -- Clip-blob date/f13 derive from it
     },
     {
         -- TC origin 0 so a reverse clip can play DOWN TO source frame 0.
@@ -58,6 +60,8 @@ local MEDIA = {
         duration_frames = 7200,
         start_tc_frame  = 0,
         native_rate     = FR_23976,
+        kind            = "video",
+        file_mtime_us   = 1471909574000000,  -- Clip-blob date/f13 derive from it
     },
 }
 

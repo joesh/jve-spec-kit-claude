@@ -51,7 +51,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local fps_num = media.frame_rate.fps_numerator
         local fps_den = media.frame_rate.fps_denominator
         local duration_frames = media.duration
-        local has_video = media.width > 0
+        local has_video = media:is_video()
         local has_audio = (media.audio_channels or 0) > 0  -- lint-allow: R010 media.audio_channels is schema DEFAULT 0 (nullable for video-only)
 
         -- Video-only media → no audio rate. Schema permits NULL on

@@ -126,6 +126,13 @@ function M:get_audio_start_tc()
     return nil, nil
 end
 
+--- Does this media carry a video stream (vs audio-only)? The canonical
+--- width-based discriminant — width is 0/NULL for audio-only media.
+--- @return boolean
+function M:is_video()
+    return self.width ~= nil and self.width > 0
+end
+
 --- Can a master source sequence be built from this media WITHOUT probing the
 --- file? True only when the project file already supplied the TC origin each
 --- present stream needs: a video stream needs start_tc_value, an audio stream
@@ -137,7 +144,7 @@ end
 function M:has_master_source_tc()
     local meta = self:_parsed_metadata()
     if not meta then return false end
-    local has_video = self.width and self.width > 0
+    local has_video = self:is_video()
     local has_audio = self.audio_channels and self.audio_channels > 0
     if not (has_video or has_audio) then return false end
     if has_video and meta.start_tc_value == nil then return false end
@@ -525,6 +532,10 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         audio_channels = tonumber(params.audio_channels) or 0, -- NSF-OK: 0 = unknown/not applicable
         codec = params.codec or "", -- NSF-OK: "" = unknown codec
         is_still = params.is_still and true or false, -- NSF-OK: nil = not still (default)
+        -- Source-file mtime in µs. NULL stays NULL (unknown) — no `or 0`: 0 is a
+        -- real epoch instant, and the exporter must distinguish "unknown" from
+        -- "1970". Populated from the DRP Clip blob at import (schema.sql).
+        file_mtime_us = tonumber(params.file_mtime_us),
         created_at = params.created_at or os.time(),
         modified_at = params.modified_at or os.time(),
         metadata = params.metadata or '{}',
@@ -540,7 +551,7 @@ end
 local MEDIA_SELECT_COLUMNS = [[
         id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
         width, height, rotation, audio_sample_rate, audio_channels, codec,
-        created_at, modified_at, metadata, is_still, offline_note
+        created_at, modified_at, metadata, is_still, offline_note, file_mtime_us
 ]]
 
 -- Hydrate a single Media instance from the current row of a prepared statement
@@ -577,6 +588,8 @@ local function _hydrate_row(query)
     media.is_still = tonumber(is_still_raw) == 1
     -- NULL when relink succeeded (or was never run) — see schema.sql for shape.
     media.offline_note = query:value(17)
+    -- Source-file mtime in µs; NULL = unknown (kept nil, not coerced to 0).
+    media.file_mtime_us = query:value(18)
 
     setmetatable(media, media_mt)
     return media
@@ -1742,8 +1755,9 @@ function M:save()
 
     local query = db:prepare([[
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
-            width, height, rotation, audio_sample_rate, audio_channels, codec, is_still, created_at, modified_at, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            width, height, rotation, audio_sample_rate, audio_channels, codec, is_still, created_at, modified_at, metadata,
+            file_mtime_us)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -1759,7 +1773,8 @@ function M:save()
             codec = excluded.codec,
             is_still = excluded.is_still,
             modified_at = excluded.modified_at,
-            metadata = excluded.metadata
+            metadata = excluded.metadata,
+            file_mtime_us = excluded.file_mtime_us
     ]])
 
     assert(query, string.format("Media:save: failed to prepare query (media_id=%s)", tostring(self.id)))
@@ -1784,6 +1799,8 @@ function M:save()
     query:bind_value(15, self.created_at)
     query:bind_value(16, self.modified_at)
     query:bind_value(17, self.metadata)
+    -- nil → SQLite NULL (unknown mtime); a real µs value persists verbatim.
+    query:bind_value(18, self.file_mtime_us)
 
     if not query:exec() then
         log.warn("Media:save: Query execution failed: %s", query:last_error())

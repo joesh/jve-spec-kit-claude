@@ -82,9 +82,13 @@ function M.build_a005_payload()
             {
                 file_uuid       = M.A005_UUID,
                 file_path       = M.A005_PATH,
+                kind            = "video",
                 duration_frames = M.A005_DURATION_FRAMES,
                 start_tc_frame  = 0,
                 native_rate     = M.A005_NATIVE_RATE,
+                -- Source-file mtime (µs); the Clip blob's date + f13 derive from
+                -- it. The producer always supplies it (media.file_mtime_us).
+                file_mtime_us   = 1471909574000000,
             },
         },
         sequence = {
@@ -119,6 +123,16 @@ function M.build_a005_payload()
                             source_out     = M.A005_DURATION_FRAMES,  -- forward: source_in + duration
                             name           = "A005 spike audio",
                             enabled        = true,
+                            -- Embedded mono audio of the A005 master, file
+                            -- channel 1. The producer (payload_builder.
+                            -- build_audio_routing) attaches a routing descriptor
+                            -- to every audio clip; mirror that here so the writer
+                            -- can synthesize VirtualAudioTrackBA + MediaTrackIdx.
+                            routing = {
+                                kind            = "mono",
+                                media_track_idx = 0,
+                                source_channel  = 0,
+                            },
                         },
                     },
                 },

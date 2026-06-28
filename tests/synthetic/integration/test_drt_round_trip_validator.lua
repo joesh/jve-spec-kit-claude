@@ -32,6 +32,8 @@ local function fresh_payload()
             duration_frames = 7200,
             start_tc_frame  = TC_1H_AT_23976,
             native_rate     = FR_23976,
+            kind            = "video",
+            file_mtime_us   = 1471909574000000,  -- Clip-blob date/f13 derive from it
         },
         {
             file_uuid       = "22222222-2222-4222-8222-222222222222",
@@ -39,6 +41,8 @@ local function fresh_payload()
             duration_frames = 4800,
             start_tc_frame  = 0,
             native_rate     = FR_23976,
+            kind            = "video",
+            file_mtime_us   = 1471909574000000,  -- Clip-blob date/f13 derive from it
         },
     }
     local CLIPS = {

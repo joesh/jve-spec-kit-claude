@@ -66,6 +66,18 @@ local CLIP_LOAD_SQL = [[
                                 WHERE mt.id = mr.track_id
                                   AND mt.track_type = t.track_type
                             )
+                            -- An audio clip pinned to ONE master audio track
+                            -- (master_audio_track_id — the channel it reads, set
+                            -- by the DRP VirtualAudioTrackBA decode and by
+                            -- Expand/Collapse) resolves to THAT channel's ref, so
+                            -- source_channel is the clip's actual channel. Without
+                            -- this every audio ref of a multi-channel master
+                            -- satisfies the track_type match and the wrong channel
+                            -- is picked. Composite (NULL) and video keep the
+                            -- track_type-only match. Mirrors the timeline clip-load
+                            -- paths in core/database.lua (build_clip_from_query_row).
+                            AND (c.master_audio_track_id IS NULL
+                                 OR mr.track_id = c.master_audio_track_id)
     LEFT JOIN media m ON m.id = mr.media_id
     WHERE c.id = ?
 ]]

@@ -148,6 +148,78 @@ it asserts `.mp4/.mov` (`drt_writer.lua:739`, fn at `:733`).
 **Alternatives rejected.** Route audio through the video-item builder (wrong root
 element; Resolve drops it). Skip standalone audio (FR-019 violation — the original crash).
 
+### D4a — Full byte map (first-hand, `resolve_authored_full.drp` test_click_48k_stereo.wav)
+
+`Sm2MpAudioClip` (DbId = source-clip identity) child order (§K2):
+`FieldsBlob, Name, MpFolder, UniqueMediaPoolItemId, 6×Mark{In,Out}{,Video,Audio} empties,
+CurPlayheadPosition, PinsBA/, VirtualAudioTracksBA, EmbeddedAudioVec>Element>BtAudioInfo{
+FieldsBlob/, Clip, TracksBA, MediaMetadata/}`.
+
+**Borrow-and-substitute strategy** (mirrors `build_media_pool_video_item`): commit the
+test_click `<Element>` block as `drt_canonical/full_reference_mp_audio_clip.xml`; substitute:
+
+| Field | Substitution | Mechanism |
+|-------|--------------|-----------|
+| `Sm2MpAudioClip@DbId` | → `media.file_uuid` (timeline `<MediaRef>` resolves) | plain_gsub |
+| `<MpFolder>` back-ref | → minted `mp_folder` DbId | plain_gsub |
+| `<UniqueMediaPoolItemId>` | → fresh UUID | plain_gsub |
+| `<Name>` | → `basename(file_path)` | plain_gsub |
+| `BtAudioInfo@DbId` | → fresh UUID (cross-archive safety) | plain_gsub |
+| `BtAudioInfo>Clip` | → path via `enc.encode_bt_clip_blob{directory,filename,date,codec="Linear PCM"}` | re-encode |
+| `BtAudioInfo>TracksBA` | → SampleRate/NumChannels/Duration substituted | targeted value replace |
+
+**TracksBA value encodings (confirmed byte-equal to fixture):** plaintext Fusion-fields
+blob, 31-byte header, field_count @ offset 28 (mirror `decode_bt_audio_duration:509`). Each
+field = `<UTF-16BE name><be16 0><be16 type><value>`. Substitute by anchoring on
+`utf16be(name)+type` and replacing the fixed-width value:
+  All TLV ints encode as **`aux*256 + val`** (decode_tlv_fields:387/397), NOT a plain BE int:
+- `SampleRate` type `0003`: 4-byte BE aux + 1-byte val (5 B). 48000→`000000bb80`.
+- `NumChannels` type `0002`: 4-byte BE aux + 1-byte val (5 B). 2→`0000000002`.
+- `Duration` type `0004`: **8-byte BE aux + 1-byte val (9 B)**. 144000 = aux 562 + val 128 →
+  `000000000000023280` (NOT a 16-hex BE64 — that off-by-2 was the first encoder bug).
+- Left borrowed (not file-derived for the interim): `BitDepth` (`0003`, =1), `CodecName`
+  (`000a`="Linear PCM"), `UniqueId` (mint if cross-archive collision matters), `StartTime`
+  (`0006` double = audio TC origin; 0 in fixture — wire to `get_audio_start_tc` if non-zero).
+- `VirtualAudioTracksBA` (412 B, plaintext Fusion): a per-virtual-track list; the fixture's
+  stereo wav carries TWO ChannelsBA descriptors (the same VATBA mono/stereo grammar as D11,
+  one per master virtual track). For the interim borrow verbatim (stereo); a mono wav would
+  need a single-descriptor form — synthesize via the D11 grammar if a mono standalone arises.
+- Outer `FieldsBlob` (zstd, marker 0x81) + `BtAudioInfo>Clip` are zstd; the Clip path is
+  re-encoded via `encode_bt_clip_blob` (already emits the zstd frame — same as video item).
+  Outer FieldsBlob borrowed verbatim (clip-level metadata; no path/rate inside that matters).
+
+### D4b — Clip-blob tail is the file mtime, NOT opaque residue (LANDED 2026-06-27)
+
+The `Clip` blob protobuf tail was previously a frozen constant (`BT_CLIP_TAIL`) — believed
+"per-file residue that can't be derived." Decoded first-hand, it is fully derivable:
+- **f13 varint = source-file mtime in µs** (the same instant the f3 date string encodes;
+  verified: audio fixture f13 = 1775764733195782 µs = "Thu Apr  9 12:58:53 2026" local).
+- **f15 varint = media-type**: 4 = video, 2 = audio.
+- **f16 varint = 100** (constant in every fixture).
+- **f18 varint = media-type**: 16384 = video, 32768 = audio.
+
+Implemented (option (b) — persist mtime in the model, exporter reads it; NOT a filesystem
+probe): schema **V18→V19** adds `media.file_mtime_us`; the DRP importer reads it from each
+pool item's Clip blob (`drp_binary.decode_bt_clip_mtime`, field 13) and round-trips it;
+`encode_bt_clip_blob` takes `mtime_us` + derives f13/f15/f18 (media-type from the existing
+video-shape discriminant) and the f3 date (`os.date` local, space-padded `%e`). Verified
+**byte-equal to the fixture's decompressed Clip payload** for the test_click audio item.
+This also fixed the video item's stale 2024 date / 2016 mtime (both now derive from the real
+file). f16=100 and the f18 enum are kind-keyed from 2 fixtures — revisit if a fixture varies.
+
+**Producer (T016) — LANDED:** `payload_builder.media_to_payload` emits, on an audio-only
+media item, `kind="audio"` + `sample_rate` + `num_channels` + `duration_samples` (the
+TracksBA inputs) + `file_mtime_us`. Dedup by source-clip identity (D4 — two clips/one file =
+one item). **NOT yet emitted:** the sample-domain `audio_start_tc` for the TracksBA
+`StartTime` — T016 reads `get_audio_start_tc()` only to derive the scalar `start_tc_frame`
+(timeline-clip `<In>`); wiring the sample origin into the TracksBA is T017 (until then
+`StartTime` stays the borrowed 0 — fine for the zero-origin fixtures).
+
+**RED test (T003):** `test_drt_audio_media_pool_item.lua` — author a payload with a
+standalone wav; assert exactly one `Sm2MpAudioClip`, child order, file-specific fields =
+media's (path/rate/channels/dur), fixed bytes = fixture, `.wav` accepted, bad type
+loud-fails via pcall.
+
 ---
 
 ## D5 — Payload-driven routing via MediaTrackIdx discriminator (gap #3, §F)
@@ -232,9 +304,161 @@ makes it an optional spot-check only).
 
 ---
 
+## D9 — Gap #5 synced-linkage region byte map (T001 decode gate)
+
+**Status: decode gate SATISFIED for the proven region; one residual asymmetry flagged for
+the T025 round-trip.** Verified first-hand (own LuaJIT decode of `SYNCED_HEX`,
+`test_drp_fields_blob_decode.lua:50`; zstd-CLI stub; offsets 1-indexed in the 2670-byte
+decompressed payload). The import decoder (`drp_binary.scan_media_refs` /
+`extract_media_refs` / `extract_media_ref_sample_offsets`, `drp_binary.lua:909-963`) is the
+ground truth — gap #5 was NOT an undecoded unknown; the linkage round-trips on import today.
+
+**Container.** The `Sm2MpVideoClip.FieldsBlob` decompresses to a Fusion "Fields" container.
+Each field is framed (CONFIRMED against bytes):
+
+```
+[00 00]            2B pad
+[LE16 name_len]    name byte length (UTF-16LE, so = 2×char count)
+[name]             field name, UTF-16LE
+[00 00]            2B separator
+[LE16 type]        type tag
+[value]            type-dependent value (note: blob VALUES are big-endian — Fusion quirk)
+```
+
+**Verified type tags / value forms (this fixture):**
+- `SampleOffset` — type `0x0004`, value = **BE64 signed** samples. Fixture value
+  `00 00 00 00 00 0e de 3f` = 974399. Present once per external-WAV channel; absent for
+  camera-embedded scratch refs. (name@286,710,1134,1558,1982)
+- `MediaRef` — type `0x000a`, value = `[BE32 len=72]` + 72-byte UTF-16BE dashed UUID (a
+  BtAudioInfo DbId). 7 occurrences: 5× external WAV `580b74c0-…-c02df71eccc2`,
+  2× embedded `5c14f5ac-…-ae1f9691`.
+- `ChannelIdx` — type `0x0002`, value = `[BE32 channel]` + trailing `00`. Values **4,3,2,1**
+  (name@428,852,1276,1700) — on-wire order is **reverse** channel index.
+- Sibling per-channel fields in the ~424B block stride: `BitDepth` (0x0003), `CodecName`
+  (0x000a, "Linear…"), `ChannelVecBA` (0x000c), `Origin` (0x0003), `MediaExtents` (0x000c).
+
+**RESIDUAL — must resolve at T025, do NOT assume:** there are **5 external-WAV MediaRefs
+but only 4 `ChannelIdx` fields** (4,3,2,1). The 5th WAV ref (MR@2023, with SampleOffset
+@1982 but **no** trailing ChannelIdx) and the 2 embedded refs (MR@2369+) follow a different
+sub-layout. So the MediaRef ↔ ChannelIdx ↔ virtual-track relationship is **NOT** a clean
+1:1 — the 5th ref is likely a clip-level/primary reference distinct from the 4 per-channel
+records. `[UNVERIFIED]` which virtual track each maps to. This is settled empirically by the
+T025 byte-equality round-trip test against this fixture, not by assumption (FR-014: a synced
+clip while the region is not faithfully reproducible → loud fail, no fake sync).
+
+**Encoder reuse (for T025).** `drt_binary.encode_fields_blob` (`drt_binary.lua:361`) does the
+outer zstd wrapper only — reusable as-is. The TLV encoders (`encode_tlv_fields`/`encode_field`,
+≈`:189-215`) emit UTF-16**BE** names / BE32 lengths — the **TLV** container, NOT this Fusion
+Fields framing (UTF-16LE names, `[2B pad][LE16 len]`). T025 needs Fields-framing emitters
+(SampleOffset/MediaRef/ChannelIdx) + a **signed** BE64 (existing `write_be64` asserts `n>=0`;
+SampleOffset is signed per `drp_binary.lua:890`). Per the plan, T025 prefers in-place patch of
+fixed-width fields in the borrowed opaque region over full synthesis where the residual layout
+is unverified.
+
+## D10 — Gap #1 CORRECTION: audio timeline clips are FRAME-domain, not sample-domain
+
+**Status: spec premise corrected (first-hand fixture decode).** The spec/tasks framed gap #1 as
+"In/MediaStartTime math must work in audio SAMPLE units for audio media." **That is wrong for the
+timeline clip.** Verified by dissecting `resolve_authored_full.drp` →
+`SeqContainer/48e1a26b-…​.xml`:
+
+- A standalone `test_click_48k_stereo.wav` `Sm2TiAudioClip` carries
+  `<MediaFrameRate>872211b5dcf93740…` = **23.976 fps** (the conformed/sequence fps), **NOT 48000**.
+  Audio and video clips share the IDENTICAL `<In>` encoding (`71|<LE-double subframe>` = frame +
+  fraction) and `<MediaStartTime>0`. The 48000 sample rate + sample-count durations appear ONLY in
+  the media-pool `Sm2MpAudioClip`'s `TracksBA` (gap #2: SampleRate=0xBB80, Duration=144000 samples).
+- Reconciled with phase0-findings:149/273/460 — `<MediaStartTime>` is **seconds**
+  (`start_tc_frame / native_rate`), which is unit-agnostic (samples/sr AND frames/fps both → sec).
+  But `<MediaFrameRate>` = `native_rate` must be the **fps**, which forces the frame domain.
+
+**Corrected gap #1 design (producer-only; writer math is already generic & correct):**
+- `payload_builder.media_to_payload` must not crash on audio (the `:149` `get_start_tc()` assert).
+  Branch on media kind (`width>0` ⇒ video; else audio-only).
+- For an **audio** media item, emit FRAME-domain values so the writer's existing
+  `in_offset = source_in − start_tc_frame` and `media_start_seconds = start_tc_frame / native_rate`
+  produce the fixture bytes:
+  - `native_rate` = the **conformed (sequence) fps** (→ `<MediaFrameRate>` = seq fps). NOT sample_rate.
+  - `start_tc_frame` = audio TC origin in frames = `get_audio_start_tc()` samples ÷ sample_rate ×
+    seq_fps (→ `<MediaStartTime>` correct seconds; 0 for a tc=0 WAV).
+  - clip `source_in/out` = model samples converted to **frames** at seq_fps (the sub-frame fraction
+    in `<In>` preserves sample accuracy). JVE model still stores audio source_in in SAMPLES
+    (KEY INVARIANT) — the conversion is at the payload boundary only.
+- The sample domain (sample_rate, sample-count duration, StartTime) is confined to the gap-#2
+  `Sm2MpAudioClip` `TracksBA`. **No sample-unit math in the writer's timeline-clip path.**
+
+**Impact:** T013 ("audio In/MediaStartTime in sample units") is REPLACED by "producer converts audio
+TC/source_in samples→frames at seq fps; writer unchanged." T002 asserts audio `<MediaFrameRate>` =
+seq fps and frame-domain `<In>`. data-model P-rows + contracts P1/C1 corrected (research-pass).
+
+**RESIDUAL / open for Joe (decisive vs inferred):** DECISIVE evidence = standalone-WAV
+`<MediaFrameRate>` = 23.976 fps (not 48000), verified by decode. INFERRED = the exact non-zero
+standalone-audio `<In>` form, because every standalone-WAV clip in the fixtures has `In=empty`
+(source_in=0); the only non-zero `In` (`71|hex`) is on a video-file's audio/video clip. So
+"audio In = frames at seq fps" is the design that fits ALL observed evidence but the standalone
+non-zero case is confirmed only by the T002 round-trip + a live-Resolve spot-check, not a fixture.
+**spec.md FR-001/002/003 still say "sample units" and were NOT rewritten** — they need Joe's
+confirm (FR-003 "sample-accurate fractional precision" stays TRUE under D10; FR-002 "computed in
+sample units" is the mechanism claim that conflicts). plan.md:164, research D3, drt-members.md #1
+row carry the same stale mechanism wording pending that confirm.
+
+---
+
+## D11 — Gap #3 audio routing: VirtualAudioTrackBA + MediaTrackIdx byte map
+
+**Status: decoded first-hand** from `resolve_authored_full.drp` + `anamnesis-gold-timeline.drp`
+SeqContainer XML, cross-referenced with phase0 §F (lines 189–198). §F names only the
+discriminating offsets; the full hex below is from the fixtures (authoritative).
+
+The `VirtualAudioTrackBA` is a Fusion Fields blob: `ChannelsBA` (the channel/routing descriptor)
++ `AudioType`. The **mono ch1 embedded** form is today's hardcoded `VIRTUAL_AUDIO_TRACK_BA_MONO_A1`
+(drt_writer.lua:302–305). Field offsets (0-based, within the 84-byte mono blob):
+- **b40** (LE u32 block size): `0x0c`=12 (mono/1-track), `0x10`=16 (stereo/2-track).
+- **b49** routing type: `0x00`=embedded/standalone, `0x20`=linked/synced.
+- **b52** (LE u32) 1-based channel index = `source_channel + 1`.
+- **b82–83** AudioType value: mono=`0001`, stereo=`0000`.
+
+Distinct fixture forms (verbatim hex):
+| Kind | MediaTrackIdx | VirtualAudioTrackBA hex |
+|------|---------------|-------------------------|
+| mono ch1 embedded/standalone | `source_channel` (=0) | `00000001000000020000001400430068...004200410000000c000000000c0000000200000001`**`00`**`0040`**`01000000`**`00000012004100750064...0054007900700065000000020000`**`0001`** |
+| mono ch2 standalone | `source_channel` (=1) | …same as ch1 but b52 word = `02000000` (`...010000400200000000000012...0001`) |
+| stereo both-ch embedded | `0` | block b40=`10`; bytes44–59 = `02000000 02000040 01000040 02000000`; AudioType=`0000` |
+| stereo ch1-only | `0` | stereo form but b56 word = `01000000` |
+| linked/synced ch1 | `2` (slot) | mono form but b49=`0x20`: `...0200000001`**`20`**`0040 01000000 ...0001` |
+
+**Derivation from JVE model (T014 routing descriptor):**
+- `source_channel` = `clip.source_channel` (= `media_ref.source_channel`, **0-based**;
+  `models/media_ref.lua:94-101`, `models/clip.lua:149`). NULL on video clips.
+- `audio_channels` = `media.audio_channels` (1=mono,2=stereo; `models/media.lua:525/568`).
+- synced ⇔ `clip_link.is_linked(clip_id)` AND its `get_link_group` has a `role="video"` member
+  (`models/clip_link.lua:60`/`:10`; roles enforced `:139`).
+- **MediaTrackIdx** = `source_channel` (0-based) for embedded/standalone; **= 2 for the first
+  linked track** (the virtual-track SLOT — NOT derivable from JVE model; lives in the
+  `Sm2MpVideoClip.FieldsBlob`, §J/D9). Multi-linked-track slot generalization is gap #5 (T025).
+- **VATBA b52 channel index** = `source_channel + 1` (0-based → Resolve 1-based).
+
+**Import persistence (T014a/b) — the channel selection is a pin, not a stored field:**
+the DRP importer decodes `VirtualAudioTrackBA` on the way in (`drp_binary.decode_audio_channel_select`)
+and pins the timeline clip to a per-channel master AUDIO track via `clips.master_audio_track_id`
+(`Sequence.find_master_audio_track_for_channel`). `clip.source_channel` is then read back through
+that pin by `Clip.load`'s pin-aware JOIN — so the "= media_ref.source_channel" identity above is
+realized through the pin, not a separate stored column on the timeline clip.
+The decoder works on the **TLV-extracted `ChannelsBA` payload** (the 12-byte mono block), using
+payload-relative offsets — `payload:byte(9)` = routing type (`0x00` embedded/standalone → channel;
+`0x20` synced → no pin, deferred to gap #5), `payload:byte(12)` = 1-based channel — NOT the
+whole-84-byte-blob offsets (b49/b52) tabulated above. Payloads ≠ 12 bytes (stereo/pair) → no pin
+(composite). All offsets verified GREEN against the fixtures.
+
+**Scope split:** mono/stereo (embedded + standalone) are fully derivable now → interim gate
+(T028, non-synced). The synced form (b49=0x20, MediaTrackIdx=2) is emitted from is_linked but its
+slot number ties to gap #5; the 9-channel forms (Forms B/C/D in anamnesis) are OUT OF SCOPE for
+gap #3 (`0x40`→`0x80` multi-track flag undecoded — do not invent; loud-fail per FR-019).
+
+---
+
 ## Open gate carried into implementation
 
-- **Gap #5 / D1 FieldsBlob linkage-region decode** is the one must-succeed unknown. It is
-  the first implementation task (Phase-0 spike) and its own gate. Gaps #1, #2, #3 and the
-  markers work proceed against decoded fixtures in parallel and satisfy the **interim
-  acceptance gate** (non-synced gold subset, FR-021) independent of D1.
+- **Gap #5 / D1 FieldsBlob linkage-region decode**: decode gate satisfied (D9). The residual
+  MediaRef↔track asymmetry is resolved by the T025 round-trip, not before. Gaps #1, #2, #3 and
+  the markers work proceed against decoded fixtures and satisfy the **interim acceptance gate**
+  (non-synced gold subset, FR-021) independent of gap #5.
