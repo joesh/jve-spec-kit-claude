@@ -131,6 +131,7 @@ Joe also wants install-count and weekly-launch-count signal. Every JVE launch si
 - **FR-019**: System MUST persist the install id and the per-install authentication secret with file permissions that restrict access to the owning user.
 - **FR-019a**: If the persisted install-id file exists but cannot be parsed or is missing required fields, System MUST assert with an actionable error identifying the file path and the parse failure. System MUST NOT silently regenerate the file or skip telemetry.
 - **FR-020**: System MUST NOT collect or transmit usernames, hostnames, MAC addresses, IP addresses, file system contents outside the capture, list of installed software, or any other identifying data beyond what is enumerated in FR-001 and FR-016.
+- **FR-020a**: Screenshot pixels captured into the slideshow ring MUST have visually sensitive regions redacted (overpainted with an opaque mask) BEFORE the pixmap is stored in the ring. UI code that displays filesystem paths or other identifying strings (notably the project browser tree) MUST register its widget for redaction at setup; the screenshot grabber walks the registration list every grab and masks each visible widget's rect. Text-side redaction (FR-020) is necessary but not sufficient — slideshow pixels would otherwise carry the same strings.
 
 ### Functional Requirements — Transport
 

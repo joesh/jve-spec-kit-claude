@@ -437,6 +437,17 @@ if not _G.qt_pixmap_byte_count then
     end
 end
 
+-- bug_reporter pixmap redaction (feature 027 FR-019). Production
+-- registers sensitive widgets so grab_window can fill their rects with
+-- grey before the pixmap reaches the ring. Synthetic tests have no
+-- live QWidgets and no QPainter; the stub records the registration so
+-- a test could assert it happened but otherwise no-ops.
+if not _G.qt_bug_reporter_redact_widget then
+    _G.qt_bug_reporter_redact_widget = function(_widget)
+        return nil
+    end
+end
+
 -- Lightweight dependency guards for tests
 local function enforce(expected, fn)
     if type(fn) ~= "function" then

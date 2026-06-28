@@ -1,9 +1,15 @@
 #include "qt_bindings_bug_reporter.h"
 #include "../jve_log.h"
 #include "../jve_lua_callback.h"
+#include "../qt_bindings.h"
 #include "gesture_logger.h"
 #include <QWidget>
 #include <QPixmap>
+#include <QPainter>
+#include <QPointer>
+#include <QColor>
+#include <QPoint>
+#include <QRect>
 #include <QTimer>
 #include <QApplication>
 #include <QMouseEvent>
@@ -11,11 +17,20 @@
 #include <QWheelEvent>
 #include <QThread>
 #include <QElapsedTimer>
+#include <QList>
 
 namespace bug_reporter {
 
 // Global gesture logger instance
 static GestureLogger* g_gestureLogger = nullptr;
+
+// Feature 027 FR-019: widgets that must be visually redacted in every
+// screenshot before the pixmap reaches the in-memory ring. UI code
+// (e.g. project_browser.lua) marks its tree as sensitive at setup
+// time; lua_grab_window walks this list post-grab and fills each
+// visible widget's rect with solid grey. QPointer auto-nils when the
+// underlying QWidget is destroyed, so stale entries don't crash.
+static QList<QPointer<QWidget>> s_redact_widgets;
 
 //============================================================================
 // Gesture Logger Bindings
@@ -140,6 +155,24 @@ static int lua_grab_window(lua_State* L) {
 
     QPixmap pixmap = mainWidget->grab();
 
+    // FR-019: scrub registered sensitive widget regions out of the
+    // pixmap before it can be stored in the ring. Path strings shown
+    // by project_browser are the canonical leak; UI code marks the
+    // widget via qt_bug_reporter_redact_widget at setup. QPointer
+    // guards against widgets destroyed between mark and grab.
+    if (!s_redact_widgets.isEmpty()) {
+        QPainter painter(&pixmap);
+        const QColor mask(96, 96, 96);
+        for (const QPointer<QWidget>& wp : s_redact_widgets) {
+            QWidget* w = wp.data();
+            if (!w || !w->isVisible()) continue;
+            QPoint topLeft = w->mapTo(mainWidget, QPoint(0, 0));
+            QRect r(topLeft, w->size());
+            painter.fillRect(r, mask);
+        }
+        painter.end();
+    }
+
     // Create QPixmap userdata
     QPixmap** userData = (QPixmap**)lua_newuserdata(L, sizeof(QPixmap*));
     *userData = new QPixmap(pixmap);
@@ -148,6 +181,27 @@ static int lua_grab_window(lua_State* L) {
     lua_setmetatable(L, -2);
 
     return 1;
+}
+
+/**
+ * qt_bug_reporter_redact_widget(widget)
+ * Marks `widget` as visually sensitive — its rect will be filled with
+ * solid grey on every subsequent grab_window pixmap. Idempotent for
+ * the same QWidget*; the entry self-clears when the widget is destroyed
+ * (QPointer). FR-019.
+ */
+static int lua_bug_reporter_redact_widget(lua_State* L) {
+    void* ptr = lua_to_widget(L, 1);
+    if (!ptr) {
+        return luaL_error(L,
+            "qt_bug_reporter_redact_widget: widget arg required");
+    }
+    QWidget* w = static_cast<QWidget*>(ptr);
+    for (const QPointer<QWidget>& existing : s_redact_widgets) {
+        if (existing.data() == w) return 0;
+    }
+    s_redact_widgets.append(QPointer<QWidget>(w));
+    return 0;
 }
 
 /**
@@ -507,6 +561,7 @@ void registerBugReporterBindings(lua_State* L) {
 
     // Register screenshot functions
     lua_register(L, "grab_window", lua_grab_window);
+    lua_register(L, "qt_bug_reporter_redact_widget", lua_bug_reporter_redact_widget);
     // QPixmap dimension + byte-count accessors — feature 027 T010b
     // (byte_count added for capture_manager byte-bound ring, post-rewrite)
     lua_register(L, "qpixmap_width", lua_qpixmap_width);

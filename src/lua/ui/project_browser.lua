@@ -1664,6 +1664,17 @@ function M.create()
     end
     log.event("Project browser created (media=%d timelines=%d)", media_count, sequence_count)
 
+    -- Feature 027 FR-019: project browser shows filesystem paths in
+    -- the Path column. Mark the tree as visually sensitive so every
+    -- bug_reporter screenshot fills that region with solid grey before
+    -- the pixmap reaches the ring. Binding is registered by the
+    -- bug_reporter C++ side; if it's not present (synthetic Lua test
+    -- without --test mode), skip silently — production bundling pulls
+    -- it in.
+    if _G.qt_bug_reporter_redact_widget and M.tree then
+        qt_bug_reporter_redact_widget(M.tree)
+    end
+
     return container
 end
 
