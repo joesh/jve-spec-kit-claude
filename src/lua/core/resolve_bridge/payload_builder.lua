@@ -330,6 +330,39 @@ local function media_to_payload(media, track_type, file_uuid, seq_fps)
         payload.sample_rate      = media.audio_sample_rate
         payload.num_channels     = media.audio_channels
         payload.duration_samples = media.duration   -- audio master duration is samples
+    else
+        -- Video media-pool item descriptors synthesized from this media
+        -- (gap #4, T021, FR-010/011): intrinsic resolution, codec, and the
+        -- embedded-audio shape. No borrowing the A005 template — assert each.
+        assert(type(media.width) == "number" and media.width > 0
+            and type(media.height) == "number" and media.height > 0,
+            "payload_builder: video media missing intrinsic width/height — id="
+            .. tostring(media.id))
+        assert(type(media.codec) == "string" and media.codec ~= "",
+            "payload_builder: video media missing codec — id=" .. tostring(media.id))
+        payload.width  = media.width
+        payload.height = media.height
+        payload.codec  = media.codec
+        -- Embedded audio reflects reality: a video file with an audio stream
+        -- carries it (with an EXACT sample count captured at import), a silent
+        -- video carries none. The payload is honest either way; the writer's
+        -- A005-class video template is what currently requires embedded audio
+        -- (it loud-fails on a silent video — todo_026_pure_video_no_embedded_audio).
+        if media.audio_channels and media.audio_channels > 0 then
+            assert(type(media.audio_sample_rate) == "number" and media.audio_sample_rate > 0,
+                "payload_builder: video media has audio_channels but no "
+                .. "audio_sample_rate — id=" .. tostring(media.id))
+            assert(type(media.audio_duration_samples) == "number"
+                and media.audio_duration_samples > 0,
+                "payload_builder: video media has embedded audio but no exact "
+                .. "sample count (media.audio_duration_samples) — id="
+                .. tostring(media.id))
+            payload.embedded_audio = {
+                sample_rate      = media.audio_sample_rate,
+                num_channels     = media.audio_channels,
+                duration_samples = media.audio_duration_samples,
+            }
+        end
     end
 
     return payload

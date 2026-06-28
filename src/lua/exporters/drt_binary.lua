@@ -391,6 +391,44 @@ function M.substitute_audio_tracks_ba(ref_hex, fields)
     return hex
 end
 
+--- Substitute the intrinsic resolution into a borrowed BtVideoInfo <Geometry>
+--- blob — inverse of drp_binary.decode_bt_video_resolution. The "Resolution"
+--- field is a 0x000c payload whose first 16 bytes are two BE int64 (width then
+--- height). Only those 16 bytes are rewritten; the field framing and any
+--- trailing payload bytes are preserved verbatim, so the surrounding Geometry
+--- structure (which JVE does not model) stays byte-identical to Resolve's.
+--- @param geom_hex string: borrowed Geometry hex
+--- @param width int>0, height int>0
+--- @return string: Geometry hex with the Resolution width/height substituted
+function M.substitute_geometry_resolution(geom_hex, width, height)
+    assert(type(geom_hex) == "string" and #geom_hex > 0,
+        "substitute_geometry_resolution: geometry hex required")
+    assert(type(width) == "number" and width > 0 and width % 1 == 0,
+        "substitute_geometry_resolution: positive integer width required")
+    assert(type(height) == "number" and height > 0 and height % 1 == 0,
+        "substitute_geometry_resolution: positive integer height required")
+
+    local anchor = to_hex(utf16be("Resolution")) .. "0000" .. "000c"
+    local s = geom_hex:find(anchor, 1, true)
+    assert(s, "substitute_geometry_resolution: Resolution field (type 0x000c) "
+        .. "not found in Geometry blob")
+    assert(not geom_hex:find(anchor, s + #anchor, true),
+        "substitute_geometry_resolution: Resolution field appears more than once")
+
+    -- Value framing after the anchor: [BE32 aux][1 byte val] => payload_len.
+    local vstart = s + #anchor
+    local plen = tonumber(geom_hex:sub(vstart, vstart + 7), 16) * 256
+        + tonumber(geom_hex:sub(vstart + 8, vstart + 9), 16)
+    assert(plen >= 16, string.format(
+        "substitute_geometry_resolution: Resolution payload is %d bytes, "
+        .. "need >= 16 (two BE int64)", plen))
+
+    local payload_start = vstart + 10  -- past the 5-byte [aux][val] framing
+    return geom_hex:sub(1, payload_start - 1)
+        .. string.format("%016x%016x", width, height)
+        .. geom_hex:sub(payload_start + 32)
+end
+
 -- ---------------------------------------------------------------------------
 -- BtVideoInfo Time blob — inverse of decode_bt_video_time
 -- Header: [BE32 version=1][BE32 field_count]; then TLV. field_count ∈ [4,8].

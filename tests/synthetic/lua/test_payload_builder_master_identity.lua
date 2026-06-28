@@ -60,10 +60,10 @@ assert(db:exec(string.format([[
     -- ONE physical file, shared by both source clips (post-dedup model)
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
         fps_numerator, fps_denominator, audio_sample_rate, width, height,
-        rotation, audio_channels, codec, is_still, metadata,
+        rotation, audio_channels, codec, audio_duration_samples, is_still, metadata,
         created_at, modified_at)
     VALUES ('m_mov', 'p', 'A008_C011', '/footage/A008_C011.mov', %d,
-        %d, %d, 48000, 1920, 1080, 0, 2, 'prores',
+        %d, %d, 48000, 1920, 1080, 0, 2, 'prores', 218112,
         0, '{"start_tc_value":%d,"start_tc_rate":24}', %d, %d);
 
     -- Synced master (import_uuid = its Resolve pool DbId)

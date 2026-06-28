@@ -89,6 +89,19 @@ function M.build_a005_payload()
                 -- Source-file mtime (µs); the Clip blob's date + f13 derive from
                 -- it. The producer always supplies it (media.file_mtime_us).
                 file_mtime_us   = 1471909574000000,
+                -- A005's intrinsic descriptors (ffprobe-verified: 640x360 avc1,
+                -- 48000Hz/2ch embedded audio). The embedded sample count is the
+                -- value Resolve authored into the A005 template's TracksBA
+                -- (218112) — so the writer's payload-driven substitution
+                -- reproduces the template bytes exactly (gap #4, T020/T021).
+                width           = 640,
+                height          = 360,
+                codec           = "avc1",
+                embedded_audio  = {
+                    sample_rate      = 48000,
+                    num_channels     = 2,
+                    duration_samples = 218112,
+                },
             },
         },
         sequence = {

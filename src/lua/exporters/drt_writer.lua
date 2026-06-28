@@ -787,12 +787,6 @@ local function build_media_pool_video_item(media, dbids, state)
         "drt_writer.build_media_pool_video_item: media.file_uuid required")
     assert(type(media.file_path) == "string" and media.file_path ~= "",
         "drt_writer.build_media_pool_video_item: media.file_path required")
-    local ext = media.file_path:match("%.([^.]+)$")
-    assert(ext == "mp4" or ext == "mov",
-        "drt_writer.build_media_pool_video_item: only .mp4/.mov media "
-        .. "supported by this writer pass (phase0-findings §K3); got '"
-        .. tostring(ext) .. "' for " .. media.file_path
-        .. ". Audio (Sm2MpAudioClip) deferred per §K4.")
     assert(type(media.native_rate) == "number" and media.native_rate > 0,
         "drt_writer.build_media_pool_video_item: media.native_rate "
         .. "required (positive number); got " .. tostring(media.native_rate))
@@ -800,6 +794,32 @@ local function build_media_pool_video_item(media, dbids, state)
         and media.duration_frames > 0 and media.duration_frames % 1 == 0,
         "drt_writer.build_media_pool_video_item: media.duration_frames "
         .. "required (positive integer); got " .. tostring(media.duration_frames))
+    -- Intrinsic descriptors synthesized from THIS media (gap #4, T020). No
+    -- borrowing A005's resolution/embedded-audio/codec — every field comes
+    -- from the payload, or we loud-fail (1.14/2.13, FR-010/011).
+    assert(type(media.width) == "number" and media.width > 0 and media.width % 1 == 0,
+        "drt_writer.build_media_pool_video_item: media.width required (positive "
+        .. "integer) for the <Geometry> Resolution; got " .. tostring(media.width))
+    assert(type(media.height) == "number" and media.height > 0 and media.height % 1 == 0,
+        "drt_writer.build_media_pool_video_item: media.height required (positive "
+        .. "integer) for the <Geometry> Resolution; got " .. tostring(media.height))
+    assert(type(media.codec) == "string" and media.codec ~= "",
+        "drt_writer.build_media_pool_video_item: media.codec required (non-empty "
+        .. "string) for the BtVideoInfo <Clip> f5; got " .. tostring(media.codec))
+    -- The A005 template is an A/V template (it carries a BtAudioInfo with an
+    -- embedded <TracksBA>). A video file with no embedded audio would need a
+    -- different (video-only) template/fixture — deferred until one is attested
+    -- (todo_026_pure_video_no_embedded_audio).
+    local ea = media.embedded_audio
+    assert(type(ea) == "table",
+        "drt_writer.build_media_pool_video_item: media.embedded_audio required "
+        .. "(the A005 template carries an embedded BtAudioInfo); missing for "
+        .. media.file_path .. " — pure-video media is not yet attested")
+    assert(type(ea.sample_rate) == "number" and ea.sample_rate > 0
+        and type(ea.num_channels) == "number" and ea.num_channels > 0
+        and type(ea.duration_samples) == "number" and ea.duration_samples > 0,
+        "drt_writer.build_media_pool_video_item: media.embedded_audio requires "
+        .. "positive sample_rate/num_channels/duration_samples")
 
     local tpl = load_template("full_reference_mp_video_clip_a005.xml")
     tpl = plain_gsub_required(tpl,
@@ -846,6 +866,30 @@ local function build_media_pool_video_item(media, dbids, state)
         tpl = plain_gsub_required(tpl, A005_TEMPLATE_NAME, name)
     end
 
+    -- BtVideoInfo <Geometry> Resolution ← media intrinsic dimensions (T020).
+    -- The borrowed A005 Geometry framing is preserved; only the two BE int64
+    -- width/height are rewritten (decoded back by decode_bt_video_resolution).
+    local ref_geom = assert(tpl:match("<Geometry>([0-9a-f]+)</Geometry>"),
+        "drt_writer.build_media_pool_video_item: A005 template <Geometry> not found")
+    tpl = plain_gsub_required(tpl,
+        "<Geometry>" .. ref_geom .. "</Geometry>",
+        "<Geometry>" .. enc.substitute_geometry_resolution(
+            ref_geom, media.width, media.height) .. "</Geometry>")
+
+    -- BtAudioInfo embedded <TracksBA> ← media embedded-audio shape (T020). Same
+    -- sample-domain substitution as the standalone-audio item; the exact sample
+    -- count comes from media.audio_duration_samples (captured at import).
+    local ref_tracks = assert(tpl:match("<TracksBA>([0-9a-f]+)</TracksBA>"),
+        "drt_writer.build_media_pool_video_item: A005 template embedded "
+        .. "<TracksBA> not found")
+    tpl = plain_gsub_required(tpl,
+        "<TracksBA>" .. ref_tracks .. "</TracksBA>",
+        "<TracksBA>" .. enc.substitute_audio_tracks_ba(ref_tracks, {
+            sample_rate      = ea.sample_rate,
+            num_channels     = ea.num_channels,
+            duration_samples = ea.duration_samples,
+        }) .. "</TracksBA>")
+
     -- Rewrite the BtVideoInfo/BtAudioInfo <Clip> blobs from the payload.
     -- These carry the directory/filename Resolve binds media by on import
     -- (live-dissected 2026-06-10: the template's canned blobs froze a
@@ -875,7 +919,7 @@ local function build_media_pool_video_item(media, dbids, state)
         filename  = clip_common.filename,
         date      = clip_common.date,
         mtime_us  = clip_common.mtime_us,
-        codec     = "avc1",
+        codec     = media.codec,
         clip_name = name,
         clip_uuid = fresh_uuid(0xa2, state),
     })
@@ -1240,17 +1284,12 @@ function M.author_a005_compatible(out_path, payload)
         assert(m.kind == "video" or m.kind == "audio", string.format(
             "drt_writer: media_ref %s has no/unknown kind %q",
             tostring(m.file_uuid), tostring(m.kind)))
-        -- Rule 2.13 quarantine gate (review item #23). VIDEO items still borrow
-        -- A005's descriptors (gap #4 / T020–T021 pending), so video media stays
-        -- restricted to 23.976fps mp4/mov. AUDIO items are general (gap #2 /
-        -- T017): .wav + channel count are validated by build_media_pool_audio_item.
-        if m.kind == "video" then
-            assert(math.abs(m.native_rate - 24000/1001) < 1e-4,
-                "drt_writer: author_a005_compatible requires 23.976fps video media")
-            local ext = m.file_path:match("%.([^%.]+)$")
-            assert(ext == "mp4" or ext == "mov",
-                "drt_writer: author_a005_compatible requires mp4/mov video media")
-        end
+        -- VIDEO and AUDIO media-pool items are both payload-driven now (gap #4 /
+        -- T020–T021): build_media_pool_video_item synthesizes the Geometry,
+        -- embedded TracksBA, and Clip codec from the media, and
+        -- build_media_pool_audio_item validates .wav + channel count. Each
+        -- builder loud-fails on an unattested shape, so no container/rate gate
+        -- is needed here.
     end
     assert(type(payload) == "table",
         "drt_writer.author: payload table required")

@@ -36,11 +36,19 @@ Validation: ≥1 media_ref (no-media fails early, FR-019/edge); each track typed
 
 Rule (FR-010/012): every file-specific field comes from *this* media; the writer encode-
 and-substitutes it into the plaintext-XML descriptor blobs — `<Geometry>` resolution as BE
-int64 w×h (`%016x%016x`), `<TracksBA>`, `<Clip>` codec (driven by `media.codec`, replacing
-the hard-coded `avc1`/`AAC`), `<Time>` — NOT the zstd FieldsBlob (research D1). `media.codec`
-is empty for imported media until the DRP importer's `<Clip>` decode is extended to read `f5`
-(research D1, codec fold-in). A required field absent from the model → assert (edge case),
+int64 w×h (`%016x%016x`, via `drt_binary.substitute_geometry_resolution`), embedded
+`<TracksBA>` (via `substitute_audio_tracks_ba` from `media.embedded_audio`), `<Clip>` codec
+(driven by `media.codec`, replacing the hard-coded `avc1`), `<Time>` — NOT the zstd
+FieldsBlob (research D1). A required field absent from the model → assert (edge case),
 never a borrowed/default value (1.14/2.13).
+
+**T020/T021 LANDED (commit pending):** `build_media_pool_video_item` no longer borrows
+A005's Geometry/TracksBA/codec — it synthesizes all three from the payload, and the
+`.mp4/.mov` + 23.976fps quarantine gate in `author_a005_compatible` is removed (each
+media-pool builder loud-fails on its own unattested shapes). The embedded-audio Clip codec
+("AAC") stays borrowed (no model field for the embedded audio codec yet — flag for ProRes).
+Silent video (no embedded audio) loud-fails — the A005 template is A/V-only (deferred,
+todo_026_pure_video_no_embedded_audio).
 
 ---
 
