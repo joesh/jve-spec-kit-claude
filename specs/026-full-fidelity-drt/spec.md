@@ -155,15 +155,24 @@ feasibility/scope corrections:
   stream that actually carries it — audio samples for audio-only media, video
   frames for video media — and MUST NOT fail an export because audio-only media
   lacks a video-frame timecode.
-- **FR-002**: For audio media, the exported source-in offset and clip start
-  offset MUST be computed in the media's audio sample units (at the media's
-  sample rate) so that the exported clip reads the same audio content the editor
-  heard in JVE.
+- **FR-002**: An audio timeline clip's exported source-in and start offsets MUST
+  be **frame-domain at the sequence fps** (the same `<In>` / `<MediaFrameRate>`
+  encoding Resolve uses for video), NOT raw audio sample units — research D10
+  decoded a Resolve-authored standalone-WAV `Sm2TiAudioClip` and found
+  `MediaFrameRate` = the sequence fps and the `<In>` value in the identical
+  `frames` / `frames|<hex sub-frame fraction>` form as video, with
+  `MediaStartTime` 0. Sample-domain values (sample rate, sample-count duration,
+  sample TC origin) appear ONLY in the media-pool `Sm2MpAudioClip` `TracksBA`
+  (FR-005), never in the timeline clip. The producer converts the model's
+  sample-domain source range to frames at the sequence fps at the payload
+  boundary; sample accuracy is preserved by FR-003's sub-frame fraction.
 - **FR-003**: The exported source range for every clip — audio or video — MUST,
   when imported into Resolve, address the same source content (same in/out) the
-  editor had on the JVE timeline. Video clip in/out MUST export as whole frames;
-  audio clip in/out MUST export at sample-accurate fractional precision (audio is
-  sample-positioned). Neither MUST shift the content the editor had.
+  editor had on the JVE timeline. Video clip in/out MUST export as whole frames.
+  An audio clip whose source-in does not land on a frame boundary MUST export the
+  sub-frame remainder via the `<frames>|<hex LE-double>` `<In>` form (D10) so the
+  sample position is preserved exactly; it MUST NOT silently round to a whole
+  frame. Neither MUST shift the content the editor had.
 
 #### Standalone audio media-pool item
 
