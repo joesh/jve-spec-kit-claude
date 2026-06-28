@@ -85,6 +85,21 @@ function M.submit(state, on_done)
     local zip_path, zip_bytes, capture_dir = zip_capture(capture_path, state.text_only)
     local metadata_json = build_metadata_json(state, capture_dir)
 
+    -- FR-024a: 10 MB cap. Worker returns 413 payload_too_large above
+    -- this; clamp client-side so the user gets an actionable refusal
+    -- instead of the generic Worker rejection.
+    local MAX_PAYLOAD_BYTES = 10 * 1024 * 1024
+    if #zip_bytes > MAX_PAYLOAD_BYTES then
+        local mb = math.floor(#zip_bytes / (1024 * 1024))
+        local msg = string.format(
+            "Bug report is too large to send (%d MB; max 10 MB). " ..
+            "Try the 'Text only' option to exclude the slideshow.", mb)
+        log.warn("report_bug.submit: payload %d bytes exceeds %d cap — refusing post",
+            #zip_bytes, MAX_PAYLOAD_BYTES)
+        on_done({ ok = false, zip_path = zip_path, user_message = msg })
+        return
+    end
+
     local transport     = require("bug_reporter.transport")
     local pending_queue = require("bug_reporter.pending_queue")
     local local_id = require("uuid").generate()
@@ -109,7 +124,8 @@ function M.submit(state, on_done)
 end
 
 function M.show_disabled_notice()
-    local msg = "Bug reporting is disabled; enable in Preferences → Privacy."
+    local msg = "Bug reporting is disabled. Re-enable in Preferences → Privacy " ..
+        "(or delete ~/.jve/install_id.json and relaunch)."
     log.event("ReportBug invoked while disabled — surfacing %q", msg)
     if _G.qt_constants and _G.qt_constants.DIALOG and _G.qt_constants.DIALOG.SHOW_MESSAGE then
         _G.qt_constants.DIALOG.SHOW_MESSAGE("Bug Reporting", msg)
@@ -119,28 +135,22 @@ end
 
 function M.register(executors, undoers, db)  -- luacheck: no unused args
     local function executor(command)  -- luacheck: no unused args
-        local bug_reporter      = require("bug_reporter")
         local submission_state  = require("bug_reporter.ui.submission_state")
         local submission_dialog = require("bug_reporter.ui.submission_dialog")
 
-        -- Phase A: F12 captures first, then opens the review dialog.
-        -- The dialog's Submit handler calls M.submit which re-runs
-        -- capture_manual + zips. The duplicate capture is acceptable
-        -- for Phase A (exit criterion is just Finder showing a clean
-        -- zip); Phase B's T051 collapses both by deferring capture
-        -- until Submit.
-        local capture_path = bug_reporter.capture_manual("F12 user-triggered")
-        if not capture_path then
-            log.error("Bug report capture failed")
-            return true
-        end
-        log.event("Bug report captured: %s", capture_path)
-
+        -- F12 just opens the dialog. The single capture happens inside
+        -- M.submit when the user clicks Submit. Previously F12 ran one
+        -- capture (gesture/log dump + slideshow ffmpeg) and Submit ran
+        -- a second — duplicate beachball, duplicate disk write, and
+        -- the F12-side capture's data was always thrown away because
+        -- Submit re-captured from a fresh ring snapshot.
         local state = submission_state.new()
         local wrapper = submission_dialog.create(state)
-        if wrapper and wrapper.dialog and _G.qt_show_dialog then
-            _G.qt_show_dialog(wrapper.dialog, false)
-        end
+        assert(wrapper and wrapper.dialog,
+            "report_bug executor: submission_dialog.create returned no dialog")
+        assert(qt_show_dialog,
+            "report_bug executor: qt_show_dialog binding missing")
+        qt_show_dialog(wrapper.dialog, false)
 
         return true
     end

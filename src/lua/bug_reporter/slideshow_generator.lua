@@ -4,21 +4,34 @@ local utils = require("bug_reporter.utils")
 local log = require("core.logger").for_area("ui")
 local SlideshowGenerator = {}
 
--- Check if ffmpeg is available on the system
+-- Absolute-path candidates checked in order. Finder-launched .app
+-- processes run with a stripped PATH that excludes /opt/homebrew/bin
+-- and /usr/local/bin, so `which ffmpeg` returns empty inside JVE
+-- launched via Finder/Dock — slideshow generation silently failed
+-- (pass 1+2 #3 HIGH). We probe the canonical install locations
+-- directly via QFileInfo (qt_fs_path_exists exists for this).
+local FFMPEG_CANDIDATES = {
+    "/opt/homebrew/bin/ffmpeg",   -- Homebrew (Apple Silicon default)
+    "/usr/local/bin/ffmpeg",      -- Homebrew (Intel default)
+    "/opt/local/bin/ffmpeg",      -- MacPorts
+    "/usr/bin/ffmpeg",            -- system (rare on macOS)
+}
+
+local cached_ffmpeg
+
 function SlideshowGenerator.check_ffmpeg()
-    local handle = io.popen("which ffmpeg 2>/dev/null")
-    if not handle then
-        return false, "Could not execute 'which' command"
+    if cached_ffmpeg ~= nil then
+        if cached_ffmpeg == false then return false, "ffmpeg not found in any canonical path" end
+        return true, cached_ffmpeg
     end
-
-    local ffmpeg_path = handle:read("*a")
-    handle:close()
-
-    if ffmpeg_path and ffmpeg_path ~= "" then
-        return true, ffmpeg_path:gsub("\n", "")
-    else
-        return false, "ffmpeg not found in PATH"
+    for _, path in ipairs(FFMPEG_CANDIDATES) do
+        if qt_fs_path_exists(path) then
+            cached_ffmpeg = path
+            return true, path
+        end
     end
+    cached_ffmpeg = false
+    return false, "ffmpeg not found in any of: " .. table.concat(FFMPEG_CANDIDATES, ", ")
 end
 
 --- Generate MP4 slideshow video from sequential screenshots using FFmpeg
@@ -53,29 +66,22 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
         return nil, "screenshot_count must be a positive number"
     end
 
-    -- Check if ffmpeg is available
-    local has_ffmpeg, ffmpeg_info = SlideshowGenerator.check_ffmpeg()
+    -- Resolve ffmpeg via absolute path (Finder-launched .app has stripped PATH).
+    local has_ffmpeg, ffmpeg_path = SlideshowGenerator.check_ffmpeg()
     if not has_ffmpeg then
-        return nil, "ffmpeg not available: " .. ffmpeg_info
+        return nil, "ffmpeg not available: " .. ffmpeg_path
     end
 
-    -- Default output path
+    -- Default output path: parent directory of screenshot_dir, slideshow.mp4.
     if not output_path then
-        -- Remove trailing slash
         local dir = screenshot_dir:gsub("/$", "")
-        -- Get parent directory and append slideshow.mp4
         output_path = dir:gsub("/[^/]+$", "") .. "/slideshow.mp4"
     end
 
-    -- Build ffmpeg command
-    -- -framerate 2: 2 frames per second (1 image = 0.5 seconds, 2x speed)
-    -- -i screenshot_%03d.png: Input pattern
-    -- -c:v libx264: H.264 codec
-    -- -pix_fmt yuv420p: Compatible pixel format
-    -- -y: Overwrite output file
     local cmd = string.format(
-        "ffmpeg -framerate 2 -i %s/screenshot_%%03d.png " ..
+        "%s -framerate 2 -i %s/screenshot_%%03d.png " ..
         "-c:v libx264 -pix_fmt yuv420p -y %s 2>&1",
+        utils.shell_quoted_arg(ffmpeg_path),
         utils.shell_quoted_arg(screenshot_dir),
         utils.shell_quoted_arg(output_path)
     )
@@ -113,16 +119,13 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
     return output_path
 end
 
--- Get file size in bytes
+-- Get file size in bytes. wc -c is the only POSIX route that gives a
+-- bare integer without parsing differences across BSD/GNU stat.
 function SlideshowGenerator.get_file_size(path)
-    local handle = io.popen("wc -c < '" .. utils.shell_escape(path) .. "' 2>/dev/null")
-    if not handle then
-        return 0
-    end
-
+    local handle = io.popen("/usr/bin/wc -c < " .. utils.shell_quoted_arg(path) .. " 2>/dev/null")
+    if not handle then return 0 end
     local size_str = handle:read("*a")
     handle:close()
-
     return tonumber(size_str) or 0
 end
 
