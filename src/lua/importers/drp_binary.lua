@@ -394,6 +394,46 @@ function M.decode_bt_clip_mtime(hex_str)
     return nil
 end
 
+--- Decode the media codec four-CC / name (e.g. "avc1", "AAC", "Linear PCM")
+--- from a BtVideoInfo/BtAudioInfo Clip blob — protobuf field 5. The DRT
+--- exporter re-emits it as the <Clip> codec (spec 026 gap #4); without it
+--- media.codec stays empty for every gold media.
+--
+-- Unlike decode_bt_clip_path (which reads the protobuf raw and so only works
+-- for the audio blob, which Resolve stores as an uncompressed zstd block), this
+-- decompresses the FieldsBlob first via decode_fields_blob — so it reads the
+-- codec uniformly from BOTH the compressed video blob and the uncompressed
+-- audio blob. (decode_fields_blob requires the zstd binding → .app/--test only.)
+-- @param hex_str string: full Clip blob hex (wrapper + payload)
+-- @return string|nil: codec string, or nil if absent/undecodable
+function M.decode_bt_clip_codec(hex_str)
+    if not hex_str or hex_str == "" then return nil end
+    local payload = M.decode_fields_blob(hex_str)
+    if not payload then return nil end
+
+    local CODEC_FIELD = 5
+    local pos, n = 1, #payload
+    while pos <= n do
+        local field_num, wire_type, after_tag = read_pb_tag(payload, pos)
+        if not field_num then return nil end
+        pos = after_tag
+        if wire_type == PB_WIRE_LEN then
+            local slice, after_slice = read_pb_len_slice(payload, pos)
+            if not slice then return nil end
+            if field_num == CODEC_FIELD then return slice end
+            pos = after_slice
+        elseif wire_type == PB_WIRE_VARINT then
+            local _, after_val = M.decode_protobuf_varint(payload, pos)
+            if not after_val then return nil end
+            pos = after_val
+        else
+            -- group/fixed wire types don't appear before field 5 in this blob.
+            return nil
+        end
+    end
+    return nil
+end
+
 -- ---------------------------------------------------------------------------
 -- TLV field decoder (DRP's binary field format)
 -- ---------------------------------------------------------------------------
