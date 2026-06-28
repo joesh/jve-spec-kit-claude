@@ -1135,6 +1135,17 @@ function M.import_into_project(project_id, parse_result, opts)
                     -- subframe NULL on video, non-NULL on audio.
                     local src_in_frame, sub_in
                     local src_out_frame, sub_out
+                    -- gap #3: pin an audio clip to the master AUDIO track that
+                    -- carries the file channel it reads (decoded from the clip's
+                    -- VirtualAudioTrackBA). nil source_channel ⇒ whole-file
+                    -- (mono/stereo composite) ⇒ unpinned, as before.
+                    local master_audio_track_id = nil
+                    if track.track_type == "AUDIO"
+                        and type(clip_data.source_channel) == "number" then
+                        master_audio_track_id =
+                            Sequence.find_master_audio_track_for_channel(
+                                master_seq_id, clip_data.source_channel)
+                    end
                     if track.track_type == "AUDIO" then
                         -- The audio path reads only the master's fps timebase;
                         -- masters are few but audio clips are many, so cache the
@@ -1180,7 +1191,7 @@ function M.import_into_project(project_id, parse_result, opts)
                         source_in_subframe    = sub_in,
                         source_out_subframe   = sub_out,
                         master_layer_track_id = nil,
-                        master_audio_track_id = nil,
+                        master_audio_track_id = master_audio_track_id,
                         fps_mismatch_policy   = "resample",
                         enabled               = (clip_data.enabled ~= false),
                         volume                = clip_data.volume or 1.0,

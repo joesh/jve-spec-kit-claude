@@ -26,6 +26,7 @@ local Track    = require("models.track")
 local Media    = require("models.media")
 local Project  = require("models.project")
 local Clip     = require("models.clip")
+local ClipLink = require("models.clip_link")
 local database = require("core.database")
 
 local M = {}
@@ -70,7 +71,71 @@ local function master_identity(master_id, ctx)
     return identity
 end
 
-local function load_clips_for_track(db, track_id, ctx)
+local function load_media_cached(media_id, ctx)
+    -- One Media.load per physical file, cached for the build. Both the
+    -- clip-side source-range conversion and the pool-item emit need the media
+    -- (kind + sample rate); loading once keeps them consistent and cheap.
+    local cached = ctx.media_by_id[media_id]
+    if cached then return cached end
+    local m = Media.load(media_id)
+    assert(m, "payload_builder: clip references missing media "
+        .. tostring(media_id))
+    ctx.media_by_id[media_id] = m
+    return m
+end
+
+local function build_audio_routing(db, loaded, media)
+    -- How this audio clip's channel reaches the Resolve timeline (gap #3,
+    -- FR-007/008; research D11). Three kinds:
+    --   • synced  — the clip's audio is V↔A-linked to a video master (the
+    --     channel lives on a virtual track of the linked group). MediaTrackIdx
+    --     is the virtual-track slot (2 = first linked track); the linkage
+    --     itself is gap #5.
+    --   • mono    — the clip reads ONE file channel: either pinned to a master
+    --     AUDIO track (master_audio_track_id ≠ NULL — the importer's channel
+    --     select) or a single-channel file. MediaTrackIdx = that 0-based channel.
+    --   • stereo  — a composite clip reading the whole 2-channel file.
+    --     MediaTrackIdx = 0 (the pair starts at channel 0).
+    local synced = ClipLink.is_linked(loaded.id, db)
+    local source_channel = loaded.resolved_media
+        and loaded.resolved_media.source_channel
+    assert(type(media.audio_channels) == "number" and media.audio_channels >= 1,
+        "payload_builder: audio media missing audio_channels — id="
+        .. tostring(media.id))
+
+    local kind, media_track_idx
+    if synced then
+        kind, media_track_idx = "synced", 2
+    elseif loaded.master_audio_track_id ~= nil then
+        -- pinned single channel: source_channel is the file channel it reads
+        assert(type(source_channel) == "number", string.format(
+            "payload_builder: clip %s is pinned to master_audio_track %s but its "
+            .. "resolved ref carries no source_channel", tostring(loaded.id),
+            tostring(loaded.master_audio_track_id)))
+        kind, media_track_idx = "mono", source_channel
+    elseif media.audio_channels == 2 then
+        kind, media_track_idx = "stereo", 0
+    elseif media.audio_channels == 1 then
+        kind, media_track_idx = "mono", 0
+    else
+        -- A composite clip reading >2 channels would need the multi-channel
+        -- "Adaptive" VirtualAudioTrackBA form, which the JVE model cannot
+        -- represent (no audio-type concept) — loud-fail rather than silently
+        -- mis-route as mono (FR-019; research D11 "9-channel forms OUT OF SCOPE").
+        assert(false, string.format(
+            "payload_builder: clip %s is an unpinned composite reading %d "
+            .. "channels — only mono/stereo composites are emittable (a "
+            .. "multichannel selection must pin a master AUDIO track)",
+            tostring(loaded.id), media.audio_channels))
+    end
+    return {
+        kind            = kind,
+        media_track_idx = media_track_idx,
+        source_channel  = source_channel,
+    }
+end
+
+local function load_clips_for_track(db, track_id, ctx, seq_fps, track_type)
     -- V13: clips don't carry media_id as a column; the media link is
     -- via the source sequence's media_refs (`models/clip.lua::load`
     -- does the JOIN). Pre-V13 code reading `clips.media_id` would
@@ -96,17 +161,52 @@ local function load_clips_for_track(db, track_id, ctx)
         -- (the master's), which is what the DRT MediaRef and pool item key
         -- on; source_media_id is the physical-file row used only to load
         -- the file's metadata (path/rate/duration/TC) for the pool item.
+        -- Clip source units are model-native: video-master clips carry frames,
+        -- audio-only-master clips (standalone .wav) carry SAMPLES. The Resolve
+        -- timeline clip is frame-domain at the conformed sequence fps (D10), so
+        -- an audio-only-master clip's range is converted samples → frames here,
+        -- at the payload boundary; the fractional remainder preserves sample
+        -- accuracy in <In>. The discriminant is the MEDIA kind (width == 0),
+        -- NOT the track type — an A/V file cut onto an audio track keeps its
+        -- frame-domain source range (it has a video master).
+        local source_media_id = loaded.resolved_media
+                                and loaded.resolved_media.id
+        local source_in, source_out = loaded.source_in, loaded.source_out
+        local m
+        if source_media_id then
+            m = load_media_cached(source_media_id, ctx)
+            if not (m.width and m.width > 0) then
+                assert(type(seq_fps) == "number" and seq_fps > 0,
+                    "payload_builder: seq_fps required to conform audio clip "
+                    .. "source range — clip=" .. tostring(loaded.id))
+                assert(type(m.audio_sample_rate) == "number"
+                    and m.audio_sample_rate > 0,
+                    "payload_builder: audio-only media missing audio_sample_rate "
+                    .. "— id=" .. tostring(source_media_id))
+                source_in  = source_in  * seq_fps / m.audio_sample_rate
+                source_out = source_out * seq_fps / m.audio_sample_rate
+            end
+        end
+        -- gap #3: how an audio clip's channel routes to Resolve (mono/stereo/
+        -- synced + MediaTrackIdx). Video clips carry no routing.
+        local routing = nil
+        if track_type == "AUDIO" then
+            assert(m, string.format(
+                "payload_builder: audio clip %s resolves to no media — cannot "
+                .. "derive routing", tostring(loaded.id)))
+            routing = build_audio_routing(db, loaded, m)
+        end
         rows[#rows + 1] = {
             id              = loaded.id,
             media_uuid      = master_identity(loaded.sequence_id, ctx),
-            source_media_id = loaded.resolved_media
-                                and loaded.resolved_media.id,
-            source_in       = loaded.source_in,
-            source_out      = loaded.source_out,
+            source_media_id = source_media_id,
+            source_in       = source_in,
+            source_out      = source_out,
             sequence_start  = loaded.sequence_start,
             duration        = loaded.duration,
             enabled         = loaded.enabled,
             name            = loaded.name,
+            routing         = routing,
         }
     end
     return rows
@@ -126,7 +226,7 @@ local function media_native_rate(media)
         / media.frame_rate.fps_denominator
 end
 
-local function media_to_payload(media, track_type, file_uuid)
+local function media_to_payload(media, track_type, file_uuid, seq_fps)
     -- drt_writer expects a flat media_ref record. We fold in track_type
     -- so the writer can pick video vs audio media-pool item shape. The
     -- pool item's identity (file_uuid) is the SOURCE-CLIP identity passed
@@ -136,20 +236,62 @@ local function media_to_payload(media, track_type, file_uuid)
     assert(type(file_uuid) == "string" and file_uuid ~= "",
         "payload_builder: media_to_payload requires a source-clip identity "
         .. "(file_uuid) — id=" .. tostring(media.id))
-    -- Media.load exposes duration as `duration` (native frames) and the
-    -- TC origin via `get_start_tc()` (frames at native rate, from
-    -- metadata) — there are no flat duration_frames/start_tc_frame
-    -- fields on the loaded object.
     assert(type(media.name) == "string" and media.name ~= "",
         "payload_builder: media missing name — id=" .. tostring(media.id))
     assert(type(media.duration) == "number" and media.duration > 0,
-        "payload_builder: media duration must be positive native frames — "
-        .. "id=" .. tostring(media.id)
+        "payload_builder: media duration must be positive (video frames / "
+        .. "audio samples) — id=" .. tostring(media.id)
         .. " duration=" .. tostring(media.duration))
-    local tc_origin = media:get_start_tc()
-    assert(type(tc_origin) == "number",
-        "payload_builder: media has no TC origin — TC must always be set "
-        .. "(rule timecode-is-truth) — id=" .. tostring(media.id))
+
+    -- TC origin, native rate, and duration are kind-dependent. Video media
+    -- carry their own frame-domain values: get_start_tc() (frames at the
+    -- file's native fps) and duration in native frames. Audio-only media
+    -- (width == 0) have NO video TC — their origin lives in
+    -- get_audio_start_tc() (samples at the file sample rate), and duration is
+    -- in samples. The Resolve timeline clip is FRAME-domain at the conformed
+    -- (sequence) fps (research D10), so an audio item is emitted with
+    -- native_rate = seq fps and its sample-domain origin/duration converted to
+    -- frames. The sample-domain values feed only the Sm2MpAudioClip TracksBA
+    -- (gap #2), never the timeline clip's <In>/<MediaFrameRate>.
+    local native_rate, start_tc_frame, duration_frames
+    if media.width and media.width > 0 then
+        local tc_origin = media:get_start_tc()
+        assert(type(tc_origin) == "number",
+            "payload_builder: video media has no TC origin — TC must always be "
+            .. "set (rule timecode-is-truth) — id=" .. tostring(media.id))
+        native_rate     = media_native_rate(media)
+        start_tc_frame  = tc_origin
+        duration_frames = media.duration
+    else
+        assert(type(seq_fps) == "number" and seq_fps > 0,
+            "payload_builder: seq_fps required to conform audio-only media to "
+            .. "the timeline fps — id=" .. tostring(media.id))
+        local samples, tc_rate = media:get_audio_start_tc()
+        assert(type(samples) == "number" and type(tc_rate) == "number"
+            and tc_rate > 0,
+            "payload_builder: media has no TC origin (neither video frames nor "
+            .. "audio samples) — TC must always be set (rule timecode-is-truth) "
+            .. "— id=" .. tostring(media.id))
+        assert(type(media.audio_sample_rate) == "number"
+            and media.audio_sample_rate > 0,
+            "payload_builder: audio media missing audio_sample_rate — id="
+            .. tostring(media.id))
+        -- The TC origin (samples) and the clip source range (samples, converted
+        -- in load_clips_for_track) are sample-counts of the SAME file, so they
+        -- must share one denominator. get_audio_start_tc's rate (probe metadata)
+        -- and the audio_sample_rate column are written by independent paths;
+        -- assert they agree rather than silently scaling the two ends to
+        -- different frame bases (which would skew <In> = source_in − start_tc).
+        assert(tc_rate == media.audio_sample_rate, string.format(
+            "payload_builder: audio media TC rate (%s) != audio_sample_rate "
+            .. "column (%s) — sample counts of one file must share a rate — "
+            .. "id=%s", tostring(tc_rate), tostring(media.audio_sample_rate),
+            tostring(media.id)))
+        native_rate     = seq_fps
+        start_tc_frame  = samples * seq_fps / media.audio_sample_rate
+        duration_frames = media.duration * seq_fps / media.audio_sample_rate
+    end
+
     return {
         file_uuid        = file_uuid,
         name             = media.name,
@@ -157,9 +299,9 @@ local function media_to_payload(media, track_type, file_uuid)
         -- names this field file_path; build_clip_element and the
         -- media-pool item emitters read media.file_path.
         file_path        = media:get_file_path(),
-        native_rate      = media_native_rate(media),
-        duration_frames  = media.duration,
-        start_tc_frame   = tc_origin,
+        native_rate      = native_rate,
+        duration_frames  = duration_frames,
+        start_tc_frame   = start_tc_frame,
         track_type       = track_type,
     }
 end
@@ -208,9 +350,11 @@ function M.build(db, project_id, sequence_id)
         },
     }
     -- One pool item per SOURCE CLIP (master identity), deduped across the
-    -- whole sequence; ctx caches the per-master identity lookup.
+    -- whole sequence; ctx caches the per-master identity lookup and loaded
+    -- media. seq_fps conforms audio-only media to the timeline (D10).
     local media_seen = {}
-    local ctx = { identity_by_master = {} }
+    local ctx = { identity_by_master = {}, media_by_id = {} }
+    local seq_fps = fps_number(seq)
 
     -- schema CHECK(track_type IN ('VIDEO','AUDIO')) so query is uppercase;
     -- drt_writer's wire contract uses lowercase 'video'/'audio', so we
@@ -235,7 +379,7 @@ function M.build(db, project_id, sequence_id)
         local wire_type = (t.track_type == "VIDEO") and "video" or "audio"
         local track_payload = {
             type  = wire_type,
-            clips = load_clips_for_track(db, t.id, ctx),
+            clips = load_clips_for_track(db, t.id, ctx, seq_fps, t.track_type),
         }
         payload.sequence.tracks[#payload.sequence.tracks+1] = track_payload
 
@@ -256,13 +400,9 @@ function M.build(db, project_id, sequence_id)
 
             if not media_seen[identity] then
                 media_seen[identity] = true
-                local m = Media.load(clip_row.source_media_id)
-                assert(m, string.format(
-                    "payload_builder: clip %s references missing "
-                    .. "media %s", tostring(clip_row.id),
-                    tostring(clip_row.source_media_id)))
+                local m = load_media_cached(clip_row.source_media_id, ctx)
                 payload.media_refs[#payload.media_refs+1] =
-                    media_to_payload(m, wire_type, identity)
+                    media_to_payload(m, wire_type, identity, seq_fps)
             end
         end
     end

@@ -267,6 +267,7 @@ local decode_bt_audio_duration = drp_binary.decode_bt_audio_duration
 local decode_effect_filters_volume_db = drp_binary.decode_effect_filters_volume_db
 local decode_media_timemap = drp_binary.decode_media_timemap
 local decode_bt_clip_path = drp_binary.decode_bt_clip_path
+local decode_audio_channel_select = drp_binary.decode_audio_channel_select
 local eval_curve = drp_binary.eval_curve
 
 
@@ -1742,6 +1743,13 @@ local function parse_resolve_tracks(seq_elem, opts)
 
             local linked_item_sync = extract_linked_item_sync(clip_elem, clip_name)
 
+            -- Which file channel this audio clip reads (gap #3 / FR-007). Resolve
+            -- stores it in the clip's VirtualAudioTrackBA; nil when the clip plays
+            -- the whole file (mono/stereo composite) or for video clips.
+            local vatba_elem = find_direct_child(clip_elem, "VirtualAudioTrackBA")
+            local source_channel = vatba_elem
+                and decode_audio_channel_select(get_text(vatba_elem)) or nil
+
             -- The clip's own Sm2Ti DbId. Real Resolve exports carry one on every
             -- timeline clip; per spec 023 FR-011b the importer adopts it as the
             -- JVE clip.id. Rule 2.13: no silent minting. If Resolve didn't
@@ -1775,6 +1783,7 @@ local function parse_resolve_tracks(seq_elem, opts)
                 media_start_time = media_start_time,  -- seconds since midnight (file TC origin)
                 original_clip = extract_original_clip(clip_elem),  -- nil unless substituted
                 linked_item_sync = linked_item_sync,  -- V↔A link-group key (nil = unlinked)
+                source_channel = source_channel,  -- 0-based file channel (gap #3); nil = whole-file/composite/video
             }
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
             if clip.duration <= 0 then

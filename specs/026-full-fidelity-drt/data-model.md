@@ -52,7 +52,11 @@ never a borrowed/default value (1.14/2.13).
 | `track_type = "audio"` | (existing) | — |
 
 Rule: has **no** video characteristics; `media_to_payload` MUST NOT call `get_start_tc()`
-for audio media (research D2). Drives `Sm2MpAudioClip` (research D4).
+for audio media (research D2). Drives `Sm2MpAudioClip` (research D4). The sample-domain fields
+(`sample_rate`, `duration_samples`, `audio_start_tc`) feed the `Sm2MpAudioClip` `TracksBA` only.
+**The TIMELINE clip is frame-domain** — `media_to_payload` derives `native_rate` = **seq fps** and
+`start_tc_frame` = `audio_start_tc.samples ÷ sample_rate × seq_fps`, so `<MediaFrameRate>` = seq fps
+and `<MediaStartTime>` = correct seconds (research D10, supersedes any "sample-unit In" reading).
 
 ---
 
@@ -60,7 +64,7 @@ for audio media (research D2). Drives `Sm2MpAudioClip` (research D4).
 | Field | Source | FR |
 |-------|--------|----|
 | `id`, `media_uuid`, `source_media_id`, `sequence_start`, `duration`, `enabled`, `name` | (existing) | — |
-| `source_in`, `source_out` | (existing) — video: whole frames; **audio: sample-accurate fractional (NEW)** | FR-003 |
+| `source_in`, `source_out` | (existing) — video: whole frames; **audio: model samples → FRAMES at seq fps for the timeline `<In>`; sub-frame fraction preserves sample accuracy (research D10, NOT raw sample units)** | FR-003 |
 | **`routing`** (→ Routing descriptor) | (NEW) | FR-007/008/009 |
 | **`synced_linkage`** (→ Synced linkage, video clips with synced audio) | (NEW) | FR-013/014 |
 | **`markers[]`** (→ Clip marker) | `clip_marker.find_by_clip(id)` (NEW) | FR-015 |
@@ -70,15 +74,22 @@ for audio media (research D2). Drives `Sm2MpAudioClip` (research D4).
 ## Routing descriptor (NEW entity)
 | Field | Source (**derived** from persisted state — no stored "routing" field) | FR |
 |-------|------------------------------------------------------------------------|----|
-| `kind` = `mono`\|`stereo`\|`synced` | `media.audio_channels` (mono vs stereo) + link-group membership (`clip_link.is_linked` → synced) | FR-007 |
-| `media_track_idx` | §F discriminator from the **media relationship**: embedded (audio is a video master's stream, idx 0) / linked (audio-role of a `ln` link group) / standalone (own audio master) | FR-008/009 |
-| `source_channel` | `clip.source_channel` / `media_refs.source_channel` (which file channel this ref reads) | FR-008 |
+| `kind` = `mono`\|`stereo`\|`synced` | `clip_link.is_linked` → synced; else the channel-selection pin `clips.master_audio_track_id` (non-null → mono, single channel) vs `media.audio_channels == 2` composite (→ stereo); else mono | FR-007 |
+| `media_track_idx` | §F discriminator, derived: synced → **2**; pinned single channel (`master_audio_track_id` non-null) → **`source_channel`** (the pinned master AUDIO track's `media_refs.source_channel`); composite/whole-file → **0** | FR-008/009 |
+| `source_channel` | resolved from the pin: `clips.master_audio_track_id` → that master AUDIO track's `media_refs.source_channel` (0-based file channel). Null when no channel pin (composite). | FR-008 |
 | `virtual_audio_track` | §F `VirtualAudioTrackBA` form for the relationship | FR-009 |
 
-Rule: routing is **derived** at export from `clip.source_channel` + the media
-relationship + link-group membership (`models/clip_link.lua`) — there is no stored
-`clip.routing` field. Replaces today's hard-coded mono→A1 (research D5). A routing kind
-with no fixture-matched form → loud fail (FR-019), not a silent mono fallback.
+Rule: channel selection is the **`clips.master_audio_track_id` pin** — a timeline audio
+clip pins to a per-channel master AUDIO track, and `source_channel` is read back through
+that track's `MediaRef` (`Sequence.find_master_audio_track_for_channel` resolves it during
+import; `Clip.load`'s pin-aware JOIN resolves it at load). The DRP importer decodes the
+per-clip `VirtualAudioTrackBA` (`ChannelsBA`, research D11) to set the pin: embedded/
+standalone mono block (byte 9 == 0x00) → 1-based channel at byte 12 → `source_channel`;
+synced (byte 9 == 0x20) → no pin (deferred to gap #5 linkage); stereo/pair block → no pin
+(composite). Routing is then **derived** at export from the pin + `media.audio_channels` +
+link-group membership (`models/clip_link.lua`) — there is no stored `clip.routing` field.
+Replaces today's hard-coded mono→A1 (research D5). A routing kind with no fixture-matched
+form → loud fail (FR-019), not a silent mono fallback.
 
 ---
 

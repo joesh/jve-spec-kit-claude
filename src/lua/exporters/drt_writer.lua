@@ -298,12 +298,6 @@ local function build_in_element(in_offset)
     return text_elem("In", tostring(in_offset))
 end
 
--- Restored: still referenced by audio clip path until #14 lands.
-local VIRTUAL_AUDIO_TRACK_BA_MONO_A1 =
-    "000000010000000200000014004300680061006e006e0065006c0073004200" ..
-    "410000000c000000000c000000020000000100004001000000120041007500" ..
-    "640069006f0054007900700065000000020000000001"
-
 -- MediaTimemapBA — un-retimed timing curve for the clip.
 --
 -- A Resolve-authored **.drt** (retime-test.drt) encodes a forward clip's
@@ -602,9 +596,19 @@ local function build_clip_element(clip, media, track_type, state, seq_fps)
             }), {DbId = thumb_dbid}))
         parts[#parts + 1] = text_elem("ThumbnailDirtyFlag", "true")
     else
+        -- Per-clip channel/routing, payload-driven (gap #3, FR-007/008/009).
+        -- The producer (payload_builder.build_audio_routing) attaches a routing
+        -- descriptor to every audio clip; the writer synthesizes the wire bytes.
+        assert(type(clip.routing) == "table",
+            "drt_writer.build_clip_element: audio clip " .. tostring(clip.id)
+            .. " has no routing descriptor (gap #3 producer must run)")
+        assert(type(clip.routing.media_track_idx) == "number",
+            "drt_writer.build_clip_element: audio clip " .. tostring(clip.id)
+            .. " routing.media_track_idx missing/non-number")
         parts[#parts + 1] = text_elem("VirtualAudioTrackBA",
-            VIRTUAL_AUDIO_TRACK_BA_MONO_A1)
-        parts[#parts + 1] = text_elem("MediaTrackIdx", "0")
+            enc.encode_virtual_audio_track_ba(clip.routing))
+        parts[#parts + 1] = text_elem("MediaTrackIdx",
+            tostring(clip.routing.media_track_idx))
     end
 
     return elem(tag, table.concat(parts), {DbId = clip.id})

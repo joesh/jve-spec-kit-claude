@@ -556,6 +556,49 @@ function M.decode_effect_filters_volume_db(hex_str)
     return db_val
 end
 
+--- Decode which SOURCE CHANNEL a timeline audio clip reads, from its
+--- VirtualAudioTrackBA blob (the per-clip channel/routing descriptor).
+--
+-- The blob is a Fusion Fields TLV with two fields — `ChannelsBA` (the
+-- channel-selection sub-payload) and `AudioType`. `ChannelsBA`'s payload length
+-- discriminates the routing (research D11 byte map):
+--   • 12 bytes (block 0x0c) = ONE channel selected → payload byte 12 is the
+--     1-based file channel index (so source_channel = idx - 1).
+--   • 16 bytes (block 0x10) = the whole stereo PAIR → no single channel; the
+--     clip plays the file composite, so this returns nil (the clip stays
+--     unpinned / composite, mono-vs-stereo derived later from media metadata).
+-- Within the 12-byte mono payload, byte 9 is the routing type: 0x00 =
+-- embedded/standalone (a channel of the clip's own file), 0x20 = linked/synced
+-- (the channel comes from a sync source attached to a DIFFERENT master). Only
+-- embedded/standalone is decoded here: a synced master holds both camera and
+-- sync tracks at overlapping channel numbers, so its V↔A linkage (gap #5),
+-- not the bare channel index, decides the slot. Synced ⇒ nil here.
+-- Returns nil for an absent/unrecognized blob: the caller treats nil as "no
+-- per-channel selection", never as channel 0.
+-- @param hex_str string|nil: hex-encoded VirtualAudioTrackBA content
+-- @return integer|nil: 0-based source channel for an embedded/standalone
+--                      single-channel clip, else nil
+function M.decode_audio_channel_select(hex_str)
+    if not hex_str or hex_str == "" then return nil end
+    local bytes = M.hex_to_bytes(hex_str)
+    if not bytes or #bytes < 16 then return nil end
+
+    -- Header: [BE32 version=1][BE32 field_count]; fields start at offset 8.
+    local field_count = M.read_be32(bytes, 5)  -- offset 4 (0-idx) = pos 5 (1-idx)
+    if not field_count or field_count < 1 or field_count > 8 then return nil end
+    local _, raw_payloads = M.decode_tlv_fields(bytes, 8, field_count)
+    local payload = raw_payloads and raw_payloads["ChannelsBA"]
+    if not payload then return nil end
+
+    if #payload ~= 12 then return nil end          -- stereo/pair → composite
+    if payload:byte(9) ~= 0x00 then return nil end  -- linked/synced → gap #5
+    local channel_1based = payload:byte(12)
+    assert(channel_1based and channel_1based >= 1, string.format(
+        "decode_audio_channel_select: mono ChannelsBA channel index %s is "
+        .. "invalid (blob corrupt?)", tostring(channel_1based)))
+    return channel_1based - 1
+end
+
 -- ---------------------------------------------------------------------------
 -- KeyframesBA parsing (retime curves)
 -- ---------------------------------------------------------------------------

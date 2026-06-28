@@ -215,6 +215,95 @@ function M.encode_tlv_fields(list)
 end
 
 -- ---------------------------------------------------------------------------
+-- VirtualAudioTrackBA — per-audio-clip channel/routing descriptor.
+--
+-- A Fusion Fields blob with two fields (research D11, byte-for-byte from
+-- resolve_authored_full.drp + anamnesis-gold-timeline.drp SeqContainer XML):
+--   • ChannelsBA (TLV payload, type 0x000c): an inner block whose size is
+--       8 + 4·nchannels bytes, carrying one 4-byte descriptor per channel:
+--       [routing-type][00][40][1-based file channel].
+--       routing-type 0x00 = embedded/standalone, 0x20 = synced/linked.
+--   • AudioType  (TLV int, type 0x0002): 1 = mono, 0 = stereo.
+--
+-- The outer framing (version=1, field-count=2, the field name/type headers,
+-- and the payload length prefix) is fixed; only the per-channel descriptors
+-- and the AudioType code vary. Verified byte-equal to every in-scope fixture
+-- form (mono ch-N embedded/standalone, stereo composite). The 9-channel
+-- "Adaptive" forms are unreachable from the JVE model (no audio-type concept)
+-- and the synced form is owned by gap #5 — both loud-fail here, never a guess
+-- (FR-019).
+-- ---------------------------------------------------------------------------
+
+-- name field = BE32 byte-length of the UTF-16BE name + the name bytes (all hex).
+local VATBA_CHANNELS_NAME = string.format("%08x", #utf16be("ChannelsBA"))
+    .. to_hex(utf16be("ChannelsBA"))
+local VATBA_AUDIOTYPE_NAME = string.format("%08x", #utf16be("AudioType"))
+    .. to_hex(utf16be("AudioType"))
+
+local function le32_hex(n)
+    return string.format("%02x%02x%02x%02x", n % 256, math.floor(n / 256) % 256,
+        math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+end
+
+--- @param routing table: { kind="mono"|"stereo"|"synced", source_channel=int? }
+---   mono   → source_channel (0-based file channel) required.
+---   stereo → composite, reads channels 1+2.
+---   synced → owned by gap #5 (virtual-track slot lives in the video
+---            FieldsBlob); loud-fail until that lands.
+--- @return string: hex-encoded VirtualAudioTrackBA blob
+function M.encode_virtual_audio_track_ba(routing)
+    assert(type(routing) == "table",
+        "encode_virtual_audio_track_ba: routing descriptor required")
+    assert(routing.kind ~= "synced",
+        "encode_virtual_audio_track_ba: synced routing is owned by gap #5 "
+        .. "(virtual-track slot in the video FieldsBlob) — not emittable yet")
+
+    -- Per-channel descriptors (routing-type 0x00 = embedded/standalone) and
+    -- the AudioType code, by kind.
+    local channels, audio_type
+    if routing.kind == "mono" then
+        assert(type(routing.source_channel) == "number"
+            and routing.source_channel >= 0,
+            "encode_virtual_audio_track_ba: mono routing needs a 0-based "
+            .. "source_channel, got " .. tostring(routing.source_channel))
+        channels   = { routing.source_channel + 1 }   -- → 1-based file channel
+        audio_type = 1
+    elseif routing.kind == "stereo" then
+        channels   = { 1, 2 }                          -- composite L/R
+        audio_type = 0
+    else
+        error("encode_virtual_audio_track_ba: unknown routing.kind "
+            .. tostring(routing.kind))
+    end
+
+    local nch = #channels
+    local descriptors = {}
+    for _, ch in ipairs(channels) do
+        assert(ch >= 1 and ch <= 255,
+            "encode_virtual_audio_track_ba: channel out of byte range " .. ch)
+        -- [routing-type=0x00][0x00][0x40][1-based channel]
+        descriptors[#descriptors + 1] = string.format("0000%02x%02x", 0x40, ch)
+    end
+
+    -- ChannelsBA TLV payload: 0x000c type, length prefix = block size, then the
+    -- block (8 header bytes + 4·nch descriptor bytes).
+    local block_size = 8 + 4 * nch
+    local channels_field = VATBA_CHANNELS_NAME
+        .. "0000" .. "000c"                             -- be16(0) + be16(type 0x000c)
+        .. "00000000" .. le32_hex(block_size)           -- payload framing + block size
+        .. "02000000" .. string.format("%02x", nch)     -- block tag + channel count
+        .. table.concat(descriptors)
+
+    -- AudioType TLV int field: 0x0002 type, value = audio_type code.
+    local audio_type_field = VATBA_AUDIOTYPE_NAME
+        .. "0000" .. "0002"                             -- be16(0) + be16(type 0x0002)
+        .. "00000000" .. string.format("%02x", audio_type)
+
+    return "00000001" .. "00000002"                     -- version=1, field-count=2
+        .. channels_field .. audio_type_field
+end
+
+-- ---------------------------------------------------------------------------
 -- BtVideoInfo Time blob — inverse of decode_bt_video_time
 -- Header: [BE32 version=1][BE32 field_count]; then TLV. field_count ∈ [4,8].
 -- ---------------------------------------------------------------------------
