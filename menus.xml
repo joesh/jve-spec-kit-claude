@@ -28,6 +28,8 @@
     <item name="Project Settings..." command="ProjectSettings"/>
     <separator/>
     <item name="Quit" command="Quit"/>
+    <separator/>
+    <item name="Keyboard Shortcuts..." command="ShowKeyboardCustomization"/>
   </menu>
 
   <!-- Edit Menu -->
