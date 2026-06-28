@@ -111,6 +111,28 @@ local A005_TEMPLATE_MP_FOLDER_BACKREF   = "fe7a26e6-8c49-49a6-be20-f21689c9a41f"
 local A005_TEMPLATE_UNIQUE_MP_ITEM_ID   = "297f29a9-65e8-499a-bcec-1d42da0ec926"
 local A005_TEMPLATE_NAME                = "A005_C052_0925BL_001.mp4"
 
+-- Reference identifiers in full_reference_mp_audio_clip.xml (the test_click
+-- standalone Sm2MpAudioClip from resolve_authored_full.drp). Swapped per
+-- payload by build_media_pool_audio_item, mirroring the A005 video item.
+local AUDIO_TEMPLATE_DBID               = "50b4735c-1053-4964-99cb-142c85df11c9"
+local AUDIO_TEMPLATE_MP_FOLDER_BACKREF  = "d0bfec57-7a39-4c33-91eb-67bbc4db5cc0"
+local AUDIO_TEMPLATE_UNIQUE_MP_ITEM_ID  = "4571313e-a11a-4100-a3cb-80aa2fb2ee37"
+local AUDIO_TEMPLATE_NAME               = "test_click_48k_stereo.wav"
+local AUDIO_TEMPLATE_BT_AUDIO_INFO_DBID = "b019fbcd-0619-4ce1-badf-f99eaba53431"
+
+-- MP-item <VirtualAudioTracksBA> is a per-channel-count CONSTANT, not media-
+-- derived (research D4a + reference_026_mp_item_vatba_per_channel_constant).
+-- The reference template carries the STEREO form inline; the MONO form below
+-- is Resolve's standalone-mono output map, byte-identical across all 12 mono
+-- WAVs in anamnesis-gold-timeline.drp. Any other channel count has no fixture
+-- and loud-fails (FR-019) — never synthesized.
+local MP_VIRTUAL_AUDIO_TRACKS_BA_MONO =
+    "00000001000000010000000200300000000c0000000074000000010000000200" ..
+    "000014004300680061006e006e0065006c0073004200410000000c000000002c" ..
+    "0000000200000009000040010000800140000000400000004000000040000000" ..
+    "400000004000000040000000000000120041007500640069006f005400790070" ..
+    "0065000000020000000109"
+
 -- ─── UUID minting ───────────────────────────────────────────────────────────
 --
 -- Counter-based + per-export entropy: the counter is seeded from a hash of
@@ -863,6 +885,103 @@ local function build_media_pool_video_item(media, dbids, state)
     return "  <Element>\n" .. tpl .. "  </Element>\n"
 end
 
+-- Standalone-audio media-pool item (gap #2 / T017, FR-004/005/006/019).
+-- Authors an Sm2MpAudioClip from the test_click reference template, swapping
+-- the file-specific fields from the audio media: identity DbIds + Name, the
+-- per-channel-count VirtualAudioTracksBA constant, the BtAudioInfo TracksBA
+-- (sample-domain shape), and the Clip blob (the path/date/mtime Resolve binds
+-- the file by). Only .wav (Linear PCM) and mono/stereo are attested by a
+-- Resolve fixture; anything else loud-fails rather than author a guessed item.
+local function build_media_pool_audio_item(media, dbids, state)
+    assert(type(media.file_uuid) == "string" and media.file_uuid ~= "",
+        "drt_writer.build_media_pool_audio_item: media.file_uuid required")
+    assert(type(media.file_path) == "string" and media.file_path ~= "",
+        "drt_writer.build_media_pool_audio_item: media.file_path required")
+    local ext = media.file_path:match("%.([^.]+)$")
+    assert(ext == "wav", string.format(
+        "drt_writer.build_media_pool_audio_item: only .wav standalone audio is "
+        .. "supported (the only attested Sm2MpAudioClip fixture is Linear PCM); "
+        .. "got %q for %s (FR-019 — arbitrary audio codecs are gap #4)",
+        tostring(ext), media.file_path))
+    assert(type(media.sample_rate) == "number" and media.sample_rate > 0,
+        "drt_writer.build_media_pool_audio_item: media.sample_rate required (positive)")
+    assert(type(media.num_channels) == "number" and media.num_channels > 0,
+        "drt_writer.build_media_pool_audio_item: media.num_channels required (positive)")
+    assert(type(media.duration_samples) == "number" and media.duration_samples > 0,
+        "drt_writer.build_media_pool_audio_item: media.duration_samples required (positive)")
+    assert(type(media.file_mtime_us) == "number", string.format(
+        "drt_writer.build_media_pool_audio_item: media.file_mtime_us required "
+        .. "(the Clip blob's date + f13 derive from it) — missing for %s",
+        media.file_path))
+
+    local name = basename(media.file_path)
+    local tpl = load_template("full_reference_mp_audio_clip.xml")
+    tpl = plain_gsub_required(tpl, AUDIO_TEMPLATE_DBID, media.file_uuid)
+    tpl = plain_gsub_required(tpl, AUDIO_TEMPLATE_MP_FOLDER_BACKREF, dbids.mp_folder)
+    tpl = plain_gsub_required(tpl,
+        AUDIO_TEMPLATE_UNIQUE_MP_ITEM_ID, fresh_uuid(0xb0, state))
+    tpl = plain_gsub_required(tpl,
+        AUDIO_TEMPLATE_BT_AUDIO_INFO_DBID, fresh_uuid(0xb1, state))
+    if name ~= AUDIO_TEMPLATE_NAME then
+        tpl = plain_gsub_required(tpl, AUDIO_TEMPLATE_NAME, name)
+    end
+
+    -- VirtualAudioTracksBA = the channel-count-selected constant. Stereo is the
+    -- template's own value (leave it); mono is replaced with the anamnesis-gold
+    -- constant; any other count has no fixture → loud-fail (no invented bytes).
+    if media.num_channels == 1 then
+        local n
+        tpl, n = tpl:gsub(
+            "<VirtualAudioTracksBA>[0-9a-f]+</VirtualAudioTracksBA>",
+            "<VirtualAudioTracksBA>" .. MP_VIRTUAL_AUDIO_TRACKS_BA_MONO
+                .. "</VirtualAudioTracksBA>", 1)
+        assert(n == 1, "drt_writer.build_media_pool_audio_item: failed to "
+            .. "substitute mono VirtualAudioTracksBA — template changed?")
+    else
+        assert(media.num_channels == 2, string.format(
+            "drt_writer.build_media_pool_audio_item: only mono/stereo standalone "
+            .. "audio is attested by a Resolve fixture; got %d channels for %s "
+            .. "(FR-019 — VirtualAudioTracksBA is not synthesized)",
+            media.num_channels, media.file_path))
+        -- num_channels == 2: the template VirtualAudioTracksBA is the stereo form.
+    end
+
+    -- TracksBA — substitute the media's sample-domain shape into the reference.
+    local ref_tracks = assert(tpl:match("<TracksBA>([0-9a-f]+)</TracksBA>"),
+        "drt_writer.build_media_pool_audio_item: reference TracksBA not found")
+    local new_tracks = enc.substitute_audio_tracks_ba(ref_tracks, {
+        sample_rate      = media.sample_rate,
+        num_channels     = media.num_channels,
+        duration_samples = media.duration_samples,
+    })
+    tpl = plain_gsub_required(tpl,
+        "<TracksBA>" .. ref_tracks .. "</TracksBA>",
+        "<TracksBA>" .. new_tracks .. "</TracksBA>")
+
+    -- BtAudioInfo Clip blob — the directory/filename/date/mtime Resolve binds
+    -- the file by (same encoder as the video item's embedded-audio blob; audio
+    -- shape = no clip_name/clip_uuid → audio media-type tail). Codec "Linear
+    -- PCM" is the .wav codec asserted above; arbitrary codecs land in gap #4.
+    local directory = media.file_path:match("^(.*)/[^/]+$")
+    assert(directory and directory ~= "", string.format(
+        "drt_writer.build_media_pool_audio_item: media.file_path must be "
+        .. "absolute with a directory component, got %q", media.file_path))
+    local clip_blob = enc.encode_bt_clip_blob({
+        directory = directory,
+        filename  = name,
+        date      = format_clip_date(media.file_mtime_us),
+        mtime_us  = media.file_mtime_us,
+        codec     = "Linear PCM",
+    })
+    local ref_clip = assert(tpl:match("<Clip>([0-9a-f]+)</Clip>"),
+        "drt_writer.build_media_pool_audio_item: reference Clip not found")
+    tpl = plain_gsub_required(tpl,
+        "<Clip>" .. ref_clip .. "</Clip>",
+        "<Clip>" .. clip_blob .. "</Clip>")
+
+    return "  <Element>\n" .. tpl .. "  </Element>\n"
+end
+
 -- Walk every clip on every track of a sequence and return its overall
 -- timeline-frame extent: earliest sequence_start and latest end (= start +
 -- duration). Drives MediaExtents — see anamnesis-gold dissection
@@ -1045,15 +1164,7 @@ local function build_mp_folder_xml(template, payload, seq, dbids, state)
         if m.kind == "video" then
             items[#items + 1] = build_media_pool_video_item(m, dbids, state)
         else
-            -- Standalone-audio pool item (Sm2MpAudioClip) is gap #2 / T017 — the
-            -- producer fields (sample_rate/num_channels/duration_samples) are
-            -- ready and substitute_audio_tracks_ba is built, but the item
-            -- assembler is not yet wired. Loud-fail here (FR-019) rather than
-            -- routing a .wav through the video builder.
-            assert(false, string.format(
-                "drt_writer.build_mp_folder_xml: standalone-audio media-pool item "
-                .. "not yet implemented (gap #2 / T017) — cannot author %q",
-                tostring(m.file_path)))
+            items[#items + 1] = build_media_pool_audio_item(m, dbids, state)
         end
     end
     template = plain_gsub_required(template,
@@ -1114,12 +1225,20 @@ function M.author_a005_compatible(out_path, payload)
         "drt_writer.author: out_path required")
     -- ...
     for _, m in ipairs(payload.media_refs) do
-        -- Rule 2.13 quarantine gate (review item #23)
-        assert(math.abs(m.native_rate - 24000/1001) < 1e-4,
-            "drt_writer: author_a005_compatible requires 23.976fps media")
-        local ext = m.file_path:match("%.([^%.]+)$")
-        assert(ext == "mp4" or ext == "mov",
-            "drt_writer: author_a005_compatible requires mp4/mov media")
+        assert(m.kind == "video" or m.kind == "audio", string.format(
+            "drt_writer: media_ref %s has no/unknown kind %q",
+            tostring(m.file_uuid), tostring(m.kind)))
+        -- Rule 2.13 quarantine gate (review item #23). VIDEO items still borrow
+        -- A005's descriptors (gap #4 / T020–T021 pending), so video media stays
+        -- restricted to 23.976fps mp4/mov. AUDIO items are general (gap #2 /
+        -- T017): .wav + channel count are validated by build_media_pool_audio_item.
+        if m.kind == "video" then
+            assert(math.abs(m.native_rate - 24000/1001) < 1e-4,
+                "drt_writer: author_a005_compatible requires 23.976fps video media")
+            local ext = m.file_path:match("%.([^%.]+)$")
+            assert(ext == "mp4" or ext == "mov",
+                "drt_writer: author_a005_compatible requires mp4/mov video media")
+        end
     end
     assert(type(payload) == "table",
         "drt_writer.author: payload table required")

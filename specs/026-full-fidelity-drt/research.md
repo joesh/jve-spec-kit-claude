@@ -135,6 +135,14 @@ audio). Fabricate sub-frame video precision (invents data JVE doesn't have).
 
 ## D4 — Standalone audio media-pool item from §K2 + fixture (gap #2)
 
+**LANDED 2026-06-27 (T017).** `drt_writer.build_media_pool_audio_item` ships per this decision;
+dispatch wired; `author_a005_compatible` quarantine gate made kind-aware (video still 23.976
+mp4/mov, audio general). `VirtualAudioTracksBA` is emitted as a per-channel-count CONSTANT (NOT
+the verbatim-stereo-only borrow the interim note below proposed) — mono + stereo both
+fixture-attested, see D4a addendum + [[reference_026_mp_item_vatba_per_channel_constant]]; any
+other channel count loud-fails. StartTime still borrowed-0 (D4b). Test
+`test_drt_audio_media_pool_item.lua`.
+
 **Decision.** Add `build_media_pool_audio_item` authoring an `Sm2MpAudioClip` whose
 child order + fixed bytes derive from `resolve_authored_full.drp` (the real
 Sm2MpAudioClip) per §K2's observed schema; file-specific fields (path, sample rate,

@@ -187,12 +187,20 @@ byte-equal to fixture w/ `test_drt_audio_tracks_ba.lua`). Builder/dispatch/produ
   present); `kind="audio"` currently **loud-fails** naming gap #2/T017 (honest "not yet
   implemented" at the right layer — no longer routes a .wav through the video builder's
   .mp4/.mov reject). Dedup by source-clip identity is the existing media_refs identity (D4).
-- [ ] **T017** `drt_writer.lua` (after T016): add `build_media_pool_audio_item` →
-  `Sm2MpAudioClip` from the reference XML (identity gsub + `substitute_audio_tracks_ba` for
-  rate/channels/duration + `encode_bt_clip_blob` for the path); replace the dispatch's
-  audio loud-fail with it; accept `.wav`; **loud-fail** unhandled audio type naming the file
-  (FR-019).
-  → GREEN T003. **Clip-blob tail RESOLVED 2026-06-27** (was flagged as opaque residue): it
+- [X] **T017** DONE 2026-06-27. `drt_writer.build_media_pool_audio_item` authors the
+  `Sm2MpAudioClip` from `full_reference_mp_audio_clip.xml` (identity-DbId/Name gsub +
+  `substitute_audio_tracks_ba` for rate/channels/duration + `encode_bt_clip_blob` audio-shape
+  for the path/date/mtime); dispatch loud-fail replaced; the `author_a005_compatible`
+  quarantine gate is now **kind-aware** (video still 23.976 mp4/mov; audio routed to the new
+  builder). `.wav` only; **mono + stereo** `VirtualAudioTracksBA` are emitted as the two
+  fixture-attested per-channel-count CONSTANTS (mono = anamnesis-gold ×12 identical, stereo =
+  template); any other ext / channel count **loud-fails** (FR-019 — no invented bytes). Test
+  `test_drt_audio_media_pool_item.lua` (RED→GREEN): byte-equal Clip + TracksBA vs the
+  test_click fixture, child order, mono/stereo VATBA, `.wav`/6-ch loud-fail. **Deferred:**
+  TracksBA `StartTime` stays the borrowed 0 — producer doesn't emit sample-domain
+  `audio_start_tc` yet ([[todo_026_audio_tracksba_starttime]]); fine for zero-origin fixtures.
+  See [[reference_026_mp_item_vatba_per_channel_constant]].
+  **Clip-blob tail RESOLVED 2026-06-27** (was flagged as opaque residue): it
   is the file mtime (f13 µs) + media-type markers (f15/f18). Implemented option (b) — schema
   V19 `media.file_mtime_us`, importer reads it from the Clip blob, `encode_bt_clip_blob`
   re-emits it; byte-equal to the fixture audio Clip payload. Also fixed the video item's
