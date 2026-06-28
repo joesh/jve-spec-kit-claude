@@ -26,7 +26,11 @@ local CaptureManager = {
     max_screenshot_bytes = MAX_SCREENSHOT_BYTES,
     max_time_ms     = MAX_CAPTURE_TIME_MS,
     screenshot_interval_ms = SCREENSHOT_INTERVAL_MS,
-    capture_enabled = true,  -- User preference
+    -- Default OFF. telemetry.init flips this to true only after consent
+    -- is accepted + /register succeeds (pass 2 #1 HIGH: prior default-on
+    -- meant the ring buffer recorded during the consent dialog itself,
+    -- with no install_id yet but real user gestures captured).
+    capture_enabled = false,
     screenshot_bytes_total = 0,
 
     -- Ring buffers
@@ -41,13 +45,12 @@ local CaptureManager = {
     next_command_id = 1,
 }
 
--- Initialize capture manager. Feature 027 T009 swaps os.clock() for
--- qt_monotonic_s() — os.clock() is process CPU time, not wall time, so
--- the 5-minute trim never fired on a mostly-idle JVE (the user reads
--- "last 5 minutes" at F12; we'd ship 12 hours).
+-- One-shot session init. Idempotent: layout.lua's open_project hook
+-- calls bug_reporter.init() on every project open, but we MUST NOT
+-- wipe the in-session ring buffers mid-life (pass 2 #25). Subsequent
+-- calls are no-ops; explicit clear_buffers is the way to drop state.
 function CaptureManager:init()
-    -- Global lookup each call so tests can stub qt_monotonic_s for
-    -- deterministic wall-time injection (T003 monkey-patches _G.qt_monotonic_s).
+    if self.session_start_time ~= nil then return end
     self.session_start_time = qt_monotonic_s()
     self.gesture_ring_buffer = {}
     self.command_ring_buffer = {}
@@ -56,7 +59,6 @@ function CaptureManager:init()
     self.screenshot_bytes_total = 0
     self.next_gesture_id = 1
     self.next_command_id = 1
-
     log.event("Capture manager initialized (enabled=%s)", tostring(self.capture_enabled))
 end
 

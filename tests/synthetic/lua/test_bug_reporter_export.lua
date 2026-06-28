@@ -51,6 +51,10 @@ print("=== Testing Bug Reporter Export (Phase 2) ===\n")
 -- Test 1: Initialize and populate capture_manager
 print("Test 1: Populate capture data")
 capture_manager:init()
+-- After the consent-gate rewrite, capture_enabled defaults to false
+-- (telemetry flips it true post-consent in production). Tests that
+-- populate ring buffers directly must opt in explicitly.
+capture_manager:set_enabled(true)
 
 -- Add sample gestures
 for i = 1, 10 do

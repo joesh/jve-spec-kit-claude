@@ -8,18 +8,16 @@ local BugReporter = {
     gesture_logger_installed = false
 }
 
--- Initialize the bug reporter system
+-- Initialize the bug reporter system. Idempotent — safe to call from
+-- every project_open. Creates the timer + installs the gesture logger
+-- but leaves capture DISABLED. telemetry.init flips capture_enabled
+-- after consent is verified; capture pipeline ONLY records once that
+-- happens (pass 2 #1 HIGH).
 function BugReporter.init()
-    -- Initialize capture manager
     capture_manager:init()
-
-    -- Install gesture logger
     BugReporter.install_gesture_logger()
-
-    -- Start screenshot timer
-    BugReporter.start_screenshot_timer()
-
-    log.event("Initialized successfully")
+    BugReporter.create_screenshot_timer()
+    log.event("Bug reporter initialized (capture gated on telemetry consent)")
 end
 
 -- Install gesture logger with callback to capture_manager
@@ -43,36 +41,22 @@ function BugReporter.install_gesture_logger()
     log.event("Gesture logger installed")
 end
 
--- Start screenshot timer (captures every 1 second)
-function BugReporter.start_screenshot_timer()
-    -- If timer already running, don't create another
-    if BugReporter.screenshot_timer then
-        return
-    end
-
-    -- Check if Qt binding is available
+-- Create the 1-Hz screenshot timer but DO NOT start it. set_enabled(true)
+-- starts it once telemetry has verified consent + register.
+function BugReporter.create_screenshot_timer()
+    if BugReporter.screenshot_timer then return end
     if not create_timer then
         log.warn("create_timer not available (Qt bindings not loaded)")
         return
     end
-
-    -- Create timer with callback to capture screenshot
     BugReporter.screenshot_timer = create_timer(
-        1000,  -- 1 second interval
-        true,  -- repeat mode
-        function()
-            BugReporter.capture_screenshot()
-        end
+        1000,
+        true,
+        function() BugReporter.capture_screenshot() end
     )
-
-    -- Check if timer creation succeeded
-    if not BugReporter.screenshot_timer then
-        log.error("Failed to create screenshot timer")
-        return
-    end
-
-    BugReporter.screenshot_timer:start()
-    log.event("Screenshot timer started (1 second interval)")
+    assert(BugReporter.screenshot_timer,
+        "BugReporter: create_timer returned nil despite binding being present")
+    log.event("Screenshot timer created (idle until telemetry enables it)")
 end
 
 -- Capture a screenshot

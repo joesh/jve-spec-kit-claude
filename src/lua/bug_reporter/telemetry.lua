@@ -16,12 +16,23 @@ local dialog_prefs = require("core.dialog_prefs")
 local build_info   = require("core.build_info")
 local install      = require("bug_reporter.install")
 local hardware     = require("bug_reporter.hardware_snapshot")
+local consent      = require("bug_reporter.consent")
 local log          = require("core.logger").for_area("ui")
 
 local M = {}
 
 local PREFS_FILENAME = "bug_reporter_prefs.json"
 local PREF_KEY = "bug_reporter_enabled"
+
+-- Capture-pipeline gate: every consent path that grants permission
+-- routes through this so init.lua's gesture logger + screenshot timer
+-- start on Accept and stop on Decline / pref-off. Required because
+-- layout.lua used to call bug_reporter.init() unconditionally — the
+-- capture pipeline ran BEFORE consent was even prompted (pass 2 #1
+-- HIGH: recording during the consent dialog itself).
+local function set_capture_enabled(enabled)
+    require("bug_reporter").set_enabled(enabled)
+end
 
 -- Test seams. Production code never assigns these; tests set them to
 -- inject deterministic outcomes.
@@ -107,13 +118,27 @@ function M.register(consent_version, on_done)
     end)
 end
 
+local DISABLED_MSG = "Bug reporting is disabled. Re-enable in Preferences → Privacy " ..
+    "(or delete ~/.jve/install_id.json and relaunch to re-prompt)."
+
 function M.apply_pref_toggle(value)
     save_pref(value)
-    if value and install.read() == nil then
-        local outcome = show_consent()
-        if outcome == "accept" then
-            M.register(1, function(_) end)
+    if value then
+        if install.read() == nil then
+            local outcome = show_consent()
+            if outcome == "accept" then
+                M.register(consent.CONSENT_VERSION, function(ok)
+                    if ok then set_capture_enabled(true) end
+                end)
+            else
+                save_pref(false)
+                set_capture_enabled(false)
+            end
+        else
+            set_capture_enabled(true)
         end
+    else
+        set_capture_enabled(false)
     end
 end
 M.toggle_pref_for_tests = M.apply_pref_toggle
@@ -121,7 +146,7 @@ M.toggle_pref_for_tests = M.apply_pref_toggle
 function M.attempt_submit_for_tests(state, on_done)
     on_done = on_done or function(_) end
     if not pref_enabled() then
-        last_f12_message = "Bug reporting is disabled; enable in Preferences → Privacy."
+        last_f12_message = DISABLED_MSG
         on_done({ ok = false, user_message = last_f12_message })
         return
     end
@@ -143,16 +168,32 @@ function M.heartbeat_for_tests(on_done)
     local record = install.read()
     if not record then on_done(nil); return end
     local body = { ts = os.time(), jve_sha = build_info.git_sha }
+    local snapshot
     if record.jve_sha_at_register ~= build_info.git_sha then
-        body.hardware = hardware.snapshot()
+        snapshot = hardware.snapshot()
+        body.hardware = snapshot
     end
     local transport = require("bug_reporter.transport")
-    transport.post_heartbeat(body, record.install_id, record.nonce, on_done)
+    transport.post_heartbeat(body, record.install_id, record.nonce, function(result)
+        -- After a successful heartbeat that included hardware (FR-018
+        -- resnapshot), advance the install record's jve_sha_at_register
+        -- so future heartbeats stop carrying the hardware payload again.
+        -- Previously this field was set only at /register and never
+        -- updated, so every heartbeat across the rest of the install's
+        -- life would re-send the snapshot (pass 2 #14 HIGH).
+        if result and result.ok and snapshot then
+            record.jve_sha_at_register = build_info.git_sha
+            record.hardware_snapshot = snapshot
+            install.write(record)
+        end
+        on_done(result)
+    end)
 end
 
 local function continue_after_register()
     local record = install.read()
     if not record then return end
+    set_capture_enabled(true)
     M.heartbeat_for_tests(function(_)
         local pending_queue = require("bug_reporter.pending_queue")
         pending_queue.drain(record.install_id, record.nonce)
@@ -161,7 +202,8 @@ end
 
 function M.init()
     if not pref_enabled() then
-        last_f12_message = "Bug reporting is disabled; enable in Preferences → Privacy."
+        last_f12_message = DISABLED_MSG
+        set_capture_enabled(false)
         return
     end
     if install.read() ~= nil then
@@ -171,11 +213,22 @@ function M.init()
     local outcome = show_consent()
     if outcome ~= "accept" then
         save_pref(false)
-        last_f12_message = "Bug reporting is disabled; enable in Preferences → Privacy."
+        last_f12_message = DISABLED_MSG
+        set_capture_enabled(false)
         return
     end
-    M.register(1, function(success)
-        if not success then return end
+    M.register(consent.CONSENT_VERSION, function(success)
+        if not success then
+            -- Half-state guard: user accepted consent but /register
+            -- failed (network down, rate-limited, schema mismatch).
+            -- Without this, pref stays "enabled-by-default" and the
+            -- next launch silently re-tries register without re-
+            -- prompting — the user has no idea anything went wrong.
+            save_pref(false)
+            set_capture_enabled(false)
+            last_f12_message = "Bug reporter setup failed — see log. Try again from Preferences → Privacy."
+            return
+        end
         continue_after_register()
     end)
 end

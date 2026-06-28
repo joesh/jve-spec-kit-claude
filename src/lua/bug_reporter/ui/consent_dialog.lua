@@ -10,10 +10,13 @@
 
 local qt = require("bug_reporter.qt_compat")
 local path_utils = require("core.path_utils")
+local consent    = require("bug_reporter.consent")
 
 local M = {}
 
-M.CONSENT_VERSION = 1
+-- Re-export the canonical constant. Bump bug_reporter.consent's value
+-- to trigger re-prompting on next launch (FR-002a).
+M.CONSENT_VERSION = consent.CONSENT_VERSION
 
 local CONSENT_TEXT_PATH = "specs/027-user-facing-bug/consent-text-v1.md"
 

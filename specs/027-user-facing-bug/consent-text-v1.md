@@ -46,8 +46,9 @@ When you file a bug report, additionally:
 
 If you decline, JVE will not send any of the above. F12 will respond
 with "Bug reporting is disabled" and no network traffic leaves your
-machine on the bug-reporter's behalf. You can re-enable bug reporting
-later under Preferences → Privacy.
+machine on the bug-reporter's behalf. To re-enable bug reporting,
+delete `~/.jve/install_id.json` and relaunch JVE (a future build will
+expose this as a Preferences → Privacy toggle).
 
 ## Versioning
 
