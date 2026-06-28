@@ -148,6 +148,78 @@ it asserts `.mp4/.mov` (`drt_writer.lua:739`, fn at `:733`).
 **Alternatives rejected.** Route audio through the video-item builder (wrong root
 element; Resolve drops it). Skip standalone audio (FR-019 violation — the original crash).
 
+### D4a — Full byte map (first-hand, `resolve_authored_full.drp` test_click_48k_stereo.wav)
+
+`Sm2MpAudioClip` (DbId = source-clip identity) child order (§K2):
+`FieldsBlob, Name, MpFolder, UniqueMediaPoolItemId, 6×Mark{In,Out}{,Video,Audio} empties,
+CurPlayheadPosition, PinsBA/, VirtualAudioTracksBA, EmbeddedAudioVec>Element>BtAudioInfo{
+FieldsBlob/, Clip, TracksBA, MediaMetadata/}`.
+
+**Borrow-and-substitute strategy** (mirrors `build_media_pool_video_item`): commit the
+test_click `<Element>` block as `drt_canonical/full_reference_mp_audio_clip.xml`; substitute:
+
+| Field | Substitution | Mechanism |
+|-------|--------------|-----------|
+| `Sm2MpAudioClip@DbId` | → `media.file_uuid` (timeline `<MediaRef>` resolves) | plain_gsub |
+| `<MpFolder>` back-ref | → minted `mp_folder` DbId | plain_gsub |
+| `<UniqueMediaPoolItemId>` | → fresh UUID | plain_gsub |
+| `<Name>` | → `basename(file_path)` | plain_gsub |
+| `BtAudioInfo@DbId` | → fresh UUID (cross-archive safety) | plain_gsub |
+| `BtAudioInfo>Clip` | → path via `enc.encode_bt_clip_blob{directory,filename,date,codec="Linear PCM"}` | re-encode |
+| `BtAudioInfo>TracksBA` | → SampleRate/NumChannels/Duration substituted | targeted value replace |
+
+**TracksBA value encodings (confirmed byte-equal to fixture):** plaintext Fusion-fields
+blob, 31-byte header, field_count @ offset 28 (mirror `decode_bt_audio_duration:509`). Each
+field = `<UTF-16BE name><be16 0><be16 type><value>`. Substitute by anchoring on
+`utf16be(name)+type` and replacing the fixed-width value:
+  All TLV ints encode as **`aux*256 + val`** (decode_tlv_fields:387/397), NOT a plain BE int:
+- `SampleRate` type `0003`: 4-byte BE aux + 1-byte val (5 B). 48000→`000000bb80`.
+- `NumChannels` type `0002`: 4-byte BE aux + 1-byte val (5 B). 2→`0000000002`.
+- `Duration` type `0004`: **8-byte BE aux + 1-byte val (9 B)**. 144000 = aux 562 + val 128 →
+  `000000000000023280` (NOT a 16-hex BE64 — that off-by-2 was the first encoder bug).
+- Left borrowed (not file-derived for the interim): `BitDepth` (`0003`, =1), `CodecName`
+  (`000a`="Linear PCM"), `UniqueId` (mint if cross-archive collision matters), `StartTime`
+  (`0006` double = audio TC origin; 0 in fixture — wire to `get_audio_start_tc` if non-zero).
+- `VirtualAudioTracksBA` (412 B, plaintext Fusion): a per-virtual-track list; the fixture's
+  stereo wav carries TWO ChannelsBA descriptors (the same VATBA mono/stereo grammar as D11,
+  one per master virtual track). For the interim borrow verbatim (stereo); a mono wav would
+  need a single-descriptor form — synthesize via the D11 grammar if a mono standalone arises.
+- Outer `FieldsBlob` (zstd, marker 0x81) + `BtAudioInfo>Clip` are zstd; the Clip path is
+  re-encoded via `encode_bt_clip_blob` (already emits the zstd frame — same as video item).
+  Outer FieldsBlob borrowed verbatim (clip-level metadata; no path/rate inside that matters).
+
+### D4b — Clip-blob tail is the file mtime, NOT opaque residue (LANDED 2026-06-27)
+
+The `Clip` blob protobuf tail was previously a frozen constant (`BT_CLIP_TAIL`) — believed
+"per-file residue that can't be derived." Decoded first-hand, it is fully derivable:
+- **f13 varint = source-file mtime in µs** (the same instant the f3 date string encodes;
+  verified: audio fixture f13 = 1775764733195782 µs = "Thu Apr  9 12:58:53 2026" local).
+- **f15 varint = media-type**: 4 = video, 2 = audio.
+- **f16 varint = 100** (constant in every fixture).
+- **f18 varint = media-type**: 16384 = video, 32768 = audio.
+
+Implemented (option (b) — persist mtime in the model, exporter reads it; NOT a filesystem
+probe): schema **V18→V19** adds `media.file_mtime_us`; the DRP importer reads it from each
+pool item's Clip blob (`drp_binary.decode_bt_clip_mtime`, field 13) and round-trips it;
+`encode_bt_clip_blob` takes `mtime_us` + derives f13/f15/f18 (media-type from the existing
+video-shape discriminant) and the f3 date (`os.date` local, space-padded `%e`). Verified
+**byte-equal to the fixture's decompressed Clip payload** for the test_click audio item.
+This also fixed the video item's stale 2024 date / 2016 mtime (both now derive from the real
+file). f16=100 and the f18 enum are kind-keyed from 2 fixtures — revisit if a fixture varies.
+
+**Producer (T016) — LANDED:** `payload_builder.media_to_payload` emits, on an audio-only
+media item, `kind="audio"` + `sample_rate` + `num_channels` + `duration_samples` (the
+TracksBA inputs) + `file_mtime_us`. Dedup by source-clip identity (D4 — two clips/one file =
+one item). **NOT yet emitted:** the sample-domain `audio_start_tc` for the TracksBA
+`StartTime` — T016 reads `get_audio_start_tc()` only to derive the scalar `start_tc_frame`
+(timeline-clip `<In>`); wiring the sample origin into the TracksBA is T017 (until then
+`StartTime` stays the borrowed 0 — fine for the zero-origin fixtures).
+
+**RED test (T003):** `test_drt_audio_media_pool_item.lua` — author a payload with a
+standalone wav; assert exactly one `Sm2MpAudioClip`, child order, file-specific fields =
+media's (path/rate/channels/dur), fixed bytes = fixture, `.wav` accepted, bad type
+loud-fails via pcall.
+
 ---
 
 ## D5 — Payload-driven routing via MediaTrackIdx discriminator (gap #3, §F)

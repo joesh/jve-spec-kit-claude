@@ -9,7 +9,7 @@ local log = require("core.logger").for_area("database")
 -- opened — per the no-backward-compat rule, incompatible projects must
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
-M.SCHEMA_VERSION = 18
+M.SCHEMA_VERSION = 19
 
 -- Master sequences hold no `clips` rows; their playable spans are synthesized
 -- from media_refs as virtual clips carrying id = MASTER_VIRTUAL_CLIP_PREFIX ..

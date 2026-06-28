@@ -270,11 +270,30 @@ local decode_bt_clip_path = drp_binary.decode_bt_clip_path
 local decode_audio_channel_select = drp_binary.decode_audio_channel_select
 local eval_curve = drp_binary.eval_curve
 
+-- The two info wrappers a media-pool clip's <Clip> binary blob can live under,
+-- in priority order: a video master's BtVideoInfo (reliable filename) before an
+-- audio master's BtAudioInfo.
+local CLIP_BLOB_INFO_TAGS = { "BtVideoInfo", "BtAudioInfo" }
 
-
+-- Return the <Clip> binary-blob text under a media-pool clip's BtVideoInfo or
+-- BtAudioInfo child, or nil if absent. Shared by every Clip-blob decoder
+-- (path, mtime) so the find_element → find_direct_child("Clip") → get_text walk
+-- lives in one place.
+local function get_clip_blob_text(clip_elem, info_tag)
+    local info = find_element(clip_elem, info_tag)
+    if not info then return nil end
+    local blob_elem = find_direct_child(info, "Clip")
+    if not blob_elem then return nil end
+    return get_text(blob_elem)
+end
 
 --- Extract original source file path from a MediaPool master clip element.
 -- Searches BtVideoInfo and BtAudioInfo children for Clip binary blobs.
+-- The blob preserves filename whitespace that the XML parser strips from
+-- <Name>, so paths like '/…/Temp Tracks/ Return 2 - Max Richter.mp3' only
+-- survive the import when sourced from the blob. decode_bt_clip_path already
+-- rejects blobs whose filename holds control characters (the "unreliable"
+-- case), so a non-nil path is trusted; otherwise fall back to directory + name.
 -- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
 -- @return string|nil: decoded original path, or nil if no blob found/parseable
 local function extract_original_path(clip_elem)
@@ -282,33 +301,33 @@ local function extract_original_path(clip_elem)
     local name_elem = find_element(clip_elem, "Name")
     local xml_name = name_elem and get_text(name_elem)
 
-    -- Try BtVideoInfo first (video master clips — blob filename is reliable)
-    local bt_video = find_element(clip_elem, "BtVideoInfo")
-    if bt_video then
-        local blob_elem = find_direct_child(bt_video, "Clip")
-        if blob_elem then
-            local path, directory = decode_bt_clip_path(get_text(blob_elem))
+    for _, info_tag in ipairs(CLIP_BLOB_INFO_TAGS) do
+        local blob = get_clip_blob_text(clip_elem, info_tag)
+        if blob then
+            local path, directory = decode_bt_clip_path(blob)
             if path then return path end
             if directory and xml_name then return directory .. "/" .. xml_name end
         end
     end
 
-    -- Try BtAudioInfo (audio master clips). Trust the blob's full path when
-    -- decode_bt_clip_path returns a non-nil path — it already rejects blobs
-    -- where the filename contains control characters (the "unreliable" case).
-    -- The blob preserves filename whitespace that the XML parser strips from
-    -- <Name>, so paths like '/…/Temp Tracks/ Return 2 - Max Richter.mp3' only
-    -- survive the import when sourced from the blob.
-    local bt_audio = find_element(clip_elem, "BtAudioInfo")
-    if bt_audio then
-        local blob_elem = find_direct_child(bt_audio, "Clip")
-        if blob_elem then
-            local path, directory = decode_bt_clip_path(get_text(blob_elem))
-            if path then return path end
-            if directory and xml_name then return directory .. "/" .. xml_name end
+    return nil
+end
+
+--- Extract the source-file modification time (µs since epoch) from a media-pool
+--- clip's BtVideoInfo/BtAudioInfo Clip blob (protobuf field 13). Round-tripped
+--- into media.file_mtime_us so the DRT exporter can re-emit it (spec 026). The
+--- value is in the project file (NOT probed from disk — importers never stat
+--- media). Returns nil when no decodable blob is present.
+-- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
+-- @return number|nil: mtime in microseconds
+local function extract_file_mtime_us(clip_elem)
+    for _, info_tag in ipairs(CLIP_BLOB_INFO_TAGS) do
+        local blob = get_clip_blob_text(clip_elem, info_tag)
+        if blob then
+            local mtime = drp_binary.decode_bt_clip_mtime(blob)
+            if mtime then return mtime end
         end
     end
-
     return nil
 end
 
@@ -840,6 +859,10 @@ local function parse_master_clip_element(clip_elem, folder_id)
     -- Extract file's original container TC from TracksBA.StartTime (FR-001)
     local file_tc_seconds = extract_file_tc_seconds(clip_elem)
 
+    -- Source-file mtime (µs) from the Clip blob — re-emitted by the DRT exporter
+    -- so a round-tripped media-pool item carries the real file timestamp.
+    local file_mtime_us = extract_file_mtime_us(clip_elem)
+
     local master_clip = {
         id = db_id,
         name = name_elem and get_text(name_elem) or "Untitled",
@@ -850,6 +873,7 @@ local function parse_master_clip_element(clip_elem, folder_id)
         clip_type = clip_elem.tag == "Sm2MpVideoClip" and "video" or "audio",
         file_path = original_path,
         file_tc_seconds = file_tc_seconds,  -- file's container TC origin (seconds since midnight)
+        file_mtime_us = file_mtime_us,      -- source-file mtime, µs since epoch (nil if absent)
     }
 
     -- Store duration + rate info from blob
@@ -2051,6 +2075,12 @@ local function apply_pmc_metadata(entry, pmc)
     -- File container TC origin from TracksBA.StartTime (FR-001)
     if pmc.file_tc_seconds then
         entry.file_tc_seconds = pmc.file_tc_seconds
+    end
+
+    -- Source-file mtime (µs) from the Clip blob — re-emitted by the DRT exporter
+    -- so a round-tripped media-pool item carries the real file timestamp (026).
+    if pmc.file_mtime_us then
+        entry.file_mtime_us = pmc.file_mtime_us
     end
 
     -- TC origin. TracksBA.StartTime is the file container TC, shared by the

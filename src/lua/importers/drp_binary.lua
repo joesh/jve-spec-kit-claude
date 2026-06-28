@@ -219,6 +219,29 @@ function M.decode_protobuf_varint(bytes, pos)
 end
 
 -- ---------------------------------------------------------------------------
+-- Protobuf wire helpers — shared by every protobuf walker in this module
+-- (clip-blob mtime, marker decode). Defined here, right after the varint
+-- primitive they build on, so all callers below can reuse them.
+-- ---------------------------------------------------------------------------
+
+local PB_WIRE_VARINT = 0
+local PB_WIRE_LEN    = 2
+
+-- Read a protobuf tag → field_number, wire_type, next_pos (or nil).
+local function read_pb_tag(bytes, pos)
+    local tag, np = M.decode_protobuf_varint(bytes, pos)
+    if not tag then return nil end
+    return math.floor(tag / 8), tag % 8, np
+end
+
+-- Read a LEN-delimited slice → slice, position past it (or nil on truncation).
+local function read_pb_len_slice(bytes, pos)
+    local len, after_len = M.decode_protobuf_varint(bytes, pos)
+    if not len or after_len + len - 1 > #bytes then return nil end
+    return bytes:sub(after_len, after_len + len - 1), after_len + len
+end
+
+-- ---------------------------------------------------------------------------
 -- BtVideoInfo/BtAudioInfo clip path decoder
 -- ---------------------------------------------------------------------------
 
@@ -329,6 +352,46 @@ function M.decode_bt_clip_path(hex_str)
     end
 
     return directory .. "/" .. filename, directory
+end
+
+--- Decode the source-file modification time (microseconds since the Unix epoch)
+--- from a BtVideoInfo/BtAudioInfo Clip blob. This is protobuf field 13 — the
+--- same instant the human-readable f3 date string encodes, but with sub-second
+--- precision. Resolve uses it to detect source changes; JVE round-trips it
+--- through media.file_mtime_us so the DRT exporter can re-emit it (spec 026).
+--
+-- Decompresses the FieldsBlob wrapper (the Clip blob is a 0x80/0x81 Fields
+-- payload), then walks the protobuf fields to field 13. Multi-byte field tags
+-- (e.g. field 16 = 0x80 0x01) are decoded as varints, not assumed single-byte.
+-- @param hex_str string: full Clip blob hex (wrapper + payload)
+-- @return number|nil: mtime in microseconds, or nil if absent/undecodable
+function M.decode_bt_clip_mtime(hex_str)
+    if not hex_str or hex_str == "" then return nil end
+    local payload = M.decode_fields_blob(hex_str)
+    if not payload then return nil end
+
+    local MTIME_FIELD = 13
+    local pos, n = 1, #payload
+    while pos <= n do
+        local field_num, wire_type, after_tag = read_pb_tag(payload, pos)
+        if not field_num then return nil end
+        pos = after_tag
+        if wire_type == PB_WIRE_VARINT then
+            local value, after_val = M.decode_protobuf_varint(payload, pos)
+            if not value then return nil end
+            if field_num == MTIME_FIELD then return value end
+            pos = after_val
+        elseif wire_type == PB_WIRE_LEN then
+            local _, after_slice = read_pb_len_slice(payload, pos)
+            if not after_slice then return nil end
+            pos = after_slice
+        else
+            -- group/fixed wire types don't appear before field 13 in this blob;
+            -- bail rather than mis-walk.
+            return nil
+        end
+    end
+    return nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -556,6 +619,14 @@ function M.decode_effect_filters_volume_db(hex_str)
     return db_val
 end
 
+-- ChannelsBA payload byte map (research D11). CHANNELS_BA_MONO_SIZE and
+-- CHANNELS_BA_CHANNEL_OFF coincide at 12: the 1-based channel index is the LAST
+-- byte of the 12-byte mono block — not a coincidence.
+local CHANNELS_BA_MONO_SIZE   = 12   -- one-channel block (0x0c)
+local CHANNELS_BA_ROUTING_OFF = 9    -- routing-type byte (1-indexed)
+local CHANNELS_BA_CHANNEL_OFF = 12   -- 1-based file-channel byte (1-indexed)
+local CHANNELS_BA_ROUTING_EMBEDDED = 0x00  -- vs 0x20 = linked/synced
+
 --- Decode which SOURCE CHANNEL a timeline audio clip reads, from its
 --- VirtualAudioTrackBA blob (the per-clip channel/routing descriptor).
 --
@@ -590,9 +661,13 @@ function M.decode_audio_channel_select(hex_str)
     local payload = raw_payloads and raw_payloads["ChannelsBA"]
     if not payload then return nil end
 
-    if #payload ~= 12 then return nil end          -- stereo/pair → composite
-    if payload:byte(9) ~= 0x00 then return nil end  -- linked/synced → gap #5
-    local channel_1based = payload:byte(12)
+    -- Non-mono block (e.g. the 16-byte stereo pair) → composite, no single channel.
+    if #payload ~= CHANNELS_BA_MONO_SIZE then return nil end
+    -- Linked/synced channel index is ambiguous (gap #5 owns the slot).
+    if payload:byte(CHANNELS_BA_ROUTING_OFF) ~= CHANNELS_BA_ROUTING_EMBEDDED then
+        return nil
+    end
+    local channel_1based = payload:byte(CHANNELS_BA_CHANNEL_OFF)
     assert(channel_1based and channel_1based >= 1, string.format(
         "decode_audio_channel_select: mono ChannelsBA channel index %s is "
         .. "invalid (blob corrupt?)", tostring(channel_1based)))
@@ -1048,28 +1123,9 @@ for value, name in pairs(M.MARKER_COLOR_NAMES) do
     M.MARKER_COLOR_VALUES[name] = value
 end
 
--- ---------------------------------------------------------------------------
--- Protobuf wire helpers (marker-decoder-local)
--- ---------------------------------------------------------------------------
-
-local PB_WIRE_VARINT = 0
-local PB_WIRE_LEN    = 2
-
--- Read a protobuf tag → field_number, wire_type, next_pos (or nil).
-local function read_pb_tag(bytes, pos)
-    local tag, np = M.decode_protobuf_varint(bytes, pos)
-    if not tag then return nil end
-    return math.floor(tag / 8), tag % 8, np
-end
-
--- Read a LEN-delimited slice → slice, position past it (or nil on truncation).
-local function read_pb_len_slice(bytes, pos)
-    local len, after_len = M.decode_protobuf_varint(bytes, pos)
-    if not len or after_len + len - 1 > #bytes then return nil end
-    return bytes:sub(after_len, after_len + len - 1), after_len + len
-end
-
 -- Expect (field_num, wire_type) at `pos`. Returns next_pos or nil on mismatch.
+-- (read_pb_tag / read_pb_len_slice / PB_WIRE_* are defined above, next to the
+-- varint primitive, so the clip-blob mtime walker can share them.)
 local function expect_tag(bytes, pos, want_field, want_wire)
     local fn, wt, np = read_pb_tag(bytes, pos)
     if fn ~= want_field or wt ~= want_wire then return nil end

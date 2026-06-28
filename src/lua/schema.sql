@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (18);
+INSERT OR IGNORE INTO schema_version (version) VALUES (19);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -93,6 +93,15 @@ CREATE TABLE IF NOT EXISTS media (
     codec TEXT DEFAULT '',
     is_still INTEGER NOT NULL DEFAULT 0 CHECK(is_still IN (0, 1)),
     metadata TEXT DEFAULT '{}', -- JSON
+
+    -- Source-file modification time in MICROSECONDS since the Unix epoch.
+    -- NULL = unknown (e.g. offline media with no pool item to read it from).
+    -- Round-tripped through the project file, NOT probed from the filesystem:
+    -- the DRP importer reads it from each media-pool item's BtAudio/VideoInfo
+    -- Clip blob (field 13 = mtime µs; the same instant the human-readable f3
+    -- date string encodes). The DRT exporter re-emits both from this column.
+    file_mtime_us INTEGER,
+
     offline_note TEXT,
 
     created_at INTEGER NOT NULL,

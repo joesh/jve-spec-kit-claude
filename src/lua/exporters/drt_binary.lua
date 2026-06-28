@@ -234,16 +234,43 @@ end
 -- (FR-019).
 -- ---------------------------------------------------------------------------
 
--- name field = BE32 byte-length of the UTF-16BE name + the name bytes (all hex).
-local VATBA_CHANNELS_NAME = string.format("%08x", #utf16be("ChannelsBA"))
-    .. to_hex(utf16be("ChannelsBA"))
-local VATBA_AUDIOTYPE_NAME = string.format("%08x", #utf16be("AudioType"))
-    .. to_hex(utf16be("AudioType"))
+-- A Fusion TLV field name (hex): BE32 byte-length of the UTF-16BE name + the
+-- name bytes. The hex-domain analogue of encode_field's binary name framing.
+local function tlv_field_name_hex(name)
+    local u = utf16be(name)
+    return string.format("%08x", #u) .. to_hex(u)
+end
 
 local function le32_hex(n)
     return string.format("%02x%02x%02x%02x", n % 256, math.floor(n / 256) % 256,
         math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
 end
+
+-- TLV int value, encoded as aux*256+val (decode_tlv_fields:387/397):
+--   types 0x0002/0x0003 → 4-byte BE aux + 1-byte val (5 bytes, 10 hex).
+--   type  0x0004        → 8-byte BE aux + 1-byte val (9 bytes, 18 hex).
+local function tlv_int5_hex(v)
+    return string.format("%08x%02x", math.floor(v / 256), v % 256)
+end
+local function tlv_int9_hex(v)
+    return string.format("%016x%02x", math.floor(v / 256), v % 256)
+end
+
+-- VirtualAudioTrackBA wire constants (research D11). The blob is a 2-field Fusion
+-- TLV (ChannelsBA payload + AudioType int); see encode_virtual_audio_track_ba.
+-- Hex-string forms are required here (the encoder concatenates hex); the type
+-- codes derive from the binary TLV_* constants so there's one source of truth.
+local VATBA_FUSION_HEADER     = string.format("%08x%08x", 1, 2)  -- version=1, field_count=2
+local VATBA_FIELD_SEP         = "0000"                           -- be16(0) before each type tag
+local VATBA_CHANNELS_TYPE_HEX = string.format("%04x", TLV_PAYLOAD)  -- 000c
+local VATBA_AUDIOTYPE_TYPE_HEX = string.format("%04x", TLV_INT)    -- 0002
+local VATBA_CHANNELS_NAME     = tlv_field_name_hex("ChannelsBA")
+local VATBA_AUDIOTYPE_NAME    = tlv_field_name_hex("AudioType")
+local VATBA_CHANNELS_PAYLOAD_FRAMING = "00000000"  -- BE32 payload-length aux=0 prefix
+local VATBA_BLOCK_TAG         = "02000000"  -- LE constant preceding the channel count
+local VATBA_BLOCK_HEADER_BYTES = 8          -- block size = this + 4·nchannels
+local VATBA_DESC_MID_BYTE     = 0x40        -- fixed 3rd byte of each [rt][00][40][ch] descriptor
+local VATBA_ROUTING_EMBEDDED  = 0x00        -- routing-type for an embedded/standalone channel
 
 --- @param routing table: { kind="mono"|"stereo"|"synced", source_channel=int? }
 ---   mono   → source_channel (0-based file channel) required.
@@ -281,26 +308,87 @@ function M.encode_virtual_audio_track_ba(routing)
     for _, ch in ipairs(channels) do
         assert(ch >= 1 and ch <= 255,
             "encode_virtual_audio_track_ba: channel out of byte range " .. ch)
-        -- [routing-type=0x00][0x00][0x40][1-based channel]
-        descriptors[#descriptors + 1] = string.format("0000%02x%02x", 0x40, ch)
+        -- Per-channel descriptor: [routing-type][0x00][0x40][1-based channel].
+        descriptors[#descriptors + 1] = string.format("%02x00%02x%02x",
+            VATBA_ROUTING_EMBEDDED, VATBA_DESC_MID_BYTE, ch)
     end
 
-    -- ChannelsBA TLV payload: 0x000c type, length prefix = block size, then the
-    -- block (8 header bytes + 4·nch descriptor bytes).
-    local block_size = 8 + 4 * nch
+    -- ChannelsBA TLV payload (type 0x000c). The payload is `block_size` bytes:
+    --   [3 bytes: upper 3 of the LE32 block_size — its low byte is the TLV
+    --    length val that VATBA_CHANNELS_PAYLOAD_FRAMING's aux=0 prefixes]
+    --   [4 bytes: VATBA_BLOCK_TAG] [1 byte: channel count] [4·nch: descriptors]
+    -- so block_size = 8 header bytes + 4·nch. The channel count is a SINGLE byte
+    -- (not an LE32) — byte-verified against the fixture mono/stereo forms
+    -- (test_drt_writer_vatba). Do not "widen" it to le32_hex; that breaks the
+    -- match and shifts every following byte.
+    local block_size = VATBA_BLOCK_HEADER_BYTES + 4 * nch
     local channels_field = VATBA_CHANNELS_NAME
-        .. "0000" .. "000c"                             -- be16(0) + be16(type 0x000c)
-        .. "00000000" .. le32_hex(block_size)           -- payload framing + block size
-        .. "02000000" .. string.format("%02x", nch)     -- block tag + channel count
+        .. VATBA_FIELD_SEP .. VATBA_CHANNELS_TYPE_HEX
+        .. VATBA_CHANNELS_PAYLOAD_FRAMING .. le32_hex(block_size)
+        .. VATBA_BLOCK_TAG .. string.format("%02x", nch)  -- 1-byte channel count
         .. table.concat(descriptors)
 
-    -- AudioType TLV int field: 0x0002 type, value = audio_type code.
+    -- AudioType TLV int field (type 0x0002), value = audio_type code.
     local audio_type_field = VATBA_AUDIOTYPE_NAME
-        .. "0000" .. "0002"                             -- be16(0) + be16(type 0x0002)
-        .. "00000000" .. string.format("%02x", audio_type)
+        .. VATBA_FIELD_SEP .. VATBA_AUDIOTYPE_TYPE_HEX
+        .. tlv_int5_hex(audio_type)
 
-    return "00000001" .. "00000002"                     -- version=1, field-count=2
-        .. channels_field .. audio_type_field
+    return VATBA_FUSION_HEADER .. channels_field .. audio_type_field
+end
+
+-- ---------------------------------------------------------------------------
+-- BtAudioInfo TracksBA — substitute the file-specific values into a borrowed
+-- reference blob (research D4a). The TracksBA is a plaintext Fusion-fields blob
+-- (inverse: decode_bt_audio_duration); its fixed structure is borrowed from
+-- resolve_authored_full.drp and only the media-specific values vary:
+--   • SampleRate  (TLV int  0x0003) — 5-byte value write_be32(r//256)+char(r%256)
+--   • NumChannels (TLV int  0x0002) — 5-byte value, same encoding
+--   • Duration    (TLV int  0x0004) — 8-byte BE64 sample count
+-- Each field is found by its UTF-16BE name + the (be16 0 + be16 type) tag; the
+-- fixed-width value that follows is replaced. BitDepth / CodecName / UniqueId /
+-- StartTime stay borrowed (not media-derived for the interim — see D4a).
+-- ---------------------------------------------------------------------------
+
+-- Replace the fixed-width value following <name><be16 0><be16 type> in a Fusion
+-- fields hex blob. new_value must be the same width as the value it replaces
+-- (guaranteed: same TLV type → same width).
+local function substitute_field_value(hex, name, type_hex, new_value)
+    local anchor = to_hex(utf16be(name)) .. "0000" .. type_hex
+    local s = hex:find(anchor, 1, true)
+    assert(s, "substitute_field_value: field '" .. name
+        .. "' (type " .. type_hex .. ") not found in blob")
+    assert(not hex:find(anchor, s + #anchor, true),
+        "substitute_field_value: field '" .. name .. "' appears more than once")
+    local vstart = s + #anchor
+    return hex:sub(1, vstart - 1) .. new_value
+        .. hex:sub(vstart + #new_value)
+end
+
+--- @param ref_hex string: borrowed BtAudioInfo TracksBA hex (fixed structure)
+--- @param fields table: { sample_rate=int>0, num_channels=int>0,
+---                        duration_samples=int>0 }
+--- @return string: TracksBA hex with the media-specific values substituted
+function M.substitute_audio_tracks_ba(ref_hex, fields)
+    assert(type(ref_hex) == "string" and #ref_hex > 0,
+        "substitute_audio_tracks_ba: reference TracksBA hex required")
+    assert(type(fields.sample_rate) == "number" and fields.sample_rate > 0
+        and fields.sample_rate % 1 == 0,
+        "substitute_audio_tracks_ba: positive integer sample_rate required")
+    assert(type(fields.num_channels) == "number" and fields.num_channels > 0
+        and fields.num_channels % 1 == 0,
+        "substitute_audio_tracks_ba: positive integer num_channels required")
+    assert(type(fields.duration_samples) == "number" and fields.duration_samples > 0
+        and fields.duration_samples % 1 == 0,
+        "substitute_audio_tracks_ba: positive integer duration_samples required")
+
+    local hex = ref_hex
+    hex = substitute_field_value(hex, "SampleRate", "0003",
+        tlv_int5_hex(fields.sample_rate))
+    hex = substitute_field_value(hex, "NumChannels", "0002",
+        tlv_int5_hex(fields.num_channels))
+    hex = substitute_field_value(hex, "Duration", "0004",
+        tlv_int9_hex(fields.duration_samples))
+    return hex
 end
 
 -- ---------------------------------------------------------------------------
@@ -520,29 +608,47 @@ end
 --   writer's other a005-gate limits).
 -- ---------------------------------------------------------------------------
 
-local BT_CLIP_TAIL = assert(
-    drp_binary.hex_to_bytes("6880fbb2ba9ad6ce0278048001649001808001"),
-    "BT_CLIP_TAIL: invalid hex literal")
+-- The Clip-blob tail (protobuf fields after the path/codec) carries the file's
+-- modification time and media-type markers, dissected first-hand (research D4a)
+-- from the A005 video item + the test_click audio item:
+--   f13 varint = source-file mtime in µs since the epoch (per file)
+--   f15 varint = media-type: 4 = video, 2 = audio
+--   f16 varint = 100 (constant in every measured fixture)
+--   f18 varint = media-type: 16384 = video, 32768 = audio
+-- f15/f18 are selected by the same video-shape discriminant as f6/f7 (a clip
+-- carrying clip_name/clip_uuid IS the video shape). Earlier this tail was a
+-- frozen constant from one capture — wrong mtime/type for any other file.
+local CLIP_TAIL_VIDEO = { f15 = 4, f18 = 16384 }
+local CLIP_TAIL_AUDIO = { f15 = 2, f18 = 32768 }
+local CLIP_TAIL_F16   = 100
 
 --- Encode a BtVideoInfo/BtAudioInfo <Clip> blob (FieldsBlob-framed hex).
---- @param t table {directory, filename, date, codec,
+--- @param t table {directory, filename, date, codec, mtime_us,
 ---                 clip_name?, clip_uuid?}  — clip_name/clip_uuid are the
----                video-shape fields and must be supplied together;
----                their absence selects the audio shape.
+---                video-shape fields and must be supplied together; their
+---                absence selects the audio shape (and the audio media-type
+---                tail). mtime_us = the source file's modification time in
+---                microseconds (f13 + the f3 date the caller passes derive from
+---                the same instant).
 function M.encode_bt_clip_blob(t)
     assert(type(t) == "table", "encode_bt_clip_blob: table required")
     for _, key in ipairs({ "directory", "filename", "date", "codec" }) do
         assert(type(t[key]) == "string" and t[key] ~= "",
             "encode_bt_clip_blob: " .. key .. " required (non-empty string)")
     end
+    assert(type(t.mtime_us) == "number" and t.mtime_us >= 0
+        and t.mtime_us % 1 == 0,
+        "encode_bt_clip_blob: mtime_us required (non-negative integer µs), got "
+        .. tostring(t.mtime_us))
     assert((t.clip_name == nil) == (t.clip_uuid == nil),
         "encode_bt_clip_blob: clip_name and clip_uuid are the video-shape "
         .. "pair — supply both or neither")
+    local is_video = t.clip_name ~= nil
     local payload = encode_pb_len_field(1, t.directory)
         .. encode_pb_len_field(2, t.filename)
         .. encode_pb_len_field(3, t.date)
         .. encode_pb_len_field(5, t.codec)
-    if t.clip_name ~= nil then
+    if is_video then
         assert(type(t.clip_name) == "string" and t.clip_name ~= "",
             "encode_bt_clip_blob: clip_name must be non-empty string")
         assert(type(t.clip_uuid) == "string" and t.clip_uuid ~= "",
@@ -551,7 +657,12 @@ function M.encode_bt_clip_blob(t)
             .. encode_pb_len_field(6, t.clip_name)
             .. encode_pb_len_field(7, t.clip_uuid)
     end
-    payload = payload .. BT_CLIP_TAIL
+    local tail = is_video and CLIP_TAIL_VIDEO or CLIP_TAIL_AUDIO
+    payload = payload
+        .. encode_pb_varint_field(13, t.mtime_us)
+        .. encode_pb_varint_field(15, tail.f15)
+        .. encode_pb_varint_field(16, CLIP_TAIL_F16)
+        .. encode_pb_varint_field(18, tail.f18)
     return M.encode_fields_blob(payload, 2)
 end
 

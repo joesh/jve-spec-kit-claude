@@ -103,6 +103,12 @@ local function build_audio_routing(db, loaded, media)
         "payload_builder: audio media missing audio_channels — id="
         .. tostring(media.id))
 
+    -- The payload faithfully DESCRIBES every audio clip's routing, including
+    -- synced ones (the producer is not the authoring gate). The writer's
+    -- encode_virtual_audio_track_ba is the capability gate: it loud-fails on
+    -- kind="synced" until gap #5 decodes the virtual-track slot. Asserting here
+    -- instead would break the descriptor's completeness contract (and the
+    -- producer-only test) and force gap #5 to re-add the synced descriptor.
     local kind, media_track_idx
     if synced then
         kind, media_track_idx = "synced", 2
@@ -175,7 +181,7 @@ local function load_clips_for_track(db, track_id, ctx, seq_fps, track_type)
         local m
         if source_media_id then
             m = load_media_cached(source_media_id, ctx)
-            if not (m.width and m.width > 0) then
+            if not m:is_video() then
                 assert(type(seq_fps) == "number" and seq_fps > 0,
                     "payload_builder: seq_fps required to conform audio clip "
                     .. "source range — clip=" .. tostring(loaded.id))
@@ -253,8 +259,9 @@ local function media_to_payload(media, track_type, file_uuid, seq_fps)
     -- native_rate = seq fps and its sample-domain origin/duration converted to
     -- frames. The sample-domain values feed only the Sm2MpAudioClip TracksBA
     -- (gap #2), never the timeline clip's <In>/<MediaFrameRate>.
+    local is_video = media:is_video()
     local native_rate, start_tc_frame, duration_frames
-    if media.width and media.width > 0 then
+    if is_video then
         local tc_origin = media:get_start_tc()
         assert(type(tc_origin) == "number",
             "payload_builder: video media has no TC origin — TC must always be "
@@ -292,9 +299,14 @@ local function media_to_payload(media, track_type, file_uuid, seq_fps)
         duration_frames = media.duration * seq_fps / media.audio_sample_rate
     end
 
-    return {
+    -- Media kind drives the media-pool item the writer emits: video media →
+    -- Sm2MpVideoClip, audio-only media → Sm2MpAudioClip (gap #2).
+    local kind = is_video and "video" or "audio"
+
+    local payload = {
         file_uuid        = file_uuid,
         name             = media.name,
+        kind             = kind,
         -- drt_writer's media_ref contract (drt_writer.lua §author doc)
         -- names this field file_path; build_clip_element and the
         -- media-pool item emitters read media.file_path.
@@ -303,7 +315,24 @@ local function media_to_payload(media, track_type, file_uuid, seq_fps)
         duration_frames  = duration_frames,
         start_tc_frame   = start_tc_frame,
         track_type       = track_type,
+        -- Source-file mtime (µs) for the Clip blob's date/f13; nil = unknown.
+        file_mtime_us    = media.file_mtime_us,
     }
+
+    -- Standalone-audio media-pool item fields (Sm2MpAudioClip TracksBA, gap #2):
+    -- the file's native sample-domain shape. nil for video media.
+    if kind == "audio" then
+        -- audio_sample_rate already asserted in the audio TC branch above
+        -- (kind=="audio" iff that branch ran). Channels has no prior assert.
+        assert(type(media.audio_channels) == "number" and media.audio_channels > 0,
+            "payload_builder: audio media missing audio_channels — id="
+            .. tostring(media.id))
+        payload.sample_rate      = media.audio_sample_rate
+        payload.num_channels     = media.audio_channels
+        payload.duration_samples = media.duration   -- audio master duration is samples
+    end
+
+    return payload
 end
 
 --- Build the drt_writer payload for one sequence.

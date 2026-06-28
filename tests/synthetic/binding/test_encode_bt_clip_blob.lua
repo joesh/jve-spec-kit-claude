@@ -35,6 +35,25 @@ local DIR  = "/Volumes/My Shared Files/jve-spec-kit-claude/tests/fixtures/media"
 local FILE = "A005_C052_0925BL_001.mp4"
 local DATE = "Tue Jan 13 01:44:18 2026"
 local UUID = "ab0ac1ed-042b-40b9-a9ab-f82306fca300"
+-- Source-file mtime in µs. The tail's f13 carries it verbatim; f15/f18 are the
+-- media-type markers (video 4/16384, audio 2/32768 — research D4a).
+local MTIME = 1775764733195782
+
+-- Decode the protobuf varint tail (multi-byte field tags) into {field=value}.
+-- Domain schema, not encoder code.
+local function read_varint_tail(tail)
+    local out, pos = {}, 1
+    while pos <= #tail do
+        local tag, after_tag = dec.decode_protobuf_varint(tail, pos)
+        local field_no = math.floor(tag / 8)
+        local wire = tag % 8
+        if wire ~= 0 then break end  -- only varint fields in this tail
+        local val, after_val = dec.decode_protobuf_varint(tail, after_tag)
+        out[field_no] = val
+        pos = after_val
+    end
+    return out
+end
 
 -- Minimal protobuf LEN-field walker (domain schema, not encoder code).
 local function read_len_fields(payload)
@@ -59,7 +78,7 @@ end
 -- ─── video blob ─────────────────────────────────────────────────────
 do
     local hex = enc.encode_bt_clip_blob({
-        directory = DIR, filename = FILE, date = DATE,
+        directory = DIR, filename = FILE, date = DATE, mtime_us = MTIME,
         codec = "avc1", clip_name = FILE, clip_uuid = UUID,
     })
     check("video: hex string returned",
@@ -74,22 +93,33 @@ do
     check("video: f5 codec", f[5] == "avc1")
     check("video: f6 clip name", f[6] == FILE)
     check("video: f7 uuid", f[7] == UUID)
-    check("video: opaque tail present and starts at f13 varint",
+    check("video: tail present and starts at f13 varint",
         type(f.tail) == "string" and f.tail:byte(1) == 0x68)
+    -- The importer's mtime decoder reads f13 back from the whole blob.
+    check("video: f13 mtime round-trips", dec.decode_bt_clip_mtime(hex) == MTIME)
+    local tail = read_varint_tail(f.tail)
+    check("video: f13 = mtime", tail[13] == MTIME)
+    check("video: f15 = 4 (video media-type)", tail[15] == 4)
+    check("video: f16 = 100 (constant)", tail[16] == 100)
+    check("video: f18 = 16384 (video media-type)", tail[18] == 16384)
 end
 
 -- ─── audio blob (no name/uuid fields) ───────────────────────────────
 do
     local hex = enc.encode_bt_clip_blob({
-        directory = DIR, filename = FILE, date = DATE, codec = "AAC",
+        directory = DIR, filename = FILE, date = DATE, mtime_us = MTIME,
+        codec = "AAC",
     })
     local payload = dec.decode_fields_blob_bytes(dec.hex_to_bytes(hex))
     local f = read_len_fields(payload)
     check("audio: f1 directory", f[1] == DIR)
     check("audio: f5 codec", f[5] == "AAC")
     check("audio: no f6/f7", f[6] == nil and f[7] == nil)
-    check("audio: opaque tail present",
-        type(f.tail) == "string" and f.tail:byte(1) == 0x68)
+    check("audio: tail present", type(f.tail) == "string" and f.tail:byte(1) == 0x68)
+    local tail = read_varint_tail(f.tail)
+    check("audio: f13 = mtime", tail[13] == MTIME)
+    check("audio: f15 = 2 (audio media-type)", tail[15] == 2)
+    check("audio: f18 = 32768 (audio media-type)", tail[18] == 32768)
 end
 
 -- ─── frame header: declared size is the byte count AFTER the 8-byte
@@ -100,7 +130,7 @@ end
 -- Reference export: video len_field=195 == #(0x81+zstd); decompressed=208.
 do
     local hex = enc.encode_bt_clip_blob({
-        directory = DIR, filename = FILE, date = DATE,
+        directory = DIR, filename = FILE, date = DATE, mtime_us = MTIME,
         codec = "avc1", clip_name = FILE, clip_uuid = UUID,
     })
     local raw = dec.hex_to_bytes(hex)
@@ -113,8 +143,11 @@ end
 -- ─── error paths ────────────────────────────────────────────────────
 do
     local ok = pcall(enc.encode_bt_clip_blob,
-        { filename = FILE, date = DATE, codec = "AAC" })
+        { filename = FILE, date = DATE, codec = "AAC", mtime_us = MTIME })
     check("missing directory asserts", not ok)
+    local ok_mtime = pcall(enc.encode_bt_clip_blob,
+        { directory = DIR, filename = FILE, date = DATE, codec = "AAC" })
+    check("missing mtime_us asserts", not ok_mtime)
     local ok2 = pcall(enc.encode_bt_clip_blob,
         { directory = DIR, filename = FILE, date = DATE,
           codec = "avc1", clip_name = FILE }) -- name without uuid

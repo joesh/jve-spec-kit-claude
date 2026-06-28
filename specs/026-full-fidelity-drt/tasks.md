@@ -169,13 +169,25 @@ All are NEW separate files → `[P]` among themselves (T009 excepted — needs T
   carries the embedded mono-ch1 routing the producer always emits.
 
 ### Gap #2 — standalone-audio media-pool item (FR-004/005/006)
-- [ ] **T016** `payload_builder.lua` (after T014): emit standalone-audio media item fields
-  (`sample_rate`, `channel_layout`, `duration_samples`, `audio_start_tc`); dedup by
-  source-clip identity (D4).
-- [ ] **T017** `drt_writer.lua` (after T015): add `build_media_pool_audio_item` →
-  `Sm2MpAudioClip` (child order + fixed bytes from `resolve_authored_full.drp` §K2);
-  file-specific fields from the audio media; accept `.wav`; **loud-fail** unhandled audio
-  type naming the file (FR-019). → GREEN T003.
+**FOUNDATION LANDED 2026-06-27** (full dissection research D4a; reference XML
+`drt_canonical/full_reference_mp_audio_clip.xml`; `drt_binary.substitute_audio_tracks_ba`
+byte-equal to fixture w/ `test_drt_audio_tracks_ba.lua`). Builder/dispatch/producer + T003 remain.
+- [X] **T016** DONE 2026-06-27. `payload_builder.media_to_payload` emits the media `kind`
+  discriminant + audio-pool fields (`sample_rate`, `num_channels`, `duration_samples`) for
+  audio-only media. `drt_writer.build_mp_folder_xml` now dispatches by `kind` (asserts kind
+  present); `kind="audio"` currently **loud-fails** naming gap #2/T017 (honest "not yet
+  implemented" at the right layer — no longer routes a .wav through the video builder's
+  .mp4/.mov reject). Dedup by source-clip identity is the existing media_refs identity (D4).
+- [ ] **T017** `drt_writer.lua` (after T016): add `build_media_pool_audio_item` →
+  `Sm2MpAudioClip` from the reference XML (identity gsub + `substitute_audio_tracks_ba` for
+  rate/channels/duration + `encode_bt_clip_blob` for the path); replace the dispatch's
+  audio loud-fail with it; accept `.wav`; **loud-fail** unhandled audio type naming the file
+  (FR-019).
+  → GREEN T003. **Clip-blob tail RESOLVED 2026-06-27** (was flagged as opaque residue): it
+  is the file mtime (f13 µs) + media-type markers (f15/f18). Implemented option (b) — schema
+  V19 `media.file_mtime_us`, importer reads it from the Clip blob, `encode_bt_clip_blob`
+  re-emits it; byte-equal to the fixture audio Clip payload. Also fixed the video item's
+  stale date/mtime. See research D4b. T017 reuses `encode_bt_clip_blob` for the audio path.
 
 ### Gap #4 — arbitrary video descriptors + codec fold-in (FR-010/011/012)
 - [ ] **T018** [P] `src/lua/importers/drp_binary.lua`: extend `decode_bt_clip_path`

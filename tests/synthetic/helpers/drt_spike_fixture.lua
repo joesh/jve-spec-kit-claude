@@ -82,9 +82,13 @@ function M.build_a005_payload()
             {
                 file_uuid       = M.A005_UUID,
                 file_path       = M.A005_PATH,
+                kind            = "video",
                 duration_frames = M.A005_DURATION_FRAMES,
                 start_tc_frame  = 0,
                 native_rate     = M.A005_NATIVE_RATE,
+                -- Source-file mtime (µs); the Clip blob's date + f13 derive from
+                -- it. The producer always supplies it (media.file_mtime_us).
+                file_mtime_us   = 1471909574000000,
             },
         },
         sequence = {

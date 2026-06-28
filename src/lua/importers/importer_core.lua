@@ -880,6 +880,7 @@ local function try_import_media_item(media_item, project_id, project_settings,
         codec             = media_codec,
         is_still          = Media.classify_is_still(media_codec, media_width, media_item.duration),
         metadata          = media_metadata,
+        file_mtime_us     = media_item.file_mtime_us,  -- source-file mtime µs (nil if absent)
     })
     assert(media:save(), string.format(
         "importer_core: failed to save media '%s' (path=%s)",
@@ -1145,6 +1146,17 @@ function M.import_into_project(project_id, parse_result, opts)
                         master_audio_track_id =
                             Sequence.find_master_audio_track_for_channel(
                                 master_seq_id, clip_data.source_channel)
+                        -- The master_builder always lays one AUDIO track per file
+                        -- channel, so a decoded source_channel MUST resolve. nil
+                        -- means the clip selects a channel the master doesn't
+                        -- have — a corrupt/misdecoded VirtualAudioTrackBA, not a
+                        -- composite clip (those carry no source_channel). Fail
+                        -- fast rather than silently leaving the clip unpinned.
+                        assert(master_audio_track_id ~= nil, string.format(
+                            "importer_core: clip selects file channel %d but "
+                            .. "master %s has no AUDIO track for it (corrupt "
+                            .. "VirtualAudioTrackBA?)",
+                            clip_data.source_channel, tostring(master_seq_id)))
                     end
                     if track.track_type == "AUDIO" then
                         -- The audio path reads only the master's fps timebase;

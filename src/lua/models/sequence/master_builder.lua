@@ -118,7 +118,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
         local fps_num = media.frame_rate.fps_numerator
         local fps_den = media.frame_rate.fps_denominator
         local duration_frames = media.duration
-        local has_video = media.width > 0
+        local has_video = media:is_video()
         local has_audio = media.audio_channels > 0
         if not has_video and not has_audio then
             log.warn("ensure_master: media %s ('%s') has no video or audio dims; "

@@ -25,11 +25,13 @@ Validation: ≥1 media_ref (no-media fails early, FR-019/edge); each track typed
 | Field | Source (`models/media.lua`) | FR |
 |-------|------------------------------|----|
 | `file_uuid`, `name`, `file_path`, `native_rate`, `duration_frames` | (existing) | — |
+| **`kind = "video"`** | `media.width > 0` (NEW) — the writer dispatches the media-pool item (Sm2MpVideoClip vs Sm2MpAudioClip) on this; required, asserted | FR-010 |
 | `start_tc_frame` | `get_start_tc()` (video frames) | FR-001 |
 | **`width`, `height`** | `media.width`, `media.height` (NEW in payload) | FR-010 |
 | **`frame_rate = {num, den}`** | `media.frame_rate` (NEW) | FR-010 |
 | **`codec`** | `media.codec` (NEW) — populated by DRP importer from `<Clip>` `f5` (see Rule) | FR-010 |
 | **`embedded_audio = {channels, sample_rate}`** | `media.audio_channels`, `media.audio_sample_rate` (NEW) | FR-010 |
+| **`file_mtime_us`** | `media.file_mtime_us` (NEW, schema V19) — source-file mtime µs; the `<Clip>` blob's f3 date + f13 derive from it | FR-010/011 |
 
 Rule (FR-010/012): every file-specific field comes from *this* media; the writer encode-
 and-substitutes it into the plaintext-XML descriptor blobs — `<Geometry>` resolution as BE
@@ -44,16 +46,19 @@ never a borrowed/default value (1.14/2.13).
 ## Media item — audio (NEW entity)
 | Field | Source | FR |
 |-------|--------|----|
-| `file_uuid`, `name`, `file_path` | (existing accessors) | FR-004 |
-| **`audio_start_tc = {samples, rate}`** | `get_audio_start_tc()` | FR-001/002 |
-| **`sample_rate`** | `media.audio_sample_rate` | FR-002 |
-| **`channel_layout`** | `media.audio_channels` | FR-007/009 |
-| **`duration_samples`** | `media.duration` (audio-only = samples) | FR-002 |
+| `file_uuid`, `name`, `file_path`, `native_rate`, `duration_frames`, `start_tc_frame` | (shared with the video item) — for an audio-only media `native_rate` = **seq fps** and `start_tc_frame` = `audio_start_tc.samples ÷ sample_rate × seq_fps` (the timeline clip is frame-domain) | FR-001/002/003 |
+| **`kind = "audio"`** | `media.width == 0` (NEW, T016) — drives the writer's media-pool dispatch to `build_media_pool_audio_item`; required, asserted | FR-004 |
+| **`sample_rate`** | `media.audio_sample_rate` (NEW, T016) — TracksBA SampleRate | FR-002/005 |
+| **`num_channels`** | `media.audio_channels` (NEW, T016) — TracksBA NumChannels | FR-005/007 |
+| **`duration_samples`** | `media.duration` (audio-only = samples; NEW, T016) — TracksBA Duration | FR-005 |
+| **`file_mtime_us`** | `media.file_mtime_us` (NEW) — the Clip blob's date/f13 | FR-005 |
 | `track_type = "audio"` | (existing) | — |
+| *(T017-pending)* `audio_start_tc` sample-domain origin for the TracksBA `StartTime` | `get_audio_start_tc()` — **not yet emitted**; T016 consumes it only to derive the scalar `start_tc_frame`. Until T017 wires it, the borrowed TracksBA `StartTime` stays 0 | FR-001/002 |
 
 Rule: has **no** video characteristics; `media_to_payload` MUST NOT call `get_start_tc()`
-for audio media (research D2). Drives `Sm2MpAudioClip` (research D4). The sample-domain fields
-(`sample_rate`, `duration_samples`, `audio_start_tc`) feed the `Sm2MpAudioClip` `TracksBA` only.
+for audio media (research D2). The audio-pool fields (`sample_rate`, `num_channels`,
+`duration_samples`) feed the `Sm2MpAudioClip` `TracksBA` (T017) via
+`substitute_audio_tracks_ba`; the writer dispatches by `kind` (T016).
 **The TIMELINE clip is frame-domain** — `media_to_payload` derives `native_rate` = **seq fps** and
 `start_tc_frame` = `audio_start_tc.samples ÷ sample_rate × seq_fps`, so `<MediaFrameRate>` = seq fps
 and `<MediaStartTime>` = correct seconds (research D10, supersedes any "sample-unit In" reading).
