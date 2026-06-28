@@ -10,6 +10,9 @@
 
 local M = {}
 
-M.CONSENT_VERSION = 1
+-- v2: consent text updated to point at the new Privacy panel
+-- (Cmd+,) for re-enable / revoke instead of "delete install_id.json
+-- and relaunch" — the panel landed alongside the bump.
+M.CONSENT_VERSION = 2
 
 return M

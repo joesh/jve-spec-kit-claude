@@ -31,6 +31,7 @@
 "F1" = "OpenUserManual"
 "F12" = "ReportBug"
 "Shift+F12" = "ToggleProfiler"
+"Cmd+," = "ShowBugReporterPrivacy"
 
 [Transport]
 # 017 FR-020 transport-class: fires from every focus context that can

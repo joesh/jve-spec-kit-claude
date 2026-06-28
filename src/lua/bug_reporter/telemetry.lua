@@ -206,7 +206,24 @@ function M.init()
         set_capture_enabled(false)
         return
     end
-    if install.read() ~= nil then
+    local record = install.read()
+    if record ~= nil then
+        -- FR-002a: consent text version bumped since last accept →
+        -- re-prompt. Existing install_id + nonce stay (no /register
+        -- round-trip needed); we just need fresh consent for the new
+        -- wording. Decline = same disabled-state as first-run decline.
+        if record.consent_version < consent.CONSENT_VERSION then
+            local outcome = show_consent()
+            if outcome ~= "accept" then
+                save_pref(false)
+                last_f12_message = DISABLED_MSG
+                set_capture_enabled(false)
+                return
+            end
+            record.consent_version     = consent.CONSENT_VERSION
+            record.consent_accepted_ts = os.time()
+            install.write(record)
+        end
         continue_after_register()
         return
     end

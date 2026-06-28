@@ -18,18 +18,19 @@ local M = {}
 -- to trigger re-prompting on next launch (FR-002a).
 M.CONSENT_VERSION = consent.CONSENT_VERSION
 
-local CONSENT_TEXT_PATH = "specs/027-user-facing-bug/consent-text-v1.md"
-
+-- Resolve via repo-root-aware helper (handles dev tree + bundled
+-- jve.app/Contents/Resources/ layout). Path tracks the live
+-- CONSENT_VERSION so bumping consent.CONSENT_VERSION forces a new
+-- consent-text-v<N>.md to exist (missing artifact = packaging bug,
+-- fail loud — never fall back to an inline string that could drift).
 local function load_consent_text()
-    -- Resolve via repo-root-aware helper (handles dev tree + bundled
-    -- jve.app/Contents/Resources/ layout). Missing artifact is a build
-    -- packaging bug — fail loud, never fall back to an inline string
-    -- that could drift from the versioned text.
-    local p = path_utils.resolve_repo_path(CONSENT_TEXT_PATH)
+    local rel = string.format("specs/027-user-facing-bug/consent-text-v%d.md",
+        consent.CONSENT_VERSION)
+    local p = path_utils.resolve_repo_path(rel)
     local f = io.open(p, "r")
     assert(f,
         "bug_reporter.consent_dialog: consent text not found at " .. p ..
-        " — packaging bug? consent-text-v1.md must ship with the binary")
+        " — packaging bug? " .. rel .. " must ship with the binary")
     local body = f:read("*a")
     f:close()
     return body

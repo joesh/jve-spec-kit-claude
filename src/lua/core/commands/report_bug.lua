@@ -127,11 +127,18 @@ function M.submit(state, on_done)
 end
 
 function M.show_disabled_notice()
-    local msg = "Bug reporting is disabled. Re-enable in Preferences → Privacy " ..
-        "(or delete ~/.jve/install_id.json and relaunch)."
-    log.event("ReportBug invoked while disabled — surfacing %q", msg)
-    if _G.qt_constants and _G.qt_constants.DIALOG and _G.qt_constants.DIALOG.SHOW_MESSAGE then
-        _G.qt_constants.DIALOG.SHOW_MESSAGE("Bug Reporting", msg)
+    -- F12-while-disabled routes straight to the Privacy panel — the
+    -- one place that re-enables. Loading is best-effort: if the panel
+    -- can't be loaded (test mode without qt_constants), fall back to
+    -- the text message so callers still get a user_message back.
+    local msg = "Bug reporting is disabled. Open Privacy & Bug Reporting (Cmd+,) to re-enable."
+    log.event("ReportBug invoked while disabled — opening Privacy panel + surfacing %q", msg)
+    local ok_panel, panel = pcall(require, "bug_reporter.ui.privacy_panel")
+    if ok_panel and type(panel.show) == "function" then
+        local ok_show, show_err = pcall(panel.show)
+        if not ok_show then
+            log.warn("show_disabled_notice: privacy_panel.show failed: %s", tostring(show_err))
+        end
     end
     return { ok = false, user_message = msg }
 end
