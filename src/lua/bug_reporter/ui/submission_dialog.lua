@@ -32,6 +32,9 @@ local function build_widgets(state, vbox)
     local text_only_cb = qt.CREATE_CHECKBOX("Text only (exclude slideshow video)")
     qt.LAYOUT_ADD_WIDGET(vbox, text_only_cb)
 
+    local status_label = qt.CREATE_LABEL("")
+    qt.LAYOUT_ADD_WIDGET(vbox, status_label)
+
     local btn_row = qt.CREATE_LAYOUT("horizontal")
     qt.LAYOUT_ADD_STRETCH(btn_row)
     local cancel_btn = qt.CREATE_BUTTON("Cancel")
@@ -41,11 +44,12 @@ local function build_widgets(state, vbox)
     qt.LAYOUT_ADD_LAYOUT(vbox, btn_row)
 
     return {
-        title_edit = title_edit,
-        desc_edit  = desc_edit,
-        text_only  = text_only_cb,
-        submit_btn = submit_btn,
-        cancel_btn = cancel_btn,
+        title_edit   = title_edit,
+        desc_edit    = desc_edit,
+        text_only    = text_only_cb,
+        submit_btn   = submit_btn,
+        cancel_btn   = cancel_btn,
+        status_label = status_label,
     }
 end
 
@@ -92,18 +96,30 @@ function M.create(state)
     function wrapper.on_submit()
         M.sync_state_from_widgets(state, widgets)
         if not state:is_submittable() then
-            log.warn("submission_dialog: Submit invoked but state is not submittable — title=%q desc_len=%d text_only=%s",
-                tostring(state.title), #(state.description or ""), tostring(state.text_only))
+            qt.SET_TEXT(widgets.status_label, "Title is required.")
             return false
         end
+        qt.SET_ENABLED(widgets.submit_btn, false)
+        qt.SET_ENABLED(widgets.cancel_btn, false)
+        qt.SET_TEXT(widgets.submit_btn, "Sending…")
+        qt.SET_TEXT(widgets.status_label, "Sending report — this may take a few seconds.")
         local report_bug = require("core.commands.report_bug")
         assert(type(report_bug.submit) == "function",
-            "submission_dialog: core.commands.report_bug.submit missing (T014c)")
+            "submission_dialog: core.commands.report_bug.submit missing")
         report_bug.submit(state, function(result)
             wrapper.last_result = result
-            qt.CLOSE_DIALOG(dialog, true)
-            _G[submit_name] = nil
-            _G[cancel_name] = nil
+            assert(result and result.user_message,
+                "report_bug.submit must always deliver result.user_message")
+            qt.SET_TEXT(widgets.status_label, result.user_message)
+            qt.SET_TEXT(widgets.submit_btn, "Close")
+            qt.SET_ENABLED(widgets.submit_btn, true)
+            _G[submit_name] = function()
+                qt.CLOSE_DIALOG(dialog, result.ok and true or false)
+                _G[submit_name] = nil
+                _G[cancel_name] = nil
+            end
+            log.event("submission_dialog: result ok=%s msg=%s",
+                tostring(result.ok), tostring(result.user_message))
         end)
         return true
     end

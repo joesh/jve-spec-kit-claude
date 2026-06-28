@@ -38,6 +38,10 @@ Two parts:
 
 #### Part 2 — `payload` (binary zip)
 
+Content-Disposition MUST include a `filename` parameter (e.g. `form-data; name="payload"; filename="payload.zip"`). Cloudflare Workers' `FormData.get()` returns a part as a string when no filename is present and as a Blob when filename IS present; the Worker's `parse_multipart` requires `payload instanceof Blob` for binary safety. A filename-less payload returns `400 malformed_request`.
+
+The `metadata` part MUST NOT include a filename — the Worker requires `typeof metadata === "string"`.
+
 Zip containing:
 - `capture.json` (REQUIRED) — capture metadata file per FR-011 + FR-011a (no `database_snapshots`, no `video_recording` block)
 - `slideshow.mp4` (PRESENT iff `metadata.text_only == false`)

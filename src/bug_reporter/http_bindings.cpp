@@ -143,6 +143,9 @@ int lua_qt_http_post_multipart(lua_State* L)
         lua_getfield(L, -1, "content_type");
         const char* content_type = luaL_optstring(L, -1, "application/octet-stream");
         lua_pop(L, 1);
+        lua_getfield(L, -1, "filename");
+        const char* filename = lua_isstring(L, -1) ? lua_tostring(L, -1) : nullptr;
+        lua_pop(L, 1);
         lua_getfield(L, -1, "body");
         size_t body_len = 0;
         const char* body = lua_tolstring(L, -1, &body_len);
@@ -154,8 +157,11 @@ int lua_qt_http_post_multipart(lua_State* L)
 
         QHttpPart part;
         part.setHeader(QNetworkRequest::ContentTypeHeader, QString::fromUtf8(content_type));
-        part.setHeader(QNetworkRequest::ContentDispositionHeader,
-            QString("form-data; name=\"%1\"").arg(QString::fromUtf8(name)));
+        QString disposition = QString("form-data; name=\"%1\"").arg(QString::fromUtf8(name));
+        if (filename) {
+            disposition += QString("; filename=\"%1\"").arg(QString::fromUtf8(filename));
+        }
+        part.setHeader(QNetworkRequest::ContentDispositionHeader, disposition);
         part.setBody(QByteArray(body, static_cast<int>(body_len)));
         mp->append(part);
         lua_pop(L, 1);

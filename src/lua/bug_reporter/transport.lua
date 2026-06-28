@@ -125,7 +125,10 @@ function M.post_report(metadata_json, zip_bytes, local_id, install_id, nonce, on
     local cb_name = mint_cb_slot("/report", on_done)
     qt_http_post_multipart(PROD_URL .. "/report", headers, {
         { name = "metadata", content_type = "application/json", body = metadata_json },
-        { name = "payload",  content_type = "application/zip",  body = zip_bytes },
+        -- Worker's parse_multipart requires `payload instanceof Blob`, which
+        -- in Cloudflare/fetch only happens when the part has a filename.
+        -- Without it, formData() returns a string and parse fails 400.
+        { name = "payload",  content_type = "application/zip",  filename = "payload.zip", body = zip_bytes },
     }, cb_name)
 end
 
