@@ -883,6 +883,7 @@ local function try_import_media_item(media_item, project_id, project_settings,
         is_still          = Media.classify_is_still(media_codec, media_width, media_item.duration),
         metadata          = media_metadata,
         file_mtime_us     = media_item.file_mtime_us,  -- source-file mtime µs (nil if absent)
+        audio_duration_samples = media_item.audio_duration_samples,  -- exact embedded-audio samples (nil if none)
     })
     assert(media:save(), string.format(
         "importer_core: failed to save media '%s' (path=%s)",

@@ -30,8 +30,9 @@ Validation: ≥1 media_ref (no-media fails early, FR-019/edge); each track typed
 | **`width`, `height`** | `media.width`, `media.height` (NEW in payload) | FR-010 |
 | **`frame_rate = {num, den}`** | `media.frame_rate` (NEW) | FR-010 |
 | **`codec`** | `media.codec` (NEW) — populated by DRP importer from `<Clip>` `f5` (see Rule) | FR-010 |
-| **`embedded_audio = {channels, sample_rate}`** | `media.audio_channels`, `media.audio_sample_rate` (NEW) | FR-010 |
+| **`embedded_audio = {channels, sample_rate, duration_samples}`** | `media.audio_channels`, `media.audio_sample_rate`, `media.audio_duration_samples` (NEW) | FR-010 |
 | **`file_mtime_us`** | `media.file_mtime_us` (NEW, schema V19) — source-file mtime µs; the `<Clip>` blob's f3 date + f13 derive from it | FR-010/011 |
+| **`audio_duration_samples`** | `media.audio_duration_samples` (NEW, schema V20) — EXACT embedded-audio sample count from BtAudioInfo `<TracksBA>` Duration; NOT derivable from `duration_frames` (frames→samples rounds); re-emitted into the embedded `<TracksBA>` Duration | FR-010 |
 
 Rule (FR-010/012): every file-specific field comes from *this* media; the writer encode-
 and-substitutes it into the plaintext-XML descriptor blobs — `<Geometry>` resolution as BE

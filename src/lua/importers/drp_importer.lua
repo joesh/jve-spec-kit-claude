@@ -2119,6 +2119,11 @@ local function apply_pmc_metadata(entry, pmc)
     -- playback audio math) need the sample rate regardless.
     if pmc.audio_duration then
         entry.audio_sample_rate = pmc.audio_duration.sample_rate
+        -- EXACT embedded-audio sample count — kept independent of `duration`.
+        -- For A/V files `duration` is the video-frame count, so the audio
+        -- sample count would otherwise be lost; the exporter needs it to
+        -- re-author the embedded <TracksBA> Duration sample-exact (026).
+        entry.audio_duration_samples = pmc.audio_duration.samples
     end
 
     -- File container TC origin from TracksBA.StartTime (FR-001)

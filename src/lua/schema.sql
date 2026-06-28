@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (19);
+INSERT OR IGNORE INTO schema_version (version) VALUES (20);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS media (
     -- Clip blob (field 13 = mtime µs; the same instant the human-readable f3
     -- date string encodes). The DRT exporter re-emits both from this column.
     file_mtime_us INTEGER,
+
+    -- EXACT embedded-audio sample count (BtAudioInfo <TracksBA> Duration).
+    -- NULL = no embedded audio / unknown. Distinct from duration_frames: an A/V
+    -- file's video-frame count cannot be converted to samples losslessly, so the
+    -- count Resolve authored is round-tripped verbatim (DRP importer reads it;
+    -- DRT exporter re-emits the embedded <TracksBA> Duration from this column).
+    -- For audio-only media this equals duration_frames (native timebase = samples).
+    audio_duration_samples INTEGER,
 
     offline_note TEXT,
 

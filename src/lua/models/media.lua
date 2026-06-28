@@ -536,6 +536,10 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         -- real epoch instant, and the exporter must distinguish "unknown" from
         -- "1970". Populated from the DRP Clip blob at import (schema.sql).
         file_mtime_us = tonumber(params.file_mtime_us),
+        -- EXACT embedded-audio sample count (BtAudioInfo TracksBA Duration).
+        -- nil stays nil (no embedded audio / unknown) — the exporter must
+        -- distinguish "no audio" from a real zero-length stream.
+        audio_duration_samples = tonumber(params.audio_duration_samples),
         created_at = params.created_at or os.time(),
         modified_at = params.modified_at or os.time(),
         metadata = params.metadata or '{}',
@@ -551,7 +555,8 @@ end
 local MEDIA_SELECT_COLUMNS = [[
         id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
         width, height, rotation, audio_sample_rate, audio_channels, codec,
-        created_at, modified_at, metadata, is_still, offline_note, file_mtime_us
+        created_at, modified_at, metadata, is_still, offline_note, file_mtime_us,
+        audio_duration_samples
 ]]
 
 -- Hydrate a single Media instance from the current row of a prepared statement
@@ -590,6 +595,8 @@ local function _hydrate_row(query)
     media.offline_note = query:value(17)
     -- Source-file mtime in µs; NULL = unknown (kept nil, not coerced to 0).
     media.file_mtime_us = query:value(18)
+    -- Exact embedded-audio sample count; NULL = no embedded audio (kept nil).
+    media.audio_duration_samples = query:value(19)
 
     setmetatable(media, media_mt)
     return media
@@ -1756,8 +1763,8 @@ function M:save()
     local query = db:prepare([[
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
             width, height, rotation, audio_sample_rate, audio_channels, codec, is_still, created_at, modified_at, metadata,
-            file_mtime_us)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            file_mtime_us, audio_duration_samples)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -1774,7 +1781,8 @@ function M:save()
             is_still = excluded.is_still,
             modified_at = excluded.modified_at,
             metadata = excluded.metadata,
-            file_mtime_us = excluded.file_mtime_us
+            file_mtime_us = excluded.file_mtime_us,
+            audio_duration_samples = excluded.audio_duration_samples
     ]])
 
     assert(query, string.format("Media:save: failed to prepare query (media_id=%s)", tostring(self.id)))
@@ -1801,6 +1809,8 @@ function M:save()
     query:bind_value(17, self.metadata)
     -- nil → SQLite NULL (unknown mtime); a real µs value persists verbatim.
     query:bind_value(18, self.file_mtime_us)
+    -- nil → NULL (no embedded audio); exact sample count persists verbatim.
+    query:bind_value(19, self.audio_duration_samples)
 
     if not query:exec() then
         log.warn("Media:save: Query execution failed: %s", query:last_error())
