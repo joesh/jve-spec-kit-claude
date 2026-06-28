@@ -604,6 +604,32 @@ function M.decode_bt_video_time(hex_str)
     }
 end
 
+--- Decode BtVideoInfo/Geometry blob → intrinsic pixel (width, height).
+-- The Geometry Fusion-fields blob carries the clip's TRUE resolution in a
+-- "Resolution" field (type 0x000c, 16-byte payload = two BE int64: width then
+-- height). The DRT exporter authors each video media-pool item's own <Geometry>
+-- from this (gap #4, FR-011) instead of borrowing A005's 640×360. Header:
+-- [BE32 version][BE32 field_count], then TLV fields (same as the Time blob).
+-- @param hex_str string: hex-encoded Geometry blob (plaintext, not zstd)
+-- @return number|nil, number|nil: width, height (nil if absent/undecodable)
+function M.decode_bt_video_resolution(hex_str)
+    local bytes = M.hex_to_bytes(hex_str)
+    if not bytes or #bytes < 16 then return nil end
+
+    local field_count = M.read_be32(bytes, 5)
+    if not field_count or field_count < 1 or field_count > 20 then return nil end
+
+    local _, raw_payloads = M.decode_tlv_fields(bytes, 8, field_count)
+    if not raw_payloads then return nil end
+    local payload = raw_payloads["Resolution"]
+    if not payload or #payload < 16 then return nil end
+
+    local width  = M.read_be64(payload, 1)
+    local height = M.read_be64(payload, 9)
+    if not width or not height or width <= 0 or height <= 0 then return nil end
+    return width, height
+end
+
 --- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate, num_channels, start_time_seconds}
 -- Header: 31 bytes (version, track metadata, field_count at byte offset 27)
 -- Fields: UniqueId, StartTime, SampleRate, NumChannels, IdxTrack, Duration, DbType, ...

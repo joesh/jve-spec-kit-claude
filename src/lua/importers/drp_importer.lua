@@ -351,6 +351,23 @@ local function extract_codec(clip_elem)
     return nil
 end
 
+--- Extract a video clip's INTRINSIC pixel resolution from its BtVideoInfo
+--- <Geometry> blob (spec 026 gap #4, FR-011). The DRP carries the true per-clip
+--- dimensions here; the importer previously fell back to the project resolution,
+--- so a non-project-res clip (e.g. a 2048×1152 camera file in a 1920×1080
+--- timeline) was mis-sized. Round-tripped into media.width/height so the DRT
+--- exporter authors each video item's own <Geometry>. Returns nil for audio
+--- clips (no Geometry) or an undecodable blob.
+-- @param clip_elem table: Sm2MpVideoClip XML element
+-- @return number|nil, number|nil: width, height
+local function extract_resolution(clip_elem)
+    local geom = find_element(clip_elem, "Geometry")
+    if not geom then return nil end
+    local hex = get_text(geom)
+    if not hex or hex == "" then return nil end
+    return drp_binary.decode_bt_video_resolution(hex)
+end
+
 --- Extract <OriginalClip> substitution history attached to a timeline clip.
 -- Resolve records the pre-substitution state (e.g., pre-relink path, pre-
 -- replace clip) as a nested <OriginalClip> containing an Sm2Ti*Clip element.
@@ -887,6 +904,11 @@ local function parse_master_clip_element(clip_elem, folder_id)
     -- media.codec column; the DRT exporter authors it back (gap #4).
     local codec = extract_codec(clip_elem)
 
+    -- Intrinsic pixel resolution from BtVideoInfo <Geometry> — the true per-clip
+    -- dimensions (nil for audio). Overrides the project-resolution fallback so a
+    -- non-project-res video round-trips its own <Geometry> (gap #4, FR-011).
+    local intrinsic_width, intrinsic_height = extract_resolution(clip_elem)
+
     local master_clip = {
         id = db_id,
         name = name_elem and get_text(name_elem) or "Untitled",
@@ -899,6 +921,8 @@ local function parse_master_clip_element(clip_elem, folder_id)
         file_tc_seconds = file_tc_seconds,  -- file's container TC origin (seconds since midnight)
         file_mtime_us = file_mtime_us,      -- source-file mtime, µs since epoch (nil if absent)
         codec = codec,                      -- media codec from Clip blob f5 (nil if absent)
+        width = intrinsic_width,            -- intrinsic pixel width from Geometry (nil = audio)
+        height = intrinsic_height,          -- intrinsic pixel height from Geometry (nil = audio)
     }
 
     -- Store duration + rate info from blob
@@ -2111,6 +2135,13 @@ local function apply_pmc_metadata(entry, pmc)
     -- Media codec from the Clip blob (f5) — populates media.codec (gap #4).
     if pmc.codec then
         entry.codec = pmc.codec
+    end
+
+    -- Intrinsic pixel resolution from BtVideoInfo Geometry — overrides the
+    -- project-resolution fallback for video media (gap #4, FR-011).
+    if pmc.width and pmc.height then
+        entry.width = pmc.width
+        entry.height = pmc.height
     end
 
     -- TC origin. TracksBA.StartTime is the file container TC, shared by the

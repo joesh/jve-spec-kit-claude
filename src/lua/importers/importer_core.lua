@@ -853,9 +853,11 @@ local function try_import_media_item(media_item, project_id, project_settings,
     local media_metadata = build_media_metadata(media_item, native_rate)
 
     -- Track type determines video presence: width/height 0 prevents
-    -- ensure_masterclip from creating a video track.
-    local media_width  = media_item.has_video and project_settings.width  or 0
-    local media_height = media_item.has_video and project_settings.height or 0
+    -- ensure_masterclip from creating a video track. Prefer the clip's INTRINSIC
+    -- resolution decoded from BtVideoInfo <Geometry> (gap #4, FR-011); fall back
+    -- to the project resolution only when a clip carries no decodable Geometry.
+    local media_width  = media_item.has_video and (media_item.width  or project_settings.width)  or 0
+    local media_height = media_item.has_video and (media_item.height or project_settings.height) or 0
     local media_codec  = media_item.codec
 
     -- media.id IS the source format's stable per-file identifier when the
